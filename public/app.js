@@ -23,15 +23,178 @@ function renderNav(){$('#nav').innerHTML=NAV.filter(x=>allowed(x[0])).map(([m,i,
 async function go(m,force=false){if(!allowed(m))return;setStatus('↻ Opening '+(NAV.find(x=>x[0]===m)?.[2]||m)+'…','busy');state.current=m;sessionStorage.setItem('rrr_prod_page',m);document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.m===m));$('#pageTitle').textContent=NAV.find(x=>x[0]===m)?.[2]||m;if(m==='dashboard')return renderDashboard(force);if(m==='reports')return renderReports(force);if(m==='masters')return renderMasters(force);if(m==='users')return renderUsers(force);return renderModule(m,force)}
 async function renderDashboard(force=false){const s=$('#stage');s.innerHTML=`<section class="hero"><div><h2>Production Control</h2><p>Raw fabric to warehouse handover — one traceable workflow.</p></div><div>${new Date().toLocaleDateString()}</div></section><section class="kpis">${['Raw Available','At Dye','Dyed Available','Cut Pending','At Stitching','Ready Warehouse'].map(x=>`<div class="kpi"><span>${x}</span><strong>—</strong></div>`).join('')}</section><section class="grid2"><div class="panel"><div class="panel-head"><h3>Quick Actions</h3></div><div class="quick">${[['raw','New Fabric Inward'],['dye','Issue to Dye'],['production','Plan Production'],['stitching','Create Stitch Challan'],['qc','QC Entry'],['handover','Warehouse Handover']].filter(x=>allowed(x[0])).map(x=>`<button onclick="window.ERP.quick('${x[0]}')"><b>${x[1]}</b><small>Open module</small></button>`).join('')}</div></div><div class="panel"><div class="panel-head"><h3>System</h3></div><p>Google Sheets permanent database</p><p>Cloudflare secure frontend</p><p>User-wise permissions & audit trail</p></div></section>`;try{const d=await getCachedModule('dashboard',force);state.user=d.user||d.actor||state.user;const v=d.kpis||{};[v.rawAvailable,v.atDye,v.dyedAvailable,v.cutPending,v.atStitching,v.readyWarehouse].forEach((x,i)=>document.querySelectorAll('.kpi strong')[i].textContent=x??0)}catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}}
 const configs={raw:{title:'Raw Fabric',columns:['ROLL_ID','INWARD_DATE','SUPPLIER','VENDOR_ROLL_NO','FABRIC','INWARD_MTR','STATUS'],action:'New Inward',fields:['INWARD_DATE','SUPPLIER_ID','VENDOR_ROLL_NO','FABRIC_ID','INWARD_MTR','INVOICE_CHALLAN','LOT_REF','NOTES']},dye:{title:'Dyeing',columns:['DYE_BATCH_ID','ISSUE_DATE','DYE_VENDOR','ROLL_ID','COLOR','ISSUE_MTR','USABLE_MTR','STATUS'],action:'New Dye Issue',fields:['ISSUE_DATE','DYE_VENDOR_ID','ROLL_ID','COLOR_ID','ISSUE_MTR','NOTES']},production:{title:'Production / Cutting',columns:['PRODUCTION_BATCH_ID','PLAN_DATE','STYLE','DYE_BATCH_ID','PLANNED_QTY','ALLOCATED_MTR','TOTAL_CUT','STATUS'],action:'New Production Batch',fields:['PLAN_DATE','DYE_BATCH_ID','STYLE_ID','PLANNED_QTY','ALLOCATED_MTR','NOTES']},stitching:{title:'Stitching',columns:['CHALLAN_ID','ISSUE_DATE','STITCHING_VENDOR','PRODUCTION_BATCH_ID','TOTAL_ISSUED','TOTAL_RECEIVED','PENDING_QTY','STATUS'],action:'New Challan',fields:['ISSUE_DATE','STITCHING_VENDOR_ID','PRODUCTION_BATCH_ID','M_ISSUED','L_ISSUED','XL_ISSUED','2XL_ISSUED','3XL_ISSUED','OTHER_ISSUED','NOTES']},qc:{title:'QC & Rework',columns:['QC_ID','QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','STATUS'],action:'New QC Entry',fields:['QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','DEFECT_REASON','NOTES']},handover:{title:'Warehouse Handover',columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','PENDING_QTY','STATUS'],action:'New Handover',fields:['HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE_ID','COLOR_ID','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','WAREHOUSE_REF','NOTES']}};
-async function renderModule(m,force=false){const c=configs[m],s=$('#stage');s.innerHTML=`<section class="panel"><div class="panel-head"><h3>${c.title}</h3><button class="btn teal" id="newBtn">+ ${c.action}</button></div><div class="toolbar"><input class="search" id="searchBox" placeholder="Search..."></div><div class="table-wrap"><table class="data"><thead><tr>${c.columns.map(x=>'<th>'+x.replaceAll('_',' ')+'</th>').join('')}</tr></thead><tbody id="rows"><tr><td colspan="${c.columns.length}">Loading…</td></tr></tbody></table></div></section>`;$('#newBtn').onclick=()=>m==='raw'?openRawInward():openForm(m);try{const d=await getCachedModule(m,force);drawRows(c,d.items||[]);$('#searchBox').oninput=e=>drawRows(c,(d.items||[]).filter(r=>JSON.stringify(r).toLowerCase().includes(e.target.value.toLowerCase())))}catch(e){drawRows(c,[]);toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}}
+async function renderModule(m,force=false){const c=configs[m],s=$('#stage');s.innerHTML=`<section class="panel"><div class="panel-head"><h3>${c.title}</h3><button class="btn teal" id="newBtn">+ ${c.action}</button></div><div class="toolbar"><input class="search" id="searchBox" placeholder="Search..."></div><div class="table-wrap"><table class="data"><thead><tr>${c.columns.map(x=>'<th>'+x.replaceAll('_',' ')+'</th>').join('')}</tr></thead><tbody id="rows"><tr><td colspan="${c.columns.length}">Loading…</td></tr></tbody></table></div></section>`;$('#newBtn').onclick=()=>openActionForm(m);try{const d=await getCachedModule(m,force);drawRows(c,d.items||[]);$('#searchBox').oninput=e=>drawRows(c,(d.items||[]).filter(r=>JSON.stringify(r).toLowerCase().includes(e.target.value.toLowerCase())))}catch(e){drawRows(c,[]);toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}}
 function drawRows(c,items){$('#rows').innerHTML=items.length?items.map(r=>'<tr>'+c.columns.map(k=>`<td>${k==='STATUS'?badge(r[k]):esc(r[k])}</td>`).join('')+'</tr>').join(''):`<tr><td colspan="${c.columns.length}">No records yet.</td></tr>`}
 function badge(v){const s=String(v||''),cl=/reject|defect|negative/i.test(s)?'danger':/pending|partial|rework|vendor/i.test(s)?'warn':'ok';return `<span class="badge ${cl}">${esc(s)}</span>`}
+async function openActionForm(m){
+  if(m==='raw')return openRawInward();
+  if(m==='dye')return openDyeIssue();
+  if(m==='production')return openProductionPlan();
+  if(m==='stitching')return openStitchingIssue();
+  if(m==='qc')return openQcEntry();
+  if(m==='handover')return openWarehouseHandover();
+  return openForm(m);
+}
 function openForm(m){const c=configs[m],requestId=newRequestId();$('#modalBody').innerHTML=`<div class="panel-head"><h3>${c.action}</h3><button class="btn ghost" id="closeModal">Close</button></div><form id="recordForm"><div class="form-grid">${c.fields.map(f=>`<div class="field ${f==='NOTES'?'wide':''}"><label>${f.replaceAll('_',' ')}</label><input name="${f}" ${/DATE/.test(f)?'type="date"':''}></div>`).join('')}</div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Save</button></div></form>`;$('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;$('#recordForm').onsubmit=async e=>{e.preventDefault();const rec=Object.fromEntries(new FormData(e.target).entries());try{await api('/api/data',{method:'POST',activity:'Saving '+c.action+'…',success:c.action+' saved',body:JSON.stringify({module:m,record:rec,requestId})});dropCaches();closeModal();go(m,true)}catch(err){toast(err.message,'bad',3500)}}}
 function closeModal(){$('#modal').classList.add('hidden')}
 
 let lookupCache=null;
 async function getLookups(force=false){if(lookupCache&&!force)return lookupCache;const d=await getCachedModule('lookups',force);lookupCache=d.lookups||{};return lookupCache}
 function opts(items,idKey,labelKey,filterFn){return (items||[]).filter(filterFn||(()=>true)).map(x=>`<option value="${esc(x[idKey])}">${esc(x[labelKey]||x[idKey])}</option>`).join('')}
+function isTrue(v){return v===true||String(v).toLowerCase()==='true'||v===1}
+function todayLocal(){const d=new Date();return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')}
+function moneyless(n){const x=Number(n||0);return Number.isInteger(x)?String(x):x.toFixed(2)}
+function vendorOptions(vendors,role){return (vendors||[]).filter(v=>isTrue(v.ACTIVE)&&(!role||isTrue(v[role]))).map(v=>`<option value="${esc(v.VENDOR_ID)}">${esc(v.VENDOR_NAME)}${role?'':''}</option>`).join('')}
+function colorOptions(colors){return (colors||[]).filter(x=>isTrue(x.ACTIVE)).map(x=>`<option value="${esc(x.COLOR_ID)}">${esc(x.COLOR_NAME)}${x.COLOR_CODE?' · '+esc(x.COLOR_CODE):''}</option>`).join('')}
+function styleOptions(styles){return (styles||[]).filter(x=>isTrue(x.ACTIVE)).map(x=>`<option value="${esc(x.STYLE_ID)}">${esc(x.STYLE_NAME)}${x.STYLE_CODE?' · '+esc(x.STYLE_CODE):''}</option>`).join('')}
+function smartEmpty(msg){return `<div class="smart-empty"><b>Nothing available</b><span>${esc(msg)}</span></div>`}
+
+
+
+async function openDyeIssue(){
+  const requestId=newRequestId();let l;
+  try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
+  const dyeVendors=(l.vendors||[]).filter(v=>isTrue(v.DYE_VENDOR)&&isTrue(v.ACTIVE));
+  const rolls=(l.rawRolls||[]).filter(r=>Number(r.BALANCE_MTR)>0);
+  const colors=(l.colors||[]).filter(c=>isTrue(c.ACTIVE));
+  if(!dyeVendors.length)return toast('Create at least one active Dye Vendor in Masters → Vendors.','bad',4200);
+  if(!colors.length)return toast('Create at least one active Color in Masters → Colors.','bad',4200);
+  if(!rolls.length)return toast('No raw fabric roll has available balance for dyeing.','bad',4200);
+  const rollOptions=arr=>arr.map(r=>`<option value="${esc(r.ROLL_ID)}">${esc(r.FABRIC_NAME||r.FABRIC)} · Vendor Roll ${esc(r.VENDOR_ROLL_NO||'-')} · ${moneyless(r.BALANCE_MTR)} m available</option>`).join('');
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>New Dye Issue</h3><small>Create one dye batch from one fabric type. Multiple source rolls are allowed.</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="dyeBulkForm">
+      <div class="form-grid">
+        <div class="field"><label>Issue Date</label><input name="ISSUE_DATE" type="date" required value="${todayLocal()}"></div>
+        <div class="field"><label>Dye Vendor</label><select name="DYE_VENDOR_ID" required><option value="">Select dye vendor</option>${vendorOptions(dyeVendors,'DYE_VENDOR')}</select></div>
+        <div class="field"><label>Color</label><select name="COLOR_ID" required><option value="">Select color</option>${colorOptions(colors)}</select></div>
+        <div class="field"><label>Batch Fabric</label><input id="dyeBatchFabric" value="Select first roll" readonly></div>
+        <div class="field wide"><label>Notes</label><input name="NOTES"></div>
+      </div>
+      <div class="roll-head"><div><b>Source Rolls</b><small>Only rolls with remaining balance are shown. Full-issued rolls disappear automatically.</small></div><button type="button" class="btn teal" id="addDyeRoll">+ Add Roll</button></div>
+      <div class="roll-table"><table class="data"><thead><tr><th>#</th><th>Raw Roll</th><th>Available</th><th>Issue Meter</th><th></th></tr></thead><tbody id="dyeRollRows"></tbody></table></div>
+      <div class="roll-summary"><span>Selected Rolls <b id="dyeRollCount">0</b></span><span>Total Issue <b id="dyeTotal">0.00</b> m</span></div>
+      <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Save Dye Issue</button></div>
+    </form>`;
+  $('#modal').classList.remove('hidden');
+  let batchFabric='';
+  function updateSummary(){const trs=[...$('#dyeRollRows').children];$('#dyeRollCount').textContent=trs.length;$('#dyeTotal').textContent=trs.reduce((s,tr)=>s+(Number(tr.querySelector('.dye-qty').value)||0),0).toFixed(2)}
+  function addRow(){
+    const tr=document.createElement('tr'),n=$('#dyeRollRows').children.length+1;
+    tr.innerHTML=`<td class="dye-no">${n}</td><td><select class="dye-roll" required><option value="">Select available roll</option>${rollOptions(rolls)}</select></td><td class="dye-avail">—</td><td><input class="dye-qty" type="number" min="0.01" step="0.01" required placeholder="0.00"></td><td><button type="button" class="icon-remove">×</button></td>`;
+    $('#dyeRollRows').appendChild(tr);
+    const sel=tr.querySelector('.dye-roll'),qty=tr.querySelector('.dye-qty');
+    sel.onchange=()=>{
+      const rr=rolls.find(x=>String(x.ROLL_ID)===String(sel.value));
+      if(!rr){tr.querySelector('.dye-avail').textContent='—';return}
+      const used=[...$('#dyeRollRows .dye-roll')].filter(x=>x!==sel).some(x=>x.value===sel.value);
+      if(used){toast('This roll is already selected in this batch.','bad',3000);sel.value='';return}
+      if(batchFabric&&String(rr.FABRIC_ID)!==String(batchFabric)){toast('Different fabric type cannot be mixed in the same dye batch. Create a separate dye batch.','bad',4200);sel.value='';return}
+      if(!batchFabric){batchFabric=String(rr.FABRIC_ID);$('#dyeBatchFabric').value=rr.FABRIC_NAME||rr.FABRIC||rr.FABRIC_ID}
+      tr.querySelector('.dye-avail').textContent=moneyless(rr.BALANCE_MTR)+' m';qty.max=rr.BALANCE_MTR;qty.value=moneyless(rr.BALANCE_MTR);updateSummary();
+    };
+    qty.oninput=updateSummary;
+    tr.querySelector('.icon-remove').onclick=()=>{tr.remove();[...$('#dyeRollRows').children].forEach((x,i)=>x.querySelector('.dye-no').textContent=i+1);if(!$('#dyeRollRows').children.length){batchFabric='';$('#dyeBatchFabric').value='Select first roll'}updateSummary()};
+    updateSummary();
+  }
+  $('#addDyeRoll').onclick=addRow;$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;addRow();
+  $('#dyeBulkForm').onsubmit=async e=>{
+    e.preventDefault();const base=Object.fromEntries(new FormData(e.target).entries());
+    const items=[...$('#dyeRollRows').children].map(tr=>({ROLL_ID:tr.querySelector('.dye-roll').value,ISSUE_MTR:tr.querySelector('.dye-qty').value}));
+    if(!items.length)return toast('Add at least one roll.','bad');
+    try{const d=await api('/api/data',{method:'POST',activity:'Creating dye batch…',success:'Dye issue saved',body:JSON.stringify({module:'dye_bulk',record:{...base,items},requestId})});dropCaches();closeModal();toast(`Dye Batch ${d.record.DYE_BATCH_ID} saved · ${d.record.ROLL_COUNT} roll(s) · ${moneyless(d.record.TOTAL_MTR)} m`,'ok',4200);go('dye',true)}catch(err){toast(err.message,'bad',4200)}
+  };
+}
+
+async function openProductionPlan(){
+  const requestId=newRequestId();let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
+  const batches=l.dyeBatches||[],styles=l.styles||[];
+  if(!batches.length)return toast('No dyed usable stock is available. Dye receipt must be completed before production allocation.','bad',4500);
+  if(!styles.length)return toast('Create active Styles in Masters first.','bad',3500);
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>Plan Production</h3><small>Allocate only usable dyed stock. Balance is enforced automatically.</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="prodSmartForm"><div class="form-grid">
+      <div class="field"><label>Plan Date</label><input name="PLAN_DATE" type="date" required value="${todayLocal()}"></div>
+      <div class="field"><label>Dyed Batch</label><select name="DYE_BATCH_ID" id="prodBatch" required><option value="">Select dyed batch</option>${batches.map(b=>`<option value="${esc(b.DYE_BATCH_ID)}">${esc(b.DYE_BATCH_ID)} · ${esc(b.FABRIC_NAME)} · ${esc(b.COLOR_NAME)} · ${moneyless(b.BALANCE_MTR)} m available</option>`).join('')}</select></div>
+      <div class="field"><label>Style / Product</label><select name="STYLE_ID" required><option value="">Select style</option>${styleOptions(styles)}</select></div>
+      <div class="field"><label>Available Dyed Meter</label><input id="prodAvail" readonly value="—"></div>
+      <div class="field"><label>Planned Garment Qty</label><input name="PLANNED_QTY" type="number" min="1" step="1"></div>
+      <div class="field"><label>Allocate Meter</label><input name="ALLOCATED_MTR" id="prodAlloc" type="number" min="0.01" step="0.01" required></div>
+      <div class="field wide"><label>Notes</label><input name="NOTES"></div>
+    </div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Save Production Plan</button></div></form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  $('#prodBatch').onchange=e=>{const b=batches.find(x=>String(x.DYE_BATCH_ID)===String(e.target.value));$('#prodAvail').value=b?moneyless(b.BALANCE_MTR)+' m':'—';$('#prodAlloc').max=b?b.BALANCE_MTR:''};
+  $('#prodSmartForm').onsubmit=async e=>{e.preventDefault();const rec=Object.fromEntries(new FormData(e.target).entries());try{await api('/api/data',{method:'POST',activity:'Saving production plan…',success:'Production plan saved',body:JSON.stringify({module:'production',record:rec,requestId})});dropCaches();closeModal();go('production',true)}catch(err){toast(err.message,'bad',4200)}};
+}
+
+async function openStitchingIssue(){
+  const requestId=newRequestId();let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
+  const vendors=(l.vendors||[]).filter(v=>isTrue(v.STITCHING_VENDOR)&&isTrue(v.ACTIVE)),batches=l.productionBatches||[];
+  if(!vendors.length)return toast('Create an active Stitching Vendor in Masters → Vendors.','bad',4200);
+  if(!batches.length)return toast('No cut-piece stock is available for stitching issue. Complete cutting first.','bad',4200);
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>Create Stitching Challan</h3><small>Only production batches with unissued cut pieces are shown.</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="stitchSmartForm"><div class="form-grid">
+      <div class="field"><label>Issue Date</label><input name="ISSUE_DATE" type="date" required value="${todayLocal()}"></div>
+      <div class="field"><label>Stitching Vendor</label><select name="STITCHING_VENDOR_ID" required><option value="">Select stitching vendor</option>${vendorOptions(vendors,'STITCHING_VENDOR')}</select></div>
+      <div class="field wide"><label>Production Batch</label><select name="PRODUCTION_BATCH_ID" id="stitchBatch" required><option value="">Select cut batch</option>${batches.map(b=>`<option value="${esc(b.PRODUCTION_BATCH_ID)}">${esc(b.PRODUCTION_BATCH_ID)} · ${esc(b.STYLE_NAME||b.STYLE)} · ${esc(b.COLOR_NAME||b.COLOR_ID)} · ${moneyless(b.CUT_BALANCE)} pcs available</option>`).join('')}</select></div>
+      <div class="field"><label>Available Cut Pieces</label><input id="stitchAvail" readonly value="—"></div>
+      <div class="field"><label>M</label><input name="M_ISSUED" type="number" min="0" step="1" value="0"></div>
+      <div class="field"><label>L</label><input name="L_ISSUED" type="number" min="0" step="1" value="0"></div>
+      <div class="field"><label>XL</label><input name="XL_ISSUED" type="number" min="0" step="1" value="0"></div>
+      <div class="field"><label>2XL</label><input name="2XL_ISSUED" type="number" min="0" step="1" value="0"></div>
+      <div class="field"><label>3XL</label><input name="3XL_ISSUED" type="number" min="0" step="1" value="0"></div>
+      <div class="field"><label>Other</label><input name="OTHER_ISSUED" type="number" min="0" step="1" value="0"></div>
+      <div class="field wide"><label>Notes</label><input name="NOTES"></div>
+    </div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Create Challan</button></div></form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  $('#stitchBatch').onchange=e=>{const b=batches.find(x=>String(x.PRODUCTION_BATCH_ID)===String(e.target.value));$('#stitchAvail').value=b?moneyless(b.CUT_BALANCE)+' pcs':'—'};
+  $('#stitchSmartForm').onsubmit=async e=>{e.preventDefault();const rec=Object.fromEntries(new FormData(e.target).entries());try{await api('/api/data',{method:'POST',activity:'Creating stitching challan…',success:'Stitching challan saved',body:JSON.stringify({module:'stitching',record:rec,requestId})});dropCaches();closeModal();go('stitching',true)}catch(err){toast(err.message,'bad',4200)}};
+}
+
+async function openQcEntry(){
+  const requestId=newRequestId();let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
+  const challans=l.stitchingChallans||[],defects=l.defects||[];
+  if(!challans.length)return toast('No stitching receipt is pending QC. Receive garments from stitching first.','bad',4500);
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>QC Entry</h3><small>Only received pieces still pending QC are selectable.</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="qcSmartForm"><div class="form-grid">
+      <div class="field"><label>QC Date</label><input name="QC_DATE" type="date" required value="${todayLocal()}"></div>
+      <div class="field"><label>Stitching Challan</label><select name="CHALLAN_ID" id="qcChallan" required><option value="">Select challan</option>${challans.map(x=>`<option value="${esc(x.CHALLAN_ID)}">${esc(x.CHALLAN_ID)} · ${esc(x.VENDOR_NAME)} · ${esc(x.STYLE_NAME)} · ${moneyless(x.QC_PENDING)} pcs pending QC</option>`).join('')}</select></div>
+      <div class="field"><label>Pending QC Qty</label><input id="qcPending" readonly value="—"></div>
+      <div class="field"><label>Size</label><select name="SIZE" required><option value="">Select size</option>${(l.sizes||[]).map(s=>`<option value="${esc(s.SIZE_NAME)}">${esc(s.SIZE_NAME)}</option>`).join('')}</select></div>
+      <div class="field"><label>QC Qty</label><input name="QC_QTY" id="qcQty" type="number" min="1" step="1" required></div>
+      <div class="field"><label>Pass</label><input name="PASS_QTY" type="number" min="0" step="1" value="0"></div>
+      <div class="field"><label>Rework</label><input name="REWORK_QTY" type="number" min="0" step="1" value="0"></div>
+      <div class="field"><label>Reject</label><input name="REJECT_QTY" type="number" min="0" step="1" value="0"></div>
+      <div class="field"><label>Defect Reason</label><select name="DEFECT_REASON"><option value="">Select reason</option>${defects.map(d=>`<option value="${esc(d.DEFECT_NAME)}">${esc(d.DEFECT_NAME)}${d.STAGE?' · '+esc(d.STAGE):''}</option>`).join('')}</select></div>
+      <div class="field wide"><label>Notes</label><input name="NOTES"></div>
+    </div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Save QC</button></div></form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  $('#qcChallan').onchange=e=>{const x=challans.find(z=>String(z.CHALLAN_ID)===String(e.target.value));$('#qcPending').value=x?moneyless(x.QC_PENDING)+' pcs':'—';$('#qcQty').max=x?x.QC_PENDING:''};
+  $('#qcSmartForm').onsubmit=async e=>{e.preventDefault();const rec=Object.fromEntries(new FormData(e.target).entries());try{await api('/api/data',{method:'POST',activity:'Saving QC result…',success:'QC saved',body:JSON.stringify({module:'qc',record:rec,requestId})});dropCaches();closeModal();go('qc',true)}catch(err){toast(err.message,'bad',4200)}};
+}
+
+async function openWarehouseHandover(){
+  const requestId=newRequestId();let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
+  const ready=l.warehouseReady||[];
+  if(!ready.length)return toast('No QC-passed garment quantity is pending warehouse handover.','bad',4200);
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>Warehouse Handover</h3><small>Only QC-passed quantity not already handed over is shown.</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="whSmartForm"><div class="form-grid">
+      <div class="field"><label>Handover Date</label><input name="HANDOVER_DATE" type="date" required value="${todayLocal()}"></div>
+      <div class="field wide"><label>Ready Stock</label><select id="whReady" required><option value="">Select QC-passed stock</option>${ready.map((x,i)=>`<option value="${i}">${esc(x.STYLE_NAME)} · ${esc(x.COLOR_NAME)} · ${esc(x.SIZE)} · ${moneyless(x.PENDING_QTY)} pcs ready · ${esc(x.PRODUCTION_BATCH_ID)}</option>`).join('')}</select></div>
+      <input type="hidden" name="PRODUCTION_BATCH_ID"><input type="hidden" name="STYLE_ID"><input type="hidden" name="COLOR_ID"><input type="hidden" name="SIZE">
+      <div class="field"><label>Available Qty</label><input id="whAvail" readonly value="—"></div>
+      <div class="field"><label>Handover Qty</label><input name="ACCEPTED_QTY" id="whQty" type="number" min="1" step="1" required></div>
+      <div class="field"><label>Warehouse Received Qty</label><input name="WAREHOUSE_RECEIVED_QTY" type="number" min="0" step="1"></div>
+      <div class="field"><label>Warehouse Reference</label><input name="WAREHOUSE_REF"></div>
+      <div class="field wide"><label>Notes</label><input name="NOTES"></div>
+    </div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Save Handover</button></div></form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  $('#whReady').onchange=e=>{const x=ready[Number(e.target.value)];const f=$('#whSmartForm');if(!x)return;f.elements.PRODUCTION_BATCH_ID.value=x.PRODUCTION_BATCH_ID;f.elements.STYLE_ID.value=x.STYLE_ID;f.elements.COLOR_ID.value=x.COLOR_ID;f.elements.SIZE.value=x.SIZE;$('#whAvail').value=moneyless(x.PENDING_QTY)+' pcs';$('#whQty').max=x.PENDING_QTY;$('#whQty').value=moneyless(x.PENDING_QTY);f.elements.WAREHOUSE_RECEIVED_QTY.value=moneyless(x.PENDING_QTY)};
+  $('#whSmartForm').onsubmit=async e=>{e.preventDefault();const rec=Object.fromEntries(new FormData(e.target).entries());try{await api('/api/data',{method:'POST',activity:'Saving warehouse handover…',success:'Warehouse handover saved',body:JSON.stringify({module:'handover',record:rec,requestId})});dropCaches();closeModal();go('handover',true)}catch(err){toast(err.message,'bad',4200)}};
+}
 
 async function openRawInward(){const requestId=newRequestId();
   let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
@@ -42,7 +205,7 @@ async function openRawInward(){const requestId=newRequestId();
     <div class="panel-head"><div><h3>New Fabric Inward</h3><small>One challan can contain multiple fabric types and rolls.</small></div><button class="btn ghost" id="closeModal">Close</button></div>
     <form id="rawBulkForm">
       <div class="form-grid">
-        <div class="field"><label>Inward Date</label><input name="INWARD_DATE" type="date" required value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field"><label>Inward Date</label><input name="INWARD_DATE" type="date" required value="${todayLocal()}"></div>
         <div class="field"><label>Supplier</label><select name="SUPPLIER_ID" required><option value="">Select supplier</option>${opts(suppliers,'VENDOR_ID','VENDOR_NAME')}</select></div>
         <div class="field"><label>Delivery Challan / Invoice</label><input name="INVOICE_CHALLAN"></div>
         <div class="field"><label>Lot Reference</label><input name="LOT_REF"></div>
