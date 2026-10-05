@@ -21,3 +21,16 @@
 .refresh-btn:hover{background:#f7f9fc}.refresh-btn.spinning{pointer-events:none;opacity:.7}.refresh-btn.spinning::first-letter{animation:rrrSpin .75s linear infinite}
 @keyframes rrrSpin{to{transform:rotate(360deg)}}
 @media(max-width:640px){.refresh-btn span{display:none}.refresh-btn{width:38px;padding:0;justify-content:center}.status{display:none}}
+
+.operation-hud{position:fixed;z-index:1200;top:84px;left:50%;transform:translateX(-50%);min-width:280px;max-width:92vw;background:#111827;color:#fff;border-radius:14px;padding:12px 15px;display:flex;align-items:center;gap:11px;box-shadow:0 16px 40px rgba(17,24,39,.25);transition:.2s}
+.operation-hud.hidden{display:none!important}.operation-hud b{display:block;font-size:11px}.operation-hud small{display:block;font-size:9px;color:#aeb7c6;margin-top:2px}
+.op-spinner,.btn-spinner{display:inline-block;border-radius:999px;border:2px solid currentColor;border-right-color:transparent;animation:spin .7s linear infinite}
+.op-spinner{width:18px;height:18px;color:#7ee0d6}.btn-spinner{width:13px;height:13px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.toast-host{position:fixed;z-index:1400;right:18px;bottom:18px;display:grid;gap:9px;max-width:min(380px,calc(100vw - 36px))}
+.app-toast{opacity:0;transform:translateY(10px) scale(.98);transition:.22s;background:#172033;color:white;border-radius:13px;padding:12px 14px;box-shadow:0 16px 36px rgba(23,32,51,.2);font-size:10px}
+.app-toast.show{opacity:1;transform:none}.app-toast.ok{background:#116b50}.app-toast.bad{background:#b7354e}
+button{transition:transform .13s ease,box-shadow .18s ease,opacity .18s ease,background .18s ease}
+button.tap{transform:scale(.965)}button:disabled{cursor:not-allowed;opacity:.72}
+button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justify-content:center;gap:7px}
+.nav button.is-busy,.quick button.is-busy{justify-content:flex-start}
