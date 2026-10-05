@@ -1,7 +1,7 @@
-let READ_MEMO={};let DB_MEMO=null;let SHEET_MEMO={};
+let READ_MEMO={};let DB_MEMO=null;let SHEET_MEMO={};let BAL_MEMO={};
 const ERP={TZ:'Asia/Kolkata',DB_ID:'1iTKvM-KaGd3HuoknpyYz9IYpFRw1dtFlmv2f8sZo-HA',S:{USERS:'USERS',VENDORS:'VENDORS',FABRICS:'FABRICS',COLORS:'COLORS',STYLES:'STYLES',SIZES:'SIZES',DEFECTS:'DEFECT_REASONS',RAW:'RAW_INWARD',DYE:'DYE_JOBS',PROD:'PRODUCTION_BATCHES',STITCH:'STITCHING_JOBS',QC:'QC_EVENTS',HANDOVER:'WAREHOUSE_HANDOVER',AUDIT:'AUDIT_LOG',SETTINGS:'SETTINGS'}};
 function doGet(){return out_({ok:true,name:'RRR Production ERP API',time:new Date().toISOString()})}
-function doPost(e){READ_MEMO={};DB_MEMO=null;SHEET_MEMO={};try{const b=JSON.parse((e&&e.postData&&e.postData.contents)||'{}'),p=PropertiesService.getScriptProperties(),secret=p.getProperty('API_SECRET');if(!secret||!safe_(String(b.apiSecret||''),secret))return out_({ok:false,status:401,error:'Unauthorized API request.'});const x=b.payload||{};let r;switch(String(b.action||'')){case'health':r={sheet:true,time:new Date().toISOString()};break;case'login':r=login_(x);break;case'get_data':r=getData_(x);break;case'save_record':r=idempotent_(x.requestId,()=>saveRecord_(x));break;case'list_users':r=listUsers_(x);break;case'save_user':r=idempotent_(x.requestId,()=>saveUser_(x));break;default:throw err_('Unknown action.',404)}return out_({ok:true,...r})}catch(e2){console.error(e2);return out_({ok:false,status:e2.status||400,error:e2.message||'Unexpected error.'})}}
+function doPost(e){READ_MEMO={};DB_MEMO=null;SHEET_MEMO={};BAL_MEMO={};try{const b=JSON.parse((e&&e.postData&&e.postData.contents)||'{}'),p=PropertiesService.getScriptProperties(),secret=p.getProperty('API_SECRET');if(!secret||!safe_(String(b.apiSecret||''),secret))return out_({ok:false,status:401,error:'Unauthorized API request.'});const x=b.payload||{};let r;switch(String(b.action||'')){case'health':r={sheet:true,time:new Date().toISOString()};break;case'login':r=login_(x);break;case'get_data':r=getData_(x);break;case'save_record':r=idempotent_(x.requestId,()=>saveRecord_(x));break;case'list_users':r=listUsers_(x);break;case'save_user':r=idempotent_(x.requestId,()=>saveUser_(x));break;default:throw err_('Unknown action.',404)}return out_({ok:true,...r})}catch(e2){console.error(e2);return out_({ok:false,status:e2.status||400,error:e2.message||'Unexpected error.'})}}
 function idempotent_(requestId,fn){
   const id=String(requestId||'').trim();
   if(!id)return fn();
@@ -179,23 +179,53 @@ function nextMasterId_(prefix){
   p.setProperty(k,String(n)); return prefix+'-'+String(n).padStart(4,'0');
 }
 
-function kpis_(){const raw=rows_(ERP.S.RAW).filter(activeTxn_),dye=rows_(ERP.S.DYE),prod=rows_(ERP.S.PROD),st=rows_(ERP.S.STITCH),qc=rows_(ERP.S.QC),hand=rows_(ERP.S.HANDOVER);return{rawAvailable:raw.reduce((s,r)=>s+rawBalance_(r.ROLL_ID),0),atDye:dye.reduce((s,r)=>s+Math.max(0,num_(r.ISSUE_MTR)-num_(r.RECEIVED_MTR)),0),dyedAvailable:dye.reduce((s,r)=>s+dyeBalance_(r.DYE_BATCH_ID),0),cutPending:prod.reduce((s,r)=>s+cutBalance_(r.PRODUCTION_BATCH_ID),0),atStitching:st.reduce((s,r)=>s+Math.max(0,num_(r.TOTAL_ISSUED)-num_(r.TOTAL_RECEIVED)),0),readyWarehouse:qc.reduce((s,r)=>s+num_(r.FINAL_ACCEPTED_QTY),0)-hand.reduce((s,r)=>s+num_(r.WAREHOUSE_RECEIVED_QTY),0)}}
+function kpis_(){const dye=rows_(ERP.S.DYE),st=rows_(ERP.S.STITCH),qc=rows_(ERP.S.QC),hand=rows_(ERP.S.HANDOVER),rawMap=rawBalanceMap_(),dyeMap=dyeBalanceMap_(),cutMaps=cutBalanceMaps_();return{rawAvailable:Object.values(rawMap).reduce((s,x)=>s+num_(x),0),atDye:dye.reduce((s,r)=>s+Math.max(0,num_(r.ISSUE_MTR)-num_(r.RECEIVED_MTR)),0),dyedAvailable:Object.values(dyeMap).reduce((s,x)=>s+num_(x),0),cutPending:Object.values(cutMaps.total).reduce((s,x)=>s+num_(x),0),atStitching:st.reduce((s,r)=>s+Math.max(0,num_(r.TOTAL_ISSUED)-num_(r.TOTAL_RECEIVED)),0),readyWarehouse:qc.reduce((s,r)=>s+num_(r.FINAL_ACCEPTED_QTY),0)-hand.reduce((s,r)=>s+num_(r.WAREHOUSE_RECEIVED_QTY),0)}}
 function viewRaw_(){return rows_(ERP.S.RAW).filter(activeTxn_).map(r=>({...r,SUPPLIER:vendorName_(r.SUPPLIER_ID),FABRIC:fabricName_(r.FABRIC_ID)}))}
 function viewDye_(){return rows_(ERP.S.DYE).map(r=>({...r,DYE_VENDOR:vendorName_(r.DYE_VENDOR_ID),COLOR:colorName_(r.COLOR_ID)}))}
 function viewProd_(){return rows_(ERP.S.PROD).map(r=>({...r,STYLE:styleName_(r.STYLE_ID)}))}
 function viewStitch_(){return rows_(ERP.S.STITCH).map(r=>({...r,STITCHING_VENDOR:vendorName_(r.STITCHING_VENDOR_ID)}))}
 function viewQc_(){return rows_(ERP.S.QC)}
 function viewHandover_(){return rows_(ERP.S.HANDOVER).map(r=>({...r,STYLE:styleName_(r.STYLE_ID),COLOR:colorName_(r.COLOR_ID)}))}
-function rawBalance_(roll){const inward=rows_(ERP.S.RAW).filter(r=>activeTxn_(r)&&String(r.ROLL_ID)===String(roll)).reduce((s,r)=>s+num_(r.INWARD_MTR),0),issued=rows_(ERP.S.DYE).filter(r=>String(r.ROLL_ID)===String(roll)).reduce((s,r)=>s+num_(r.ISSUE_MTR),0);return inward-issued}
-function dyeBalance_(id){const ds=rows_(ERP.S.DYE).filter(r=>String(r.DYE_BATCH_ID)===String(id));if(!ds.length)return 0;const usable=ds.reduce((s,d)=>s+(num_(d.USABLE_MTR)||(num_(d.RECEIVED_MTR)-num_(d.DEFECT_MTR))),0),used=rows_(ERP.S.PROD).filter(r=>String(r.DYE_BATCH_ID)===String(id)).reduce((s,r)=>s+num_(r.ALLOCATED_MTR),0);return Math.max(0,usable-used)}
-function cutSizeBalance_(pb,size){
-  const p=rows_(ERP.S.PROD).find(r=>String(r.PRODUCTION_BATCH_ID)===String(pb));if(!p)return 0;
-  const map={M:['M_CUT','M_ISSUED'],L:['L_CUT','L_ISSUED'],XL:['XL_CUT','XL_ISSUED'],'2XL':['2XL_CUT','2XL_ISSUED'],'3XL':['3XL_CUT','3XL_ISSUED'],OTHER:['OTHER_CUT','OTHER_ISSUED']};
-  const pair=map[String(size||'').toUpperCase()];if(!pair)return 0;
-  const cut=num_(p[pair[0]]),issued=rows_(ERP.S.STITCH).filter(r=>String(r.PRODUCTION_BATCH_ID)===String(pb)).reduce((s,r)=>s+num_(r[pair[1]]),0);
-  return Math.max(0,cut-issued);
+function rawBalanceMap_(){
+  if(BAL_MEMO.raw)return BAL_MEMO.raw;
+  const m={};
+  rows_(ERP.S.RAW).filter(activeTxn_).forEach(r=>{const k=String(r.ROLL_ID||'');if(k)m[k]=(m[k]||0)+num_(r.INWARD_MTR)});
+  rows_(ERP.S.DYE).forEach(r=>{const k=String(r.ROLL_ID||'');if(k)m[k]=(m[k]||0)-num_(r.ISSUE_MTR)});
+  Object.keys(m).forEach(k=>m[k]=Math.max(0,m[k]));
+  return BAL_MEMO.raw=m;
 }
-function cutBalance_(pb){const p=rows_(ERP.S.PROD).find(r=>String(r.PRODUCTION_BATCH_ID)===String(pb));if(!p)return 0;const cut=num_(p.TOTAL_CUT)||['M_CUT','L_CUT','XL_CUT','2XL_CUT','3XL_CUT','OTHER_CUT'].reduce((s,k)=>s+num_(p[k]),0),issued=rows_(ERP.S.STITCH).filter(r=>String(r.PRODUCTION_BATCH_ID)===String(pb)).reduce((s,r)=>s+num_(r.TOTAL_ISSUED),0);return cut-issued}
+function dyeBalanceMap_(){
+  if(BAL_MEMO.dye)return BAL_MEMO.dye;
+  const m={};
+  rows_(ERP.S.DYE).forEach(r=>{const k=String(r.DYE_BATCH_ID||'');if(!k)return;const usable=num_(r.USABLE_MTR)||(num_(r.RECEIVED_MTR)-num_(r.DEFECT_MTR));m[k]=(m[k]||0)+usable});
+  rows_(ERP.S.PROD).forEach(r=>{const k=String(r.DYE_BATCH_ID||'');if(k)m[k]=(m[k]||0)-num_(r.ALLOCATED_MTR)});
+  Object.keys(m).forEach(k=>m[k]=Math.max(0,m[k]));
+  return BAL_MEMO.dye=m;
+}
+function cutBalanceMaps_(){
+  if(BAL_MEMO.cut)return BAL_MEMO.cut;
+  const out={total:{},size:{M:{},L:{},XL:{},'2XL':{},'3XL':{},OTHER:{}}};
+  rows_(ERP.S.PROD).forEach(p=>{
+    const id=String(p.PRODUCTION_BATCH_ID||'');if(!id)return;
+    const sizes={M:num_(p.M_CUT),L:num_(p.L_CUT),XL:num_(p.XL_CUT),'2XL':num_(p['2XL_CUT']),'3XL':num_(p['3XL_CUT']),OTHER:num_(p.OTHER_CUT)};
+    Object.keys(sizes).forEach(sz=>out.size[sz][id]=(out.size[sz][id]||0)+sizes[sz]);
+    out.total[id]=(out.total[id]||0)+(num_(p.TOTAL_CUT)||Object.values(sizes).reduce((a,b)=>a+b,0));
+  });
+  rows_(ERP.S.STITCH).forEach(s=>{
+    const id=String(s.PRODUCTION_BATCH_ID||'');if(!id)return;
+    const sizes={M:num_(s.M_ISSUED),L:num_(s.L_ISSUED),XL:num_(s.XL_ISSUED),'2XL':num_(s['2XL_ISSUED']),'3XL':num_(s['3XL_ISSUED']),OTHER:num_(s.OTHER_ISSUED)};
+    Object.keys(sizes).forEach(sz=>out.size[sz][id]=(out.size[sz][id]||0)-sizes[sz]);
+    out.total[id]=(out.total[id]||0)-num_(s.TOTAL_ISSUED);
+  });
+  Object.keys(out.total).forEach(id=>out.total[id]=Math.max(0,out.total[id]));
+  Object.values(out.size).forEach(map=>Object.keys(map).forEach(id=>map[id]=Math.max(0,map[id])));
+  return BAL_MEMO.cut=out;
+}
+function rawBalance_(roll){return num_(rawBalanceMap_()[String(roll)]||0)}
+function dyeBalance_(id){return num_(dyeBalanceMap_()[String(id)]||0)}
+function cutSizeBalance_(pb,size){const maps=cutBalanceMaps_();return num_((maps.size[String(size||'').toUpperCase()]||{})[String(pb)]||0)}
+function cutBalance_(pb){return num_(cutBalanceMaps_().total[String(pb)]||0)}
+
 function audit_(u,action,module,id,oldV,newV){sh_(ERP.S.AUDIT).appendRow([uuid_(),new Date(),u.userId,u.name,action,module,id,oldV,newV,'',''])}
 function nextId_(prefix){const p=PropertiesService.getScriptProperties(),k='SEQ_'+prefix,n=Number(p.getProperty(k)||0)+1;p.setProperty(k,String(n));return prefix+'-'+Utilities.formatDate(new Date(),ERP.TZ,'yyMMdd')+'-'+String(n).padStart(4,'0')}
 function byId_(sheet,key,id){return rows_(sheet).find(r=>String(r[key])===String(id))||{}}
