@@ -14,3 +14,10 @@
 .roll-summary b{color:#172033;margin-left:6px}
 .panel-head small{color:var(--muted);font-size:9px}
 @media(max-width:760px){.roll-head{align-items:flex-start;gap:10px;flex-direction:column}.roll-summary{justify-content:stretch}.roll-summary span{flex:1}}
+
+.top-actions{display:flex;align-items:center;gap:10px}
+.status.ok{color:var(--ok)}.status.busy{color:var(--warn)}.status.bad{color:var(--danger)}
+.refresh-btn{height:38px;border:1px solid var(--line);border-radius:11px;background:#fff;color:#455166;padding:0 12px;font-size:10px;font-weight:850;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 3px 10px rgba(23,32,51,.03)}
+.refresh-btn:hover{background:#f7f9fc}.refresh-btn.spinning{pointer-events:none;opacity:.7}.refresh-btn.spinning::first-letter{animation:rrrSpin .75s linear infinite}
+@keyframes rrrSpin{to{transform:rotate(360deg)}}
+@media(max-width:640px){.refresh-btn span{display:none}.refresh-btn{width:38px;padding:0;justify-content:center}.status{display:none}}
