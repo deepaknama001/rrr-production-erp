@@ -1,0 +1,3 @@
+import {json,readJson,errorResponse} from '../_lib/common.js';import {callGas} from '../_lib/gas.js';import {requireAuth} from '../_lib/auth.js';
+export async function onRequestGet(context){try{const actor=await requireAuth(context,true);const r=await callGas(context.env,'list_users',{actorUserId:actor.uid});return json({items:r.items||[]})}catch(e){return errorResponse(e)}}
+export async function onRequestPost(context){try{const actor=await requireAuth(context,true);const b=await readJson(context.request);const r=await callGas(context.env,'save_user',{...b,actorUserId:actor.uid});return json({saved:true,user:r.user})}catch(e){return errorResponse(e)}}
