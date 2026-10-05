@@ -78,23 +78,45 @@ async function openDyeIssue(){
     </form>`;
   $('#modal').classList.remove('hidden');
   let batchFabric='';
-  function updateSummary(){const trs=[...$('#dyeRollRows').children];$('#dyeRollCount').textContent=trs.length;$('#dyeTotal').textContent=trs.reduce((s,tr)=>s+(Number(tr.querySelector('.dye-qty').value)||0),0).toFixed(2)}
+  function selectedRollIds(exceptRow=null){
+    return [...$('#dyeRollRows').children].filter(row=>row!==exceptRow).map(row=>row.querySelector('.dye-roll')?.value||'').filter(Boolean);
+  }
+  function currentFabric(){
+    const chosen=[...$('#dyeRollRows').children].map(row=>rolls.find(x=>String(x.ROLL_ID)===String(row.querySelector('.dye-roll')?.value))).find(Boolean);
+    return chosen?String(chosen.FABRIC_ID||''):'';
+  }
+  function refreshDyeRollOptions(){
+    batchFabric=currentFabric();
+    const fabricRow=rolls.find(x=>String(x.FABRIC_ID)===String(batchFabric));
+    $('#dyeBatchFabric').value=batchFabric?(fabricRow?.FABRIC_NAME||fabricRow?.FABRIC||batchFabric):'Select first roll';
+    [...$('#dyeRollRows').children].forEach(row=>{
+      const sel=row.querySelector('.dye-roll'),current=sel.value,used=new Set(selectedRollIds(row));
+      const allowed=rolls.filter(r=>(!batchFabric||String(r.FABRIC_ID)===String(batchFabric))&&(!used.has(String(r.ROLL_ID))||String(r.ROLL_ID)===String(current)));
+      sel.innerHTML='<option value="">Select available roll</option>'+rollOptions(allowed);
+      if(current&&allowed.some(r=>String(r.ROLL_ID)===String(current)))sel.value=current;
+    });
+  }
+  function updateSummary(){
+    const trs=[...$('#dyeRollRows').children],selected=trs.filter(tr=>tr.querySelector('.dye-roll')?.value).length;
+    $('#dyeRollCount').textContent=selected;
+    $('#dyeTotal').textContent=trs.reduce((s,tr)=>s+(Number(tr.querySelector('.dye-qty').value)||0),0).toFixed(2);
+  }
   function addRow(){
     const tr=document.createElement('tr'),n=$('#dyeRollRows').children.length+1;
-    const allowedRolls=batchFabric?rolls.filter(r=>String(r.FABRIC_ID)===String(batchFabric)):rolls;tr.innerHTML=`<td class="dye-no">${n}</td><td><select class="dye-roll" required><option value="">Select available roll</option>${rollOptions(allowedRolls)}</select></td><td class="dye-avail">—</td><td><input class="dye-qty" type="number" min="0.01" step="0.01" required placeholder="0.00"></td><td><button type="button" class="icon-remove">×</button></td>`;
-    $('#dyeRollRows').appendChild(tr);
+    tr.innerHTML=`<td class="dye-no">${n}</td><td><select class="dye-roll" required><option value="">Select available roll</option></select></td><td class="dye-avail">—</td><td><input class="dye-qty" type="number" min="0.01" step="0.01" required placeholder="0.00"></td><td><button type="button" class="icon-remove">×</button></td>`;
+    $('#dyeRollRows').appendChild(tr);refreshDyeRollOptions();
     const sel=tr.querySelector('.dye-roll'),qty=tr.querySelector('.dye-qty');
     sel.onchange=()=>{
       const rr=rolls.find(x=>String(x.ROLL_ID)===String(sel.value));
-      if(!rr){tr.querySelector('.dye-avail').textContent='—';return}
-      const used=[...$('#dyeRollRows .dye-roll')].filter(x=>x!==sel).some(x=>x.value===sel.value);
-      if(used){toast('This roll is already selected in this batch.','bad',3000);sel.value='';return}
-      if(batchFabric&&String(rr.FABRIC_ID)!==String(batchFabric)){toast('Different fabric type cannot be mixed in the same dye batch. Create a separate dye batch.','bad',4200);sel.value='';return}
-      if(!batchFabric){batchFabric=String(rr.FABRIC_ID);$('#dyeBatchFabric').value=rr.FABRIC_NAME||rr.FABRIC||rr.FABRIC_ID}
-      tr.querySelector('.dye-avail').textContent=moneyless(rr.BALANCE_MTR)+' m';qty.max=rr.BALANCE_MTR;qty.value=moneyless(rr.BALANCE_MTR);updateSummary();
+      if(!rr){tr.querySelector('.dye-avail').textContent='—';qty.value='';qty.removeAttribute('max');refreshDyeRollOptions();updateSummary();return}
+      const used=selectedRollIds(tr).includes(String(sel.value));
+      if(used){toast('This roll is already selected in this batch.','bad',3000);sel.value='';tr.querySelector('.dye-avail').textContent='—';qty.value='';refreshDyeRollOptions();updateSummary();return}
+      const existingFabric=currentFabric();
+      if(existingFabric&&String(rr.FABRIC_ID)!==String(existingFabric)){toast('Different fabric type cannot be mixed in the same dye batch. Create a separate dye batch.','bad',4200);sel.value='';tr.querySelector('.dye-avail').textContent='—';qty.value='';refreshDyeRollOptions();updateSummary();return}
+      tr.querySelector('.dye-avail').textContent=moneyless(rr.BALANCE_MTR)+' m';qty.max=rr.BALANCE_MTR;qty.value=moneyless(rr.BALANCE_MTR);refreshDyeRollOptions();updateSummary();
     };
-    qty.oninput=updateSummary;
-    tr.querySelector('.icon-remove').onclick=()=>{tr.remove();[...$('#dyeRollRows').children].forEach((x,i)=>x.querySelector('.dye-no').textContent=i+1);if(!$('#dyeRollRows').children.length){batchFabric='';$('#dyeBatchFabric').value='Select first roll'}updateSummary()};
+    qty.oninput=()=>{const max=Number(qty.max||0),v=Number(qty.value||0);if(max&&v>max){qty.value=max;toast('Issue quantity cannot exceed available roll balance.','bad',2600)}updateSummary()};
+    tr.querySelector('.icon-remove').onclick=()=>{tr.remove();[...$('#dyeRollRows').children].forEach((x,i)=>x.querySelector('.dye-no').textContent=i+1);refreshDyeRollOptions();updateSummary()};
     updateSummary();
   }
   $('#addDyeRoll').onclick=addRow;$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;addRow();
