@@ -23,29 +23,83 @@ function login_(p){const id=uid_(p.userId),pin=String(p.pin||'');if(!id||!pin)th
 function listUsers_(p){actor_(p.actorUserId,null,true);return{items:rows_(ERP.S.USERS).map(publicUser_)}}
 function saveUser_(p){const a=actor_(p.actorUserId,null,true),id=uid_(p.userId),name=String(p.name||'').trim(),pin=String(p.pin||''),role=String(p.role||'EMPLOYEE').toUpperCase();if(!id||!name)throw err_('User ID and name required.',400);if(pin&&!/^\d{4,8}$/.test(pin))throw err_('PIN must be 4–8 digits.',400);const f=findUser_(id),now=new Date();if(!f&&!pin)throw err_('PIN required for new user.',400);const row=[id,name,pin?hashPin_(id,pin):f.user.PIN_HASH,role,!!p.perm_raw,!!p.perm_dye,!!p.perm_production,!!p.perm_stitching,!!p.perm_qc,!!p.perm_reports,!!p.admin,p.active!==false,f?Number(f.user.FAILED_ATTEMPTS||0):0,f?(f.user.LOCKED_UNTIL||''):'',f?(f.user.LAST_LOGIN||''):'',f?(f.user.CREATED_AT||now):now,now];if(f)sh_(ERP.S.USERS).getRange(f.row,1,1,row.length).setValues([row]);else sh_(ERP.S.USERS).appendRow(row);audit_(a,'SAVE_USER','USERS',id,'',JSON.stringify(publicUser_(objFrom_(ERP.S.USERS,row))));return{user:publicUser_(objFrom_(ERP.S.USERS,row))}}
 function getData_(p){const m=String(p.module||'dashboard');const perm={raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc',reports:'reports'}[m]||null;const a=actor_(p.actorUserId,perm,false);if(m==='dashboard')return{user:a,kpis:kpis_()};if(m==='lookups')return{lookups:lookupData_()};if(m==='raw')return{items:viewRaw_()};if(m==='dye')return{items:viewDye_()};if(m==='production')return{items:viewProd_()};if(m==='stitching')return{items:viewStitch_()};if(m==='qc')return{items:viewQc_()};if(m==='handover')return{items:viewHandover_()};if(m==='reports')return{items:[],kpis:kpis_()};if(m==='masters'){actor_(p.actorUserId,null,true);return{masters:masterData_()}}throw err_('Unknown module.',404)}
-function saveRecord_(p){const m=String(p.module||''),r=p.record||{},perm={raw:'raw',raw_bulk:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[m]||null,a=actor_(p.actorUserId,perm,false),lock=LockService.getScriptLock();lock.waitLock(20000);try{if(m==='raw')return{saved:true,record:saveRaw_(r,a)};if(m==='raw_bulk')return{saved:true,record:saveRawBulk_(r,a)};if(m==='dye')return{saved:true,record:saveDye_(r,a)};if(m==='production')return{saved:true,record:saveProd_(r,a)};if(m==='stitching')return{saved:true,record:saveStitch_(r,a)};if(m==='qc')return{saved:true,record:saveQc_(r,a)};if(m==='handover')return{saved:true,record:saveHandover_(r,a)};if(m==='master'){actor_(p.actorUserId,null,true);return{saved:true,record:saveMaster_(r,a)}}throw err_('Unknown module.',404)}finally{lock.releaseLock()}}
+function saveRecord_(p){const m=String(p.module||''),r=p.record||{},perm={raw:'raw',raw_bulk:'raw',dye:'dye',dye_bulk:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[m]||null,a=actor_(p.actorUserId,perm,false),lock=LockService.getScriptLock();lock.waitLock(20000);try{if(m==='raw')return{saved:true,record:saveRaw_(r,a)};if(m==='raw_bulk')return{saved:true,record:saveRawBulk_(r,a)};if(m==='dye')return{saved:true,record:saveDye_(r,a)};if(m==='dye_bulk')return{saved:true,record:saveDyeBulk_(r,a)};if(m==='production')return{saved:true,record:saveProd_(r,a)};if(m==='stitching')return{saved:true,record:saveStitch_(r,a)};if(m==='qc')return{saved:true,record:saveQc_(r,a)};if(m==='handover')return{saved:true,record:saveHandover_(r,a)};if(m==='master'){actor_(p.actorUserId,null,true);return{saved:true,record:saveMaster_(r,a)}}throw err_('Unknown module.',404)}finally{lock.releaseLock()}}
 function saveRaw_(r,a){const now=new Date(),id=nextId_('INW'),roll=nextId_('RF'),m=num_(r.INWARD_MTR);requirePos_(m,'Inward meter');const row=[uuid_(),id,roll,date_(r.INWARD_DATE),String(r.SUPPLIER_ID||''),String(r.VENDOR_ROLL_NO||''),String(r.FABRIC_ID||''),m,String(r.INVOICE_CHALLAN||''),String(r.LOT_REF||''),'AVAILABLE',String(r.NOTES||''),a.userId,now,a.userId,now];sh_(ERP.S.RAW).appendRow(row);audit_(a,'CREATE','RAW',roll,'',JSON.stringify(row));return{ROLL_ID:roll,INWARD_ID:id}}
 function saveDye_(r,a){const now=new Date(),id=nextId_('DB'),issue=num_(r.ISSUE_MTR),roll=String(r.ROLL_ID||'');requirePos_(issue,'Issue meter');if(rawBalance_(roll)<issue)throw err_('Issue meter exceeds raw roll balance.',409);const row=[uuid_(),id,date_(r.ISSUE_DATE),String(r.DYE_VENDOR_ID||''),roll,vendorRoll_(roll),fabricForRoll_(roll),String(r.COLOR_ID||''),issue,'','','','','','AT DYE VENDOR','',String(r.NOTES||''),a.userId,now,a.userId,now];sh_(ERP.S.DYE).appendRow(row);audit_(a,'CREATE','DYE',id,'',JSON.stringify(row));return{DYE_BATCH_ID:id}}
-function saveProd_(r,a){const now=new Date(),id=nextId_('PB'),batch=String(r.DYE_BATCH_ID||''),alloc=num_(r.ALLOCATED_MTR);if(dyeBalance_(batch)<alloc)throw err_('Allocated meter exceeds dyed usable balance.',409);const row=[uuid_(),id,date_(r.PLAN_DATE),batch,String(r.STYLE_ID||''),fabricForDye_(batch),colorForDye_(batch),num_(r.PLANNED_QTY),alloc,'','','','',0,0,0,0,0,0,0,'PLANNED',String(r.NOTES||''),a.userId,now,a.userId,now];sh_(ERP.S.PROD).appendRow(row);audit_(a,'CREATE','PRODUCTION',id,'',JSON.stringify(row));return{PRODUCTION_BATCH_ID:id}}
-function saveStitch_(r,a){const now=new Date(),id=nextId_('STC'),sizes=['M','L','XL','2XL','3XL','OTHER'].map(x=>num_(r[x+'_ISSUED'])),total=sizes.reduce((x,y)=>x+y,0),pb=String(r.PRODUCTION_BATCH_ID||'');if(cutBalance_(pb)<total)throw err_('Issued pieces exceed cut stock balance.',409);const row=[uuid_(),id,date_(r.ISSUE_DATE),String(r.STITCHING_VENDOR_ID||''),pb,styleForProd_(pb),colorForProd_(pb),...sizes,0,0,0,0,0,0,total,0,total,'PENDING FROM VENDOR',String(r.NOTES||''),a.userId,now,a.userId,now];sh_(ERP.S.STITCH).appendRow(row);audit_(a,'CREATE','STITCHING',id,'',JSON.stringify(row));return{CHALLAN_ID:id}}
-function saveQc_(r,a){const now=new Date(),id=nextId_('QC'),q=num_(r.QC_QTY),pass=num_(r.PASS_QTY),rw=num_(r.REWORK_QTY),rej=num_(r.REJECT_QTY),c=String(r.CHALLAN_ID||'');if(pass+rw+rej>q)throw err_('Pass + Rework + Reject cannot exceed QC Qty.',409);const row=[id,date_(r.QC_DATE),c,prodForChallan_(c),vendorForChallan_(c),styleForChallan_(c),colorForChallan_(c),String(r.SIZE||''),q,pass,rw,rej,0,String(r.DEFECT_REASON||''),'',0,pass,'OPEN',String(r.NOTES||''),a.userId,now,a.userId,now];sh_(ERP.S.QC).appendRow(row);audit_(a,'CREATE','QC',id,'',JSON.stringify(row));return{QC_ID:id}}
-function saveHandover_(r,a){const now=new Date(),id=nextId_('WH'),accepted=num_(r.ACCEPTED_QTY),rec=num_(r.WAREHOUSE_RECEIVED_QTY),pending=Math.max(0,accepted-rec),row=[id,date_(r.HANDOVER_DATE),String(r.PRODUCTION_BATCH_ID||''),String(r.STYLE_ID||''),String(r.COLOR_ID||''),String(r.SIZE||''),accepted,rec,pending,String(r.WAREHOUSE_REF||''),pending?'PARTIAL':'RECEIVED',String(r.NOTES||''),a.userId,now,a.userId,now];sh_(ERP.S.HANDOVER).appendRow(row);audit_(a,'CREATE','HANDOVER',id,'',JSON.stringify(row));return{HANDOVER_ID:id}}
+function saveDyeBulk_(r,a){
+  const now=new Date(),issueDate=date_(r.ISSUE_DATE),vendor=String(r.DYE_VENDOR_ID||''),color=String(r.COLOR_ID||''),notes=String(r.NOTES||''),items=Array.isArray(r.items)?r.items:[];
+  if(!vendor)throw err_('Dye vendor is required.',400);
+  const v=byId_(ERP.S.VENDORS,'VENDOR_ID',vendor);if(!v.VENDOR_ID||!truth_(v.ACTIVE)||!truth_(v.DYE_VENDOR))throw err_('Selected vendor is not an active Dye Vendor.',400);
+  if(!color)throw err_('Color is required.',400);
+  const c=byId_(ERP.S.COLORS,'COLOR_ID',color);if(!c.COLOR_ID||!truth_(c.ACTIVE))throw err_('Selected color is not active.',400);
+  if(!items.length)throw err_('Add at least one raw fabric roll.',400);
+  const seen={},fabricIds={};
+  items.forEach((x,i)=>{
+    const roll=String(x.ROLL_ID||''),qty=num_(x.ISSUE_MTR);
+    if(!roll)throw err_('Roll is required on line '+(i+1)+'.',400);
+    if(seen[roll])throw err_('Same roll cannot be selected twice in one dye batch.',409);seen[roll]=true;
+    requirePos_(qty,'Issue meter on line '+(i+1));
+    const rr=byId_(ERP.S.RAW,'ROLL_ID',roll);if(!rr.ROLL_ID||!activeTxn_(rr))throw err_('Roll '+roll+' is not available.',409);
+    const bal=rawBalance_(roll);if(qty>bal+0.0001)throw err_('Issue meter exceeds available balance for roll '+(rr.VENDOR_ROLL_NO||roll)+'. Available: '+bal,409);
+    fabricIds[String(rr.FABRIC_ID||'')]=true;
+  });
+  if(Object.keys(fabricIds).length!==1)throw err_('One dye batch can contain rolls of only one fabric type. Create separate dye batches for different fabrics.',409);
+  const batch=nextId_('DB'),fabricId=Object.keys(fabricIds)[0],rows=[];
+  items.forEach(x=>{
+    const rr=byId_(ERP.S.RAW,'ROLL_ID',x.ROLL_ID);
+    rows.push([uuid_(),batch,issueDate,vendor,String(x.ROLL_ID),String(rr.VENDOR_ROLL_NO||''),fabricId,color,num_(x.ISSUE_MTR),'','','','','','AT DYE VENDOR','',String(x.NOTES||notes||''),a.userId,now,a.userId,now]);
+  });
+  const sh=sh_(ERP.S.DYE),start=sh.getLastRow()+1;sh.getRange(start,1,rows.length,rows[0].length).setValues(rows);READ_MEMO[ERP.S.DYE]=null;
+  audit_(a,'CREATE_BULK','DYE',batch,'',JSON.stringify({vendor,color,fabricId,rolls:rows.length,totalMeter:items.reduce((s,x)=>s+num_(x.ISSUE_MTR),0)}));
+  return {DYE_BATCH_ID:batch,ROLL_COUNT:rows.length,TOTAL_MTR:items.reduce((s,x)=>s+num_(x.ISSUE_MTR),0),FABRIC_ID:fabricId};
+}
+function saveProd_(r,a){const now=new Date(),id=nextId_('PB'),batch=String(r.DYE_BATCH_ID||''),alloc=num_(r.ALLOCATED_MTR),style=style;requirePos_(alloc,'Allocated meter');if(!byId_(ERP.S.STYLES,'STYLE_ID',style).STYLE_ID)throw err_('Select a valid style.',400);if(dyeBalance_(batch)+0.0001<alloc)throw err_('Allocated meter exceeds dyed usable balance.',409);const row=[uuid_(),id,date_(r.PLAN_DATE),batch,String(r.STYLE_ID||''),fabricForDye_(batch),colorForDye_(batch),num_(r.PLANNED_QTY),alloc,'','','','',0,0,0,0,0,0,0,'PLANNED',String(r.NOTES||''),a.userId,now,a.userId,now];sh_(ERP.S.PROD).appendRow(row);audit_(a,'CREATE','PRODUCTION',id,'',JSON.stringify(row));return{PRODUCTION_BATCH_ID:id}}
+function saveStitch_(r,a){const now=new Date(),id=nextId_('STC'),sizes=['M','L','XL','2XL','3XL','OTHER'].map(x=>num_(r[x+'_ISSUED'])),total=sizes.reduce((x,y)=>x+y,0),pb=String(r.PRODUCTION_BATCH_ID||''),vendor=vendor;requirePos_(total,'Total stitching issue quantity');const vv=byId_(ERP.S.VENDORS,'VENDOR_ID',vendor);if(!vv.VENDOR_ID||!truth_(vv.ACTIVE)||!truth_(vv.STITCHING_VENDOR))throw err_('Select a valid active Stitching Vendor.',400);if(cutBalance_(pb)+0.0001<total)throw err_('Issued pieces exceed cut stock balance.',409);const row=[uuid_(),id,date_(r.ISSUE_DATE),String(r.STITCHING_VENDOR_ID||''),pb,styleForProd_(pb),colorForProd_(pb),...sizes,0,0,0,0,0,0,total,0,total,'PENDING FROM VENDOR',String(r.NOTES||''),a.userId,now,a.userId,now];sh_(ERP.S.STITCH).appendRow(row);audit_(a,'CREATE','STITCHING',id,'',JSON.stringify(row));return{CHALLAN_ID:id}}
+function saveQc_(r,a){const now=new Date(),id=nextId_('QC'),q=num_(r.QC_QTY),pass=num_(r.PASS_QTY),rw=num_(r.REWORK_QTY),rej=num_(r.REJECT_QTY),c=String(r.CHALLAN_ID||'');requirePos_(q,'QC quantity');if(q>qcPending_(c)+0.0001)throw err_('QC quantity exceeds received quantity pending QC.',409);if(pass+rw+rej>q+0.0001)throw err_('Pass + Rework + Reject cannot exceed QC Qty.',409);const row=[id,date_(r.QC_DATE),c,prodForChallan_(c),vendorForChallan_(c),styleForChallan_(c),colorForChallan_(c),String(r.SIZE||''),q,pass,rw,rej,0,String(r.DEFECT_REASON||''),'',0,pass,'OPEN',String(r.NOTES||''),a.userId,now,a.userId,now];sh_(ERP.S.QC).appendRow(row);audit_(a,'CREATE','QC',id,'',JSON.stringify(row));return{QC_ID:id}}
+function saveHandover_(r,a){const now=new Date(),id=nextId_('WH'),accepted=num_(r.ACCEPTED_QTY),rec=num_(r.WAREHOUSE_RECEIVED_QTY),pb=String(r.PRODUCTION_BATCH_ID||''),style=String(r.STYLE_ID||''),color=String(r.COLOR_ID||''),size=String(r.SIZE||'');requirePos_(accepted,'Accepted quantity');const ready=warehouseReady_().find(x=>String(x.PRODUCTION_BATCH_ID)===pb&&String(x.STYLE_ID)===style&&String(x.COLOR_ID)===color&&String(x.SIZE)===size);if(!ready||accepted>num_(ready.PENDING_QTY)+0.0001)throw err_('Handover quantity exceeds QC-passed quantity available.',409);const pending=Math.max(0,accepted-rec),row=[id,date_(r.HANDOVER_DATE),pb,style,color,size,accepted,rec,pending,String(r.WAREHOUSE_REF||''),pending?'PARTIAL':'RECEIVED',String(r.NOTES||''),a.userId,now,a.userId,now];sh_(ERP.S.HANDOVER).appendRow(row);audit_(a,'CREATE','HANDOVER',id,'',JSON.stringify(row));return{HANDOVER_ID:id}}
 
 
 function lookupData_(){
   const active=x=>x.filter(r=>truth_(r.ACTIVE));
-  return {
-    vendors:active(rows_(ERP.S.VENDORS)),
-    fabrics:active(rows_(ERP.S.FABRICS)),
-    colors:active(rows_(ERP.S.COLORS)),
-    styles:active(rows_(ERP.S.STYLES)),
-    sizes:active(rows_(ERP.S.SIZES)),
-    defects:active(rows_(ERP.S.DEFECTS)),
-    rawRolls:viewRaw_().filter(r=>rawBalance_(r.ROLL_ID)>0).map(r=>({...r,BALANCE_MTR:rawBalance_(r.ROLL_ID)})),
-    dyeBatches:viewDye_().filter(r=>dyeBalance_(r.DYE_BATCH_ID)>0).map(r=>({...r,BALANCE_MTR:dyeBalance_(r.DYE_BATCH_ID)})),
-    productionBatches:viewProd_().filter(r=>cutBalance_(r.PRODUCTION_BATCH_ID)>0).map(r=>({...r,CUT_BALANCE:cutBalance_(r.PRODUCTION_BATCH_ID)}))
-  };
+  const vendors=active(rows_(ERP.S.VENDORS)),fabrics=active(rows_(ERP.S.FABRICS)),colors=active(rows_(ERP.S.COLORS)),styles=active(rows_(ERP.S.STYLES)),sizes=active(rows_(ERP.S.SIZES)),defects=active(rows_(ERP.S.DEFECTS));
+  const fabricMap=Object.fromEntries(fabrics.map(x=>[String(x.FABRIC_ID),String(x.FABRIC_NAME||x.FABRIC_ID)]));
+  const colorMap=Object.fromEntries(colors.map(x=>[String(x.COLOR_ID),String(x.COLOR_NAME||x.COLOR_ID)]));
+  const styleMap=Object.fromEntries(styles.map(x=>[String(x.STYLE_ID),String(x.STYLE_NAME||x.STYLE_ID)]));
+  const vendorMap=Object.fromEntries(vendors.map(x=>[String(x.VENDOR_ID),String(x.VENDOR_NAME||x.VENDOR_ID)]));
+  const rawRolls=viewRaw_().map(r=>({...r,BALANCE_MTR:rawBalance_(r.ROLL_ID),FABRIC_NAME:fabricMap[String(r.FABRIC_ID)]||r.FABRIC_ID,SUPPLIER_NAME:vendorMap[String(r.SUPPLIER_ID)]||r.SUPPLIER_ID})).filter(r=>num_(r.BALANCE_MTR)>0.0001);
+  const dyeGroups={};
+  rows_(ERP.S.DYE).forEach(r=>{
+    const id=String(r.DYE_BATCH_ID||'');if(!id)return;
+    const g=dyeGroups[id]||(dyeGroups[id]={DYE_BATCH_ID:id,DYE_VENDOR_ID:r.DYE_VENDOR_ID,FABRIC_ID:r.FABRIC_ID,COLOR_ID:r.COLOR_ID,ISSUE_MTR:0,USABLE_MTR:0,ROLL_COUNT:0});
+    g.ISSUE_MTR+=num_(r.ISSUE_MTR);g.USABLE_MTR+=num_(r.USABLE_MTR)||(num_(r.RECEIVED_MTR)-num_(r.DEFECT_MTR));g.ROLL_COUNT++;
+  });
+  const dyeBatches=Object.values(dyeGroups).map(g=>({...g,BALANCE_MTR:dyeBalance_(g.DYE_BATCH_ID),FABRIC_NAME:fabricMap[String(g.FABRIC_ID)]||g.FABRIC_ID,COLOR_NAME:colorMap[String(g.COLOR_ID)]||g.COLOR_ID,DYE_VENDOR_NAME:vendorMap[String(g.DYE_VENDOR_ID)]||g.DYE_VENDOR_ID})).filter(g=>num_(g.BALANCE_MTR)>0.0001);
+  const productionBatches=viewProd_().map(r=>({...r,CUT_BALANCE:cutBalance_(r.PRODUCTION_BATCH_ID),STYLE_NAME:styleMap[String(r.STYLE_ID)]||r.STYLE_ID,COLOR_NAME:colorMap[String(r.COLOR_ID)]||r.COLOR_ID})).filter(r=>num_(r.CUT_BALANCE)>0.0001);
+  const stitchingChallans=viewStitch_().map(r=>({...r,QC_PENDING:qcPending_(r.CHALLAN_ID),STYLE_NAME:styleMap[String(r.STYLE_ID)]||r.STYLE_ID,COLOR_NAME:colorMap[String(r.COLOR_ID)]||r.COLOR_ID,VENDOR_NAME:vendorMap[String(r.STITCHING_VENDOR_ID)]||r.STITCHING_VENDOR_ID})).filter(r=>num_(r.QC_PENDING)>0.0001);
+  const warehouseReady=warehouseReady_().filter(r=>num_(r.PENDING_QTY)>0.0001).map(r=>({...r,STYLE_NAME:styleMap[String(r.STYLE_ID)]||r.STYLE_ID,COLOR_NAME:colorMap[String(r.COLOR_ID)]||r.COLOR_ID}));
+  return {vendors,fabrics,colors,styles,sizes,defects,rawRolls,dyeBatches,productionBatches,stitchingChallans,warehouseReady};
 }
+function qcPending_(challanId){
+  const st=rows_(ERP.S.STITCH).find(r=>String(r.CHALLAN_ID)===String(challanId));if(!st)return 0;
+  const received=num_(st.TOTAL_RECEIVED),done=rows_(ERP.S.QC).filter(q=>String(q.CHALLAN_ID)===String(challanId)).reduce((s,q)=>s+num_(q.QC_QTY),0);
+  return Math.max(0,received-done);
+}
+function warehouseReady_(){
+  const map={};
+  rows_(ERP.S.QC).forEach(q=>{
+    const qty=num_(q.FINAL_ACCEPTED_QTY);if(qty<=0)return;
+    const key=[q.PRODUCTION_BATCH_ID,q.STYLE_ID,q.COLOR_ID,q.SIZE].join('|');
+    const x=map[key]||(map[key]={PRODUCTION_BATCH_ID:q.PRODUCTION_BATCH_ID,STYLE_ID:q.STYLE_ID,COLOR_ID:q.COLOR_ID,SIZE:q.SIZE,ACCEPTED_QTY:0,HANDED_QTY:0,PENDING_QTY:0});
+    x.ACCEPTED_QTY+=qty;
+  });
+  rows_(ERP.S.HANDOVER).forEach(h=>{
+    const key=[h.PRODUCTION_BATCH_ID,h.STYLE_ID,h.COLOR_ID,h.SIZE].join('|');
+    if(map[key])map[key].HANDED_QTY+=num_(h.WAREHOUSE_RECEIVED_QTY)||num_(h.ACCEPTED_QTY);
+  });
+  Object.values(map).forEach(x=>x.PENDING_QTY=Math.max(0,x.ACCEPTED_QTY-x.HANDED_QTY));
+  return Object.values(map);
+}
+
 function rawBulkFingerprint_(supplier,invoice,lot,dateVal,items){
   const day=Utilities.formatDate(dateVal,ERP.TZ,'yyyy-MM-dd');
   const lines=items.map(x=>[String(x.FABRIC_ID||''),String(x.VENDOR_ROLL_NO||''),num_(x.INWARD_MTR).toFixed(3)].join('|')).sort();
@@ -126,7 +180,7 @@ function viewStitch_(){return rows_(ERP.S.STITCH).map(r=>({...r,STITCHING_VENDOR
 function viewQc_(){return rows_(ERP.S.QC)}
 function viewHandover_(){return rows_(ERP.S.HANDOVER).map(r=>({...r,STYLE:styleName_(r.STYLE_ID),COLOR:colorName_(r.COLOR_ID)}))}
 function rawBalance_(roll){const inward=rows_(ERP.S.RAW).filter(r=>activeTxn_(r)&&String(r.ROLL_ID)===String(roll)).reduce((s,r)=>s+num_(r.INWARD_MTR),0),issued=rows_(ERP.S.DYE).filter(r=>String(r.ROLL_ID)===String(roll)).reduce((s,r)=>s+num_(r.ISSUE_MTR),0);return inward-issued}
-function dyeBalance_(id){const d=rows_(ERP.S.DYE).find(r=>String(r.DYE_BATCH_ID)===String(id));if(!d)return 0;const usable=num_(d.USABLE_MTR)||(num_(d.RECEIVED_MTR)-num_(d.DEFECT_MTR)),used=rows_(ERP.S.PROD).filter(r=>String(r.DYE_BATCH_ID)===String(id)).reduce((s,r)=>s+num_(r.ALLOCATED_MTR),0);return usable-used}
+function dyeBalance_(id){const ds=rows_(ERP.S.DYE).filter(r=>String(r.DYE_BATCH_ID)===String(id));if(!ds.length)return 0;const usable=ds.reduce((s,d)=>s+(num_(d.USABLE_MTR)||(num_(d.RECEIVED_MTR)-num_(d.DEFECT_MTR))),0),used=rows_(ERP.S.PROD).filter(r=>String(r.DYE_BATCH_ID)===String(id)).reduce((s,r)=>s+num_(r.ALLOCATED_MTR),0);return Math.max(0,usable-used)}
 function cutBalance_(pb){const p=rows_(ERP.S.PROD).find(r=>String(r.PRODUCTION_BATCH_ID)===String(pb));if(!p)return 0;const cut=num_(p.TOTAL_CUT)||['M_CUT','L_CUT','XL_CUT','2XL_CUT','3XL_CUT','OTHER_CUT'].reduce((s,k)=>s+num_(p[k]),0),issued=rows_(ERP.S.STITCH).filter(r=>String(r.PRODUCTION_BATCH_ID)===String(pb)).reduce((s,r)=>s+num_(r.TOTAL_ISSUED),0);return cut-issued}
 function audit_(u,action,module,id,oldV,newV){sh_(ERP.S.AUDIT).appendRow([uuid_(),new Date(),u.userId,u.name,action,module,id,oldV,newV,'',''])}
 function nextId_(prefix){const p=PropertiesService.getScriptProperties(),k='SEQ_'+prefix,n=Number(p.getProperty(k)||0)+1;p.setProperty(k,String(n));return prefix+'-'+Utilities.formatDate(new Date(),ERP.TZ,'yyMMdd')+'-'+String(n).padStart(4,'0')}
