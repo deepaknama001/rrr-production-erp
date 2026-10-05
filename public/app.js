@@ -81,7 +81,7 @@ async function openDyeIssue(){
   function updateSummary(){const trs=[...$('#dyeRollRows').children];$('#dyeRollCount').textContent=trs.length;$('#dyeTotal').textContent=trs.reduce((s,tr)=>s+(Number(tr.querySelector('.dye-qty').value)||0),0).toFixed(2)}
   function addRow(){
     const tr=document.createElement('tr'),n=$('#dyeRollRows').children.length+1;
-    tr.innerHTML=`<td class="dye-no">${n}</td><td><select class="dye-roll" required><option value="">Select available roll</option>${rollOptions(rolls)}</select></td><td class="dye-avail">—</td><td><input class="dye-qty" type="number" min="0.01" step="0.01" required placeholder="0.00"></td><td><button type="button" class="icon-remove">×</button></td>`;
+    const allowedRolls=batchFabric?rolls.filter(r=>String(r.FABRIC_ID)===String(batchFabric)):rolls;tr.innerHTML=`<td class="dye-no">${n}</td><td><select class="dye-roll" required><option value="">Select available roll</option>${rollOptions(allowedRolls)}</select></td><td class="dye-avail">—</td><td><input class="dye-qty" type="number" min="0.01" step="0.01" required placeholder="0.00"></td><td><button type="button" class="icon-remove">×</button></td>`;
     $('#dyeRollRows').appendChild(tr);
     const sel=tr.querySelector('.dye-roll'),qty=tr.querySelector('.dye-qty');
     sel.onchange=()=>{
@@ -116,14 +116,14 @@ async function openProductionPlan(){
     <form id="prodSmartForm"><div class="form-grid">
       <div class="field"><label>Plan Date</label><input name="PLAN_DATE" type="date" required value="${todayLocal()}"></div>
       <div class="field"><label>Dyed Batch</label><select name="DYE_BATCH_ID" id="prodBatch" required><option value="">Select dyed batch</option>${batches.map(b=>`<option value="${esc(b.DYE_BATCH_ID)}">${esc(b.DYE_BATCH_ID)} · ${esc(b.FABRIC_NAME)} · ${esc(b.COLOR_NAME)} · ${moneyless(b.BALANCE_MTR)} m available</option>`).join('')}</select></div>
-      <div class="field"><label>Style / Product</label><select name="STYLE_ID" required><option value="">Select style</option>${styleOptions(styles)}</select></div>
+      <div class="field"><label>Style / Product</label><select name="STYLE_ID" id="prodStyle" required><option value="">Select style</option>${styleOptions(styles)}</select></div>
       <div class="field"><label>Available Dyed Meter</label><input id="prodAvail" readonly value="—"></div>
       <div class="field"><label>Planned Garment Qty</label><input name="PLANNED_QTY" type="number" min="1" step="1"></div>
       <div class="field"><label>Allocate Meter</label><input name="ALLOCATED_MTR" id="prodAlloc" type="number" min="0.01" step="0.01" required></div>
       <div class="field wide"><label>Notes</label><input name="NOTES"></div>
     </div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Save Production Plan</button></div></form>`;
   $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
-  $('#prodBatch').onchange=e=>{const b=batches.find(x=>String(x.DYE_BATCH_ID)===String(e.target.value));$('#prodAvail').value=b?moneyless(b.BALANCE_MTR)+' m':'—';$('#prodAlloc').max=b?b.BALANCE_MTR:''};
+  $('#prodBatch').onchange=e=>{const b=batches.find(x=>String(x.DYE_BATCH_ID)===String(e.target.value));$('#prodAvail').value=b?moneyless(b.BALANCE_MTR)+' m':'—';$('#prodAlloc').max=b?b.BALANCE_MTR:'';const sel=$('#prodStyle');if(!b){sel.innerHTML='<option value="">Select style</option>'+styleOptions(styles);return}const compatible=styles.filter(s=>!s.DEFAULT_FABRIC_ID||String(s.DEFAULT_FABRIC_ID)===String(b.FABRIC_ID));sel.innerHTML='<option value="">Select compatible style</option>'+styleOptions(compatible);if(!compatible.length)toast('No style is mapped to this fabric. Update Style Master first.','bad',4200)};
   $('#prodSmartForm').onsubmit=async e=>{e.preventDefault();const rec=Object.fromEntries(new FormData(e.target).entries());try{await api('/api/data',{method:'POST',activity:'Saving production plan…',success:'Production plan saved',body:JSON.stringify({module:'production',record:rec,requestId})});dropCaches();closeModal();go('production',true)}catch(err){toast(err.message,'bad',4200)}};
 }
 
@@ -139,16 +139,16 @@ async function openStitchingIssue(){
       <div class="field"><label>Stitching Vendor</label><select name="STITCHING_VENDOR_ID" required><option value="">Select stitching vendor</option>${vendorOptions(vendors,'STITCHING_VENDOR')}</select></div>
       <div class="field wide"><label>Production Batch</label><select name="PRODUCTION_BATCH_ID" id="stitchBatch" required><option value="">Select cut batch</option>${batches.map(b=>`<option value="${esc(b.PRODUCTION_BATCH_ID)}">${esc(b.PRODUCTION_BATCH_ID)} · ${esc(b.STYLE_NAME||b.STYLE)} · ${esc(b.COLOR_NAME||b.COLOR_ID)} · ${moneyless(b.CUT_BALANCE)} pcs available</option>`).join('')}</select></div>
       <div class="field"><label>Available Cut Pieces</label><input id="stitchAvail" readonly value="—"></div>
-      <div class="field"><label>M</label><input name="M_ISSUED" type="number" min="0" step="1" value="0"></div>
-      <div class="field"><label>L</label><input name="L_ISSUED" type="number" min="0" step="1" value="0"></div>
-      <div class="field"><label>XL</label><input name="XL_ISSUED" type="number" min="0" step="1" value="0"></div>
-      <div class="field"><label>2XL</label><input name="2XL_ISSUED" type="number" min="0" step="1" value="0"></div>
-      <div class="field"><label>3XL</label><input name="3XL_ISSUED" type="number" min="0" step="1" value="0"></div>
-      <div class="field"><label>Other</label><input name="OTHER_ISSUED" type="number" min="0" step="1" value="0"></div>
+      <div class="field"><label>M <small id="balM"></small></label><input name="M_ISSUED" type="number" min="0" step="1" value="0"></div>
+      <div class="field"><label>L <small id="balL"></small></label><input name="L_ISSUED" type="number" min="0" step="1" value="0"></div>
+      <div class="field"><label>XL <small id="balXL"></small></label><input name="XL_ISSUED" type="number" min="0" step="1" value="0"></div>
+      <div class="field"><label>2XL <small id="bal2XL"></small></label><input name="2XL_ISSUED" type="number" min="0" step="1" value="0"></div>
+      <div class="field"><label>3XL <small id="bal3XL"></small></label><input name="3XL_ISSUED" type="number" min="0" step="1" value="0"></div>
+      <div class="field"><label>Other <small id="balOTHER"></small></label><input name="OTHER_ISSUED" type="number" min="0" step="1" value="0"></div>
       <div class="field wide"><label>Notes</label><input name="NOTES"></div>
     </div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Create Challan</button></div></form>`;
   $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
-  $('#stitchBatch').onchange=e=>{const b=batches.find(x=>String(x.PRODUCTION_BATCH_ID)===String(e.target.value));$('#stitchAvail').value=b?moneyless(b.CUT_BALANCE)+' pcs':'—'};
+  $('#stitchBatch').onchange=e=>{const b=batches.find(x=>String(x.PRODUCTION_BATCH_ID)===String(e.target.value));$('#stitchAvail').value=b?moneyless(b.CUT_BALANCE)+' pcs':'—';const pairs=[['M','M_BALANCE'],['L','L_BALANCE'],['XL','XL_BALANCE'],['2XL','2XL_BALANCE'],['3XL','3XL_BALANCE'],['OTHER','OTHER_BALANCE']];pairs.forEach(([sz,key])=>{const bal=b?Number(b[key]||0):0;const input=$('#stitchSmartForm').elements[sz+'_ISSUED'];if(input)input.max=bal;const hint=$('#bal'+sz);if(hint)hint.textContent='· '+moneyless(bal)+' available'})};
   $('#stitchSmartForm').onsubmit=async e=>{e.preventDefault();const rec=Object.fromEntries(new FormData(e.target).entries());try{await api('/api/data',{method:'POST',activity:'Creating stitching challan…',success:'Stitching challan saved',body:JSON.stringify({module:'stitching',record:rec,requestId})});dropCaches();closeModal();go('stitching',true)}catch(err){toast(err.message,'bad',4200)}};
 }
 
@@ -162,7 +162,7 @@ async function openQcEntry(){
       <div class="field"><label>QC Date</label><input name="QC_DATE" type="date" required value="${todayLocal()}"></div>
       <div class="field"><label>Stitching Challan</label><select name="CHALLAN_ID" id="qcChallan" required><option value="">Select challan</option>${challans.map(x=>`<option value="${esc(x.CHALLAN_ID)}">${esc(x.CHALLAN_ID)} · ${esc(x.VENDOR_NAME)} · ${esc(x.STYLE_NAME)} · ${moneyless(x.QC_PENDING)} pcs pending QC</option>`).join('')}</select></div>
       <div class="field"><label>Pending QC Qty</label><input id="qcPending" readonly value="—"></div>
-      <div class="field"><label>Size</label><select name="SIZE" required><option value="">Select size</option>${(l.sizes||[]).map(s=>`<option value="${esc(s.SIZE_NAME)}">${esc(s.SIZE_NAME)}</option>`).join('')}</select></div>
+      <div class="field"><label>Size</label><select name="SIZE" id="qcSize" required><option value="">Select challan first</option></select></div>
       <div class="field"><label>QC Qty</label><input name="QC_QTY" id="qcQty" type="number" min="1" step="1" required></div>
       <div class="field"><label>Pass</label><input name="PASS_QTY" type="number" min="0" step="1" value="0"></div>
       <div class="field"><label>Rework</label><input name="REWORK_QTY" type="number" min="0" step="1" value="0"></div>
@@ -171,7 +171,7 @@ async function openQcEntry(){
       <div class="field wide"><label>Notes</label><input name="NOTES"></div>
     </div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Save QC</button></div></form>`;
   $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
-  $('#qcChallan').onchange=e=>{const x=challans.find(z=>String(z.CHALLAN_ID)===String(e.target.value));$('#qcPending').value=x?moneyless(x.QC_PENDING)+' pcs':'—';$('#qcQty').max=x?x.QC_PENDING:''};
+  $('#qcChallan').onchange=e=>{const x=challans.find(z=>String(z.CHALLAN_ID)===String(e.target.value));$('#qcPending').value=x?moneyless(x.QC_PENDING)+' pcs':'—';const sizes=[['M','M_QC_PENDING'],['L','L_QC_PENDING'],['XL','XL_QC_PENDING'],['2XL','2XL_QC_PENDING'],['3XL','3XL_QC_PENDING'],['OTHER','OTHER_QC_PENDING']];const sel=$('#qcSize');sel.innerHTML='<option value="">Select size</option>'+(x?sizes.filter(([s,k])=>Number(x[k]||0)>0).map(([s,k])=>'<option value="'+s+'">'+s+' · '+moneyless(x[k])+' pending</option>').join(''):'');$('#qcQty').value='';$('#qcQty').max=''};$('#qcSize').onchange=e=>{const x=challans.find(z=>String(z.CHALLAN_ID)===String($('#qcChallan').value));const key={M:'M_QC_PENDING',L:'L_QC_PENDING',XL:'XL_QC_PENDING','2XL':'2XL_QC_PENDING','3XL':'3XL_QC_PENDING',OTHER:'OTHER_QC_PENDING'}[e.target.value];const bal=x&&key?Number(x[key]||0):0;$('#qcQty').max=bal;$('#qcQty').value=bal?moneyless(bal):''};
   $('#qcSmartForm').onsubmit=async e=>{e.preventDefault();const rec=Object.fromEntries(new FormData(e.target).entries());try{await api('/api/data',{method:'POST',activity:'Saving QC result…',success:'QC saved',body:JSON.stringify({module:'qc',record:rec,requestId})});dropCaches();closeModal();go('qc',true)}catch(err){toast(err.message,'bad',4200)}};
 }
 
