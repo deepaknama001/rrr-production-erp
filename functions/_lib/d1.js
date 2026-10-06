@@ -169,11 +169,60 @@ async function dyePlanSummary(db,plan){
 
 async function viewRaw(db){return rows(db,`SELECT r.*,COALESCE(v.VENDOR_NAME,r.SUPPLIER_ID) SUPPLIER,COALESCE(f.FABRIC_NAME,r.FABRIC_ID) FABRIC FROM raw_inward r LEFT JOIN vendors v ON v.VENDOR_ID=r.SUPPLIER_ID LEFT JOIN fabrics f ON f.FABRIC_ID=r.FABRIC_ID WHERE COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY r.CREATED_AT DESC,r.ROLL_ID DESC`)}
 async function viewDye(db){
-  const base=await rows(db,`SELECT DYE_PLAN_ID,DYE_BATCH_ID,MAX(ISSUE_DATE) ISSUE_DATE,MAX(DYE_VENDOR_ID) DYE_VENDOR_ID,MAX(FABRIC_ID) FABRIC_ID,MAX(COLOR_ID) COLOR_ID,SUM(ISSUE_MTR) ISSUE_MTR,COUNT(*) ROLL_COUNT FROM dye_jobs GROUP BY DYE_BATCH_ID ORDER BY ISSUE_DATE DESC,DYE_BATCH_ID DESC`);
-  const planCache=new Map(),out=[];for(const g of base){const s=await dyeBatchSummary(db,g.DYE_BATCH_ID),p=g.DYE_PLAN_ID?(planCache.get(g.DYE_PLAN_ID)||await dyePlanSummary(db,g.DYE_PLAN_ID)):null;if(g.DYE_PLAN_ID&&!planCache.has(g.DYE_PLAN_ID))planCache.set(g.DYE_PLAN_ID,p);out.push({...g,RECEIVED_MTR:n(s?.RECEIVED_MTR),DEFECT_MTR:n(s?.DEFECT_MTR),USABLE_MTR:n(s?.USABLE_MTR),VARIANCE_MTR:n(s?.VARIANCE_MTR),PENDING_MTR:s?.PENDING_MTR??n(g.ISSUE_MTR),STATUS:s?.STATUS||'AT DYE VENDOR',PLAN_ISSUE_MTR:n(p?.ISSUE_MTR),PLAN_RECEIVED_MTR:n(p?.RECEIVED_MTR),PLAN_VARIANCE_MTR:n(p?.VARIANCE_MTR),DYE_VENDOR:await vendorName(db,g.DYE_VENDOR_ID),FABRIC:await fabricName(db,g.FABRIC_ID),COLOR:await colorName(db,g.COLOR_ID)})}return out
+  return rows(db,`
+    WITH j AS (
+      SELECT DYE_PLAN_ID,DYE_BATCH_ID,MAX(ISSUE_DATE) ISSUE_DATE,MAX(DYE_VENDOR_ID) DYE_VENDOR_ID,
+             MAX(FABRIC_ID) FABRIC_ID,MAX(COLOR_ID) COLOR_ID,SUM(ISSUE_MTR) ISSUE_MTR,COUNT(*) ROLL_COUNT
+      FROM dye_jobs GROUP BY DYE_BATCH_ID
+    ),
+    r AS (
+      SELECT DYE_BATCH_ID,COALESCE(SUM(RECEIVED_MTR),0) RECEIVED_MTR,
+             COALESCE(SUM(DEFECT_MTR),0) DEFECT_MTR,COALESCE(SUM(USABLE_MTR),0) USABLE_MTR,
+             MAX(FINAL_RECEIPT) CLOSED
+      FROM dye_receipts GROUP BY DYE_BATCH_ID
+    ),
+    b AS (
+      SELECT j.*,COALESCE(r.RECEIVED_MTR,0) RECEIVED_MTR,COALESCE(r.DEFECT_MTR,0) DEFECT_MTR,
+             COALESCE(r.USABLE_MTR,0) USABLE_MTR,COALESCE(r.CLOSED,0) CLOSED,
+             CASE WHEN COALESCE(r.CLOSED,0)=1 THEN COALESCE(r.RECEIVED_MTR,0)-j.ISSUE_MTR ELSE 0 END VARIANCE_MTR,
+             CASE WHEN COALESCE(r.CLOSED,0)=1 THEN 0 ELSE MAX(0,j.ISSUE_MTR-COALESCE(r.RECEIVED_MTR,0)) END PENDING_MTR
+      FROM j LEFT JOIN r ON r.DYE_BATCH_ID=j.DYE_BATCH_ID
+    ),
+    x AS (
+      SELECT b.*,
+             SUM(ISSUE_MTR) OVER(PARTITION BY DYE_PLAN_ID) PLAN_ISSUE_MTR,
+             SUM(RECEIVED_MTR) OVER(PARTITION BY DYE_PLAN_ID) PLAN_RECEIVED_MTR
+      FROM b
+    )
+    SELECT x.*,
+           (PLAN_RECEIVED_MTR-PLAN_ISSUE_MTR) PLAN_VARIANCE_MTR,
+           COALESCE(v.VENDOR_NAME,x.DYE_VENDOR_ID) DYE_VENDOR,
+           COALESCE(f.FABRIC_NAME,x.FABRIC_ID) FABRIC,
+           COALESCE(c.COLOR_NAME,x.COLOR_ID) COLOR,
+           CASE
+             WHEN CLOSED=1 AND VARIANCE_MTR>0.0001 THEN 'RECEIVED EXCESS'
+             WHEN CLOSED=1 AND VARIANCE_MTR<-0.0001 THEN 'RECEIVED SHORT'
+             WHEN CLOSED=1 THEN 'RECEIVED EXACT'
+             WHEN RECEIVED_MTR>0 THEN 'PARTIAL RECEIVED'
+             ELSE 'AT DYE VENDOR'
+           END STATUS
+    FROM x
+    LEFT JOIN vendors v ON v.VENDOR_ID=x.DYE_VENDOR_ID
+    LEFT JOIN fabrics f ON f.FABRIC_ID=x.FABRIC_ID
+    LEFT JOIN colors c ON c.COLOR_ID=x.COLOR_ID
+    ORDER BY ISSUE_DATE DESC,DYE_BATCH_ID DESC
+  `)
 }
-async function viewProd(db){const a=await rows(db,'SELECT * FROM production_batches ORDER BY CREATED_AT DESC');for(const x of a)x.STYLE=await styleName(db,x.STYLE_ID);return a}
-async function viewStitch(db){const a=await rows(db,'SELECT * FROM stitching_jobs ORDER BY CREATED_AT DESC');for(const x of a)x.STITCHING_VENDOR=await vendorName(db,x.STITCHING_VENDOR_ID);return a}
+async function viewProd(db){
+  return rows(db,`SELECT p.*,COALESCE(s.STYLE_NAME,p.STYLE_ID) STYLE
+                  FROM production_batches p LEFT JOIN styles s ON s.STYLE_ID=p.STYLE_ID
+                  ORDER BY p.CREATED_AT DESC`)
+}
+async function viewStitch(db){
+  return rows(db,`SELECT s.*,COALESCE(v.VENDOR_NAME,s.STITCHING_VENDOR_ID) STITCHING_VENDOR
+                  FROM stitching_jobs s LEFT JOIN vendors v ON v.VENDOR_ID=s.STITCHING_VENDOR_ID
+                  ORDER BY s.CREATED_AT DESC`)
+}
 async function viewQc(db){return rows(db,'SELECT * FROM qc_events ORDER BY CREATED_AT DESC')}
 async function viewHandover(db){const a=await rows(db,'SELECT * FROM warehouse_handover ORDER BY CREATED_AT DESC');for(const x of a){x.STYLE=await styleName(db,x.STYLE_ID);x.COLOR=await colorName(db,x.COLOR_ID)}return a}
 
@@ -194,17 +243,122 @@ async function kpisD1(db){
 
 async function masterData(db){const [vendors,fabrics,colors,styles,sizes,defects]=await Promise.all([rows(db,'SELECT * FROM vendors'),rows(db,'SELECT * FROM fabrics'),rows(db,'SELECT * FROM colors'),rows(db,'SELECT * FROM styles'),rows(db,'SELECT * FROM sizes ORDER BY SORT_ORDER,SIZE_NAME'),rows(db,'SELECT * FROM defect_reasons')]);return{vendors,fabrics,colors,styles,sizes,defects}}
 async function lookupData(db){
-  const m=await masterData(db),vendors=m.vendors.filter(x=>truth(x.ACTIVE)),fabrics=m.fabrics.filter(x=>truth(x.ACTIVE)),colors=m.colors.filter(x=>truth(x.ACTIVE)),styles=m.styles.filter(x=>truth(x.ACTIVE)),sizes=m.sizes.filter(x=>truth(x.ACTIVE)),defects=m.defects.filter(x=>truth(x.ACTIVE));
-  const rawRolls=await rows(db,`SELECT r.*,COALESCE(f.FABRIC_NAME,r.FABRIC_ID) FABRIC_NAME,COALESCE(v.VENDOR_NAME,r.SUPPLIER_ID) SUPPLIER_NAME,MAX(0,r.INWARD_MTR-COALESCE(d.issued,0)) BALANCE_MTR FROM raw_inward r LEFT JOIN (SELECT ROLL_ID,SUM(ISSUE_MTR) issued FROM dye_jobs GROUP BY ROLL_ID)d ON d.ROLL_ID=r.ROLL_ID LEFT JOIN fabrics f ON f.FABRIC_ID=r.FABRIC_ID LEFT JOIN vendors v ON v.VENDOR_ID=r.SUPPLIER_ID WHERE COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%' AND r.INWARD_MTR-COALESCE(d.issued,0)>0.0001 ORDER BY r.INWARD_DATE,r.CREATED_AT,r.ROLL_ID`);
-  const group={};for(const r of rawRolls){const k=String(r.FABRIC_ID),x=group[k]||(group[k]={FABRIC_ID:k,FABRIC_NAME:r.FABRIC_NAME,AVAILABLE_MTR:0,ROLL_COUNT:0});x.AVAILABLE_MTR+=n(r.BALANCE_MTR);x.ROLL_COUNT++}
-  const allDye=await viewDye(db),vendorMap=Object.fromEntries(vendors.map(x=>[x.VENDOR_ID,x.VENDOR_NAME])),fabricMap=Object.fromEntries(fabrics.map(x=>[x.FABRIC_ID,x.FABRIC_NAME])),colorMap=Object.fromEntries(colors.map(x=>[x.COLOR_ID,x.COLOR_NAME])),styleMap=Object.fromEntries(styles.map(x=>[x.STYLE_ID,x.STYLE_NAME]));
-  const allDyeBatches=[];for(const x of allDye){allDyeBatches.push({...x,BALANCE_MTR:await dyeBalance(db,x.DYE_BATCH_ID),FABRIC_NAME:fabricMap[x.FABRIC_ID]||x.FABRIC_ID,COLOR_NAME:colorMap[x.COLOR_ID]||x.COLOR_ID,DYE_VENDOR_NAME:vendorMap[x.DYE_VENDOR_ID]||x.DYE_VENDOR_ID,CLOSED:/^RECEIVED/.test(String(x.STATUS))})}
-  const prod=await viewProd(db),productionBatches=[];for(const p of prod){const o={...p,CUT_BALANCE:await cutBalance(db,p.PRODUCTION_BATCH_ID),STYLE_NAME:styleMap[p.STYLE_ID]||p.STYLE_ID,COLOR_NAME:colorMap[p.COLOR_ID]||p.COLOR_ID};for(const sz of ['M','L','XL','2XL','3XL','OTHER'])o[sz+'_BALANCE']=await cutSizeBalance(db,p.PRODUCTION_BATCH_ID,sz);if(o.CUT_BALANCE>0.0001)productionBatches.push(o)}
-  const stitch=await viewStitch(db),stitchingChallans=[];for(const s of stitch){const o={...s,QC_PENDING:Math.max(0,n(s.TOTAL_RECEIVED)-n((await row(db,'SELECT COALESCE(SUM(QC_QTY),0) q FROM qc_events WHERE CHALLAN_ID=?',s.CHALLAN_ID))?.q)),STYLE_NAME:styleMap[s.STYLE_ID]||s.STYLE_ID,COLOR_NAME:colorMap[s.COLOR_ID]||s.COLOR_ID,VENDOR_NAME:vendorMap[s.STITCHING_VENDOR_ID]||s.STITCHING_VENDOR_ID};for(const sz of ['M','L','XL','2XL','3XL','OTHER'])o[sz+'_QC_PENDING']=await qcSizePending(db,s.CHALLAN_ID,sz);if(o.QC_PENDING>0.0001)stitchingChallans.push(o)}
-  const wr=await warehouseReady(db);for(const x of wr){x.STYLE_NAME=styleMap[x.STYLE_ID]||x.STYLE_ID;x.COLOR_NAME=colorMap[x.COLOR_ID]||x.COLOR_ID}
-  return{vendors,fabrics,colors,styles,sizes,defects,rawRolls,rawFabricGroups:Object.values(group).sort((a,b)=>String(a.FABRIC_NAME).localeCompare(String(b.FABRIC_NAME))),dyeBatches:allDyeBatches.filter(x=>x.BALANCE_MTR>0.0001),dyePendingReceipt:allDyeBatches.filter(x=>!x.CLOSED),productionBatches,stitchingChallans,warehouseReady:wr}
-}
+  const m=await masterData(db),
+        vendors=m.vendors.filter(x=>truth(x.ACTIVE)),
+        fabrics=m.fabrics.filter(x=>truth(x.ACTIVE)),
+        colors=m.colors.filter(x=>truth(x.ACTIVE)),
+        styles=m.styles.filter(x=>truth(x.ACTIVE)),
+        sizes=m.sizes.filter(x=>truth(x.ACTIVE)),
+        defects=m.defects.filter(x=>truth(x.ACTIVE));
 
+  const rawRolls=await rows(db,`
+    SELECT r.*,COALESCE(f.FABRIC_NAME,r.FABRIC_ID) FABRIC_NAME,
+           COALESCE(v.VENDOR_NAME,r.SUPPLIER_ID) SUPPLIER_NAME,
+           MAX(0,r.INWARD_MTR-COALESCE(d.issued,0)) BALANCE_MTR
+    FROM raw_inward r
+    LEFT JOIN (SELECT ROLL_ID,SUM(ISSUE_MTR) issued FROM dye_jobs GROUP BY ROLL_ID)d ON d.ROLL_ID=r.ROLL_ID
+    LEFT JOIN fabrics f ON f.FABRIC_ID=r.FABRIC_ID
+    LEFT JOIN vendors v ON v.VENDOR_ID=r.SUPPLIER_ID
+    WHERE COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%'
+      AND r.INWARD_MTR-COALESCE(d.issued,0)>0.0001
+    ORDER BY r.INWARD_DATE,r.CREATED_AT,r.ROLL_ID`);
+
+  const group={};
+  for(const r of rawRolls){
+    const k=String(r.FABRIC_ID),x=group[k]||(group[k]={FABRIC_ID:k,FABRIC_NAME:r.FABRIC_NAME,AVAILABLE_MTR:0,ROLL_COUNT:0});
+    x.AVAILABLE_MTR+=n(r.BALANCE_MTR);x.ROLL_COUNT++;
+  }
+
+  const allDyeBatches=await rows(db,`
+    WITH j AS (
+      SELECT DYE_PLAN_ID,DYE_BATCH_ID,MAX(ISSUE_DATE) ISSUE_DATE,MAX(DYE_VENDOR_ID) DYE_VENDOR_ID,
+             MAX(FABRIC_ID) FABRIC_ID,MAX(COLOR_ID) COLOR_ID,SUM(ISSUE_MTR) ISSUE_MTR,COUNT(*) ROLL_COUNT
+      FROM dye_jobs GROUP BY DYE_BATCH_ID
+    ),
+    r AS (
+      SELECT DYE_BATCH_ID,SUM(RECEIVED_MTR) RECEIVED_MTR,SUM(DEFECT_MTR) DEFECT_MTR,
+             SUM(USABLE_MTR) USABLE_MTR,MAX(FINAL_RECEIPT) CLOSED
+      FROM dye_receipts GROUP BY DYE_BATCH_ID
+    ),
+    a AS (SELECT DYE_BATCH_ID,SUM(ALLOCATED_MTR) ALLOCATED_MTR FROM production_batches GROUP BY DYE_BATCH_ID)
+    SELECT j.*,COALESCE(r.RECEIVED_MTR,0) RECEIVED_MTR,COALESCE(r.DEFECT_MTR,0) DEFECT_MTR,
+           COALESCE(r.USABLE_MTR,0) USABLE_MTR,COALESCE(r.CLOSED,0) CLOSED,
+           MAX(0,COALESCE(r.USABLE_MTR,0)-COALESCE(a.ALLOCATED_MTR,0)) BALANCE_MTR,
+           CASE WHEN COALESCE(r.CLOSED,0)=1 THEN 0 ELSE MAX(0,j.ISSUE_MTR-COALESCE(r.RECEIVED_MTR,0)) END PENDING_MTR,
+           CASE WHEN COALESCE(r.CLOSED,0)=1 THEN COALESCE(r.RECEIVED_MTR,0)-j.ISSUE_MTR ELSE 0 END VARIANCE_MTR,
+           COALESCE(f.FABRIC_NAME,j.FABRIC_ID) FABRIC_NAME,
+           COALESCE(c.COLOR_NAME,j.COLOR_ID) COLOR_NAME,
+           COALESCE(v.VENDOR_NAME,j.DYE_VENDOR_ID) DYE_VENDOR_NAME
+    FROM j
+    LEFT JOIN r ON r.DYE_BATCH_ID=j.DYE_BATCH_ID
+    LEFT JOIN a ON a.DYE_BATCH_ID=j.DYE_BATCH_ID
+    LEFT JOIN fabrics f ON f.FABRIC_ID=j.FABRIC_ID
+    LEFT JOIN colors c ON c.COLOR_ID=j.COLOR_ID
+    LEFT JOIN vendors v ON v.VENDOR_ID=j.DYE_VENDOR_ID`);
+
+  const productionBatches=await rows(db,`
+    WITH si AS (
+      SELECT PRODUCTION_BATCH_ID,
+        SUM(M_ISSUED) M_ISSUED,SUM(L_ISSUED) L_ISSUED,SUM(XL_ISSUED) XL_ISSUED,
+        SUM("2XL_ISSUED") "2XL_ISSUED",SUM("3XL_ISSUED") "3XL_ISSUED",SUM(OTHER_ISSUED) OTHER_ISSUED,
+        SUM(TOTAL_ISSUED) TOTAL_ISSUED
+      FROM stitching_jobs GROUP BY PRODUCTION_BATCH_ID
+    )
+    SELECT p.*,COALESCE(st.STYLE_NAME,p.STYLE_ID) STYLE_NAME,COALESCE(co.COLOR_NAME,p.COLOR_ID) COLOR_NAME,
+      MAX(0,(CASE WHEN p.TOTAL_CUT>0 THEN p.TOTAL_CUT ELSE p.M_CUT+p.L_CUT+p.XL_CUT+p."2XL_CUT"+p."3XL_CUT"+p.OTHER_CUT END)-COALESCE(si.TOTAL_ISSUED,0)) CUT_BALANCE,
+      MAX(0,p.M_CUT-COALESCE(si.M_ISSUED,0)) M_BALANCE,
+      MAX(0,p.L_CUT-COALESCE(si.L_ISSUED,0)) L_BALANCE,
+      MAX(0,p.XL_CUT-COALESCE(si.XL_ISSUED,0)) XL_BALANCE,
+      MAX(0,p."2XL_CUT"-COALESCE(si."2XL_ISSUED",0)) "2XL_BALANCE",
+      MAX(0,p."3XL_CUT"-COALESCE(si."3XL_ISSUED",0)) "3XL_BALANCE",
+      MAX(0,p.OTHER_CUT-COALESCE(si.OTHER_ISSUED,0)) OTHER_BALANCE
+    FROM production_batches p
+    LEFT JOIN si ON si.PRODUCTION_BATCH_ID=p.PRODUCTION_BATCH_ID
+    LEFT JOIN styles st ON st.STYLE_ID=p.STYLE_ID
+    LEFT JOIN colors co ON co.COLOR_ID=p.COLOR_ID
+    WHERE MAX(0,(CASE WHEN p.TOTAL_CUT>0 THEN p.TOTAL_CUT ELSE p.M_CUT+p.L_CUT+p.XL_CUT+p."2XL_CUT"+p."3XL_CUT"+p.OTHER_CUT END)-COALESCE(si.TOTAL_ISSUED,0))>0.0001`);
+
+  const stitchingChallans=await rows(db,`
+    WITH q AS (
+      SELECT CHALLAN_ID,
+        SUM(QC_QTY) QC_QTY,
+        SUM(CASE WHEN UPPER(SIZE)='M' THEN QC_QTY ELSE 0 END) M_QC,
+        SUM(CASE WHEN UPPER(SIZE)='L' THEN QC_QTY ELSE 0 END) L_QC,
+        SUM(CASE WHEN UPPER(SIZE)='XL' THEN QC_QTY ELSE 0 END) XL_QC,
+        SUM(CASE WHEN UPPER(SIZE)='2XL' THEN QC_QTY ELSE 0 END) "2XL_QC",
+        SUM(CASE WHEN UPPER(SIZE)='3XL' THEN QC_QTY ELSE 0 END) "3XL_QC",
+        SUM(CASE WHEN UPPER(SIZE)='OTHER' THEN QC_QTY ELSE 0 END) OTHER_QC
+      FROM qc_events GROUP BY CHALLAN_ID
+    )
+    SELECT s.*,COALESCE(st.STYLE_NAME,s.STYLE_ID) STYLE_NAME,COALESCE(co.COLOR_NAME,s.COLOR_ID) COLOR_NAME,
+      COALESCE(v.VENDOR_NAME,s.STITCHING_VENDOR_ID) VENDOR_NAME,
+      MAX(0,s.TOTAL_RECEIVED-COALESCE(q.QC_QTY,0)) QC_PENDING,
+      MAX(0,s.M_RECEIVED-COALESCE(q.M_QC,0)) M_QC_PENDING,
+      MAX(0,s.L_RECEIVED-COALESCE(q.L_QC,0)) L_QC_PENDING,
+      MAX(0,s.XL_RECEIVED-COALESCE(q.XL_QC,0)) XL_QC_PENDING,
+      MAX(0,s."2XL_RECEIVED"-COALESCE(q."2XL_QC",0)) "2XL_QC_PENDING",
+      MAX(0,s."3XL_RECEIVED"-COALESCE(q."3XL_QC",0)) "3XL_QC_PENDING",
+      MAX(0,s.OTHER_RECEIVED-COALESCE(q.OTHER_QC,0)) OTHER_QC_PENDING
+    FROM stitching_jobs s
+    LEFT JOIN q ON q.CHALLAN_ID=s.CHALLAN_ID
+    LEFT JOIN styles st ON st.STYLE_ID=s.STYLE_ID
+    LEFT JOIN colors co ON co.COLOR_ID=s.COLOR_ID
+    LEFT JOIN vendors v ON v.VENDOR_ID=s.STITCHING_VENDOR_ID
+    WHERE MAX(0,s.TOTAL_RECEIVED-COALESCE(q.QC_QTY,0))>0.0001`);
+
+  const wr=await warehouseReady(db);
+  const styleMap=Object.fromEntries(styles.map(x=>[x.STYLE_ID,x.STYLE_NAME]));
+  const colorMap=Object.fromEntries(colors.map(x=>[x.COLOR_ID,x.COLOR_NAME]));
+  for(const x of wr){x.STYLE_NAME=styleMap[x.STYLE_ID]||x.STYLE_ID;x.COLOR_NAME=colorMap[x.COLOR_ID]||x.COLOR_ID}
+
+  return{
+    vendors,fabrics,colors,styles,sizes,defects,rawRolls,
+    rawFabricGroups:Object.values(group).sort((a,b)=>String(a.FABRIC_NAME).localeCompare(String(b.FABRIC_NAME))),
+    dyeBatches:allDyeBatches.filter(x=>n(x.BALANCE_MTR)>0.0001),
+    dyePendingReceipt:allDyeBatches.filter(x=>!truth(x.CLOSED)),
+    productionBatches,stitchingChallans,warehouseReady:wr
+  }
+}
 export async function getDataD1(env,{module,actorUserId}){
   const db=env.DB,m=String(module||'dashboard'),perm={raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc',reports:'reports'}[m]||null,a=await actor(db,actorUserId,perm,false);
   if(m==='dashboard')return{user:a,kpis:await kpisD1(db)};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db)};if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
