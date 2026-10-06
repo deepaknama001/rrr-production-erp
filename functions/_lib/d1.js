@@ -359,9 +359,9 @@ async function lookupData(db){
     productionBatches,stitchingChallans,warehouseReady:wr
   }
 }
-export async function getDataD1(env,{module,actorUserId}){
+export async function getDataD1(env,{module,actorUserId,id=''}){
   const db=env.DB,m=String(module||'dashboard'),perm={raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc',reports:'reports'}[m]||null,a=await actor(db,actorUserId,perm,false);
-  if(m==='dashboard')return{user:a,kpis:await kpisD1(db)};if(m==='dye_detail'){const batch=arguments[1]?.id||'';return{detail:await getDyeBatchDetail(db,batch)}};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db)};if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
+  if(m==='dashboard')return{user:a,kpis:await kpisD1(db)};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db)};if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
 }
 
 async function saveMaster(db,r,a){
