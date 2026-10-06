@@ -1,7 +1,7 @@
 let READ_MEMO={};let DB_MEMO=null;let SHEET_MEMO={};let BAL_MEMO={};
 const ERP={TZ:'Asia/Kolkata',DB_ID:'1iTKvM-KaGd3HuoknpyYz9IYpFRw1dtFlmv2f8sZo-HA',S:{USERS:'USERS',VENDORS:'VENDORS',FABRICS:'FABRICS',COLORS:'COLORS',STYLES:'STYLES',SIZES:'SIZES',DEFECTS:'DEFECT_REASONS',RAW:'RAW_INWARD',DYE:'DYE_JOBS',PROD:'PRODUCTION_BATCHES',STITCH:'STITCHING_JOBS',QC:'QC_EVENTS',DYE_RECEIPTS:'DYE_RECEIPTS',HANDOVER:'WAREHOUSE_HANDOVER',AUDIT:'AUDIT_LOG',SETTINGS:'SETTINGS'}};
 function doGet(){return out_({ok:true,name:'RRR Production ERP API',time:new Date().toISOString()})}
-function doPost(e){READ_MEMO={};DB_MEMO=null;SHEET_MEMO={};BAL_MEMO={};try{const b=JSON.parse((e&&e.postData&&e.postData.contents)||'{}'),p=PropertiesService.getScriptProperties(),secret=p.getProperty('API_SECRET');if(!secret||!safe_(String(b.apiSecret||''),secret))return out_({ok:false,status:401,error:'Unauthorized API request.'});const x=b.payload||{};let r;switch(String(b.action||'')){case'health':r={sheet:true,time:new Date().toISOString()};break;case'login':r=login_(x);break;case'get_data':r=getData_(x);break;case'save_record':r=idempotent_(x.requestId,()=>saveRecord_(x));break;case'list_users':r=listUsers_(x);break;case'save_user':r=idempotent_(x.requestId,()=>saveUser_(x));break;default:throw err_('Unknown action.',404)}return out_({ok:true,...r})}catch(e2){console.error(e2);return out_({ok:false,status:e2.status||400,error:e2.message||'Unexpected error.'})}}
+function doPost(e){READ_MEMO={};DB_MEMO=null;SHEET_MEMO={};BAL_MEMO={};try{const b=JSON.parse((e&&e.postData&&e.postData.contents)||'{}'),p=PropertiesService.getScriptProperties(),secret=p.getProperty('API_SECRET');if(!secret||!safe_(String(b.apiSecret||''),secret))return out_({ok:false,status:401,error:'Unauthorized API request.'});const x=b.payload||{};let r;switch(String(b.action||'')){case'health':r={sheet:true,time:new Date().toISOString()};break;case'login':r=login_(x);break;case'get_data':r=getData_(x);break;case'save_record':r=idempotent_(x.requestId,()=>saveRecord_(x));break;case'list_users':r=listUsers_(x);break;case'save_user':r=idempotent_(x.requestId,()=>saveUser_(x));break;case'export_d1_snapshot':r=exportD1Snapshot_(x);break;default:throw err_('Unknown action.',404)}return out_({ok:true,...r})}catch(e2){console.error(e2);return out_({ok:false,status:e2.status||400,error:e2.message||'Unexpected error.'})}}
 function idempotent_(requestId,fn){
   const id=String(requestId||'').trim();
   if(!id)return fn();
@@ -17,6 +17,23 @@ function db_(){if(DB_MEMO)return DB_MEMO;DB_MEMO=SpreadsheetApp.openById(Propert
 function sh_(n){if(SHEET_MEMO[n])return SHEET_MEMO[n];const s=db_().getSheetByName(n);if(!s)throw err_('Missing sheet: '+n,500);return SHEET_MEMO[n]=s}
 function rows_(n){if(READ_MEMO[n])return READ_MEMO[n];const v=sh_(n).getDataRange().getValues();if(!v.length)return READ_MEMO[n]=[];const h=v[0].map(String);return READ_MEMO[n]=v.slice(1).filter(r=>r.some(x=>x!==''&&x!==null)).map((r,i)=>{const o={__row:i+2};h.forEach((k,j)=>o[k]=r[j]);return o})}
 function findUser_(id){const u=rows_(ERP.S.USERS).find(x=>uid_(x.USER_ID)===id);return u?{row:u.__row,user:u}:null}
+
+function exportD1Snapshot_(p){
+  actor_(p.actorUserId,null,true);
+  const names=[ERP.S.USERS,ERP.S.VENDORS,ERP.S.FABRICS,ERP.S.COLORS,ERP.S.STYLES,ERP.S.SIZES,ERP.S.DEFECTS,ERP.S.RAW,ERP.S.DYE,ERP.S.DYE_RECEIPTS,ERP.S.PROD,ERP.S.STITCH,ERP.S.QC,ERP.S.HANDOVER,ERP.S.AUDIT,ERP.S.SETTINGS];
+  const tables={};
+  names.forEach(n=>{
+    const sh=sh_(n),v=sh.getDataRange().getValues();
+    tables[n]={headers:(v[0]||[]).map(String),rows:v.slice(1).filter(r=>r.some(x=>x!==''&&x!==null)).map(r=>r.map(x=>x instanceof Date?x.toISOString():x))};
+  });
+  return{
+    exportedAt:new Date().toISOString(),
+    spreadsheetId:db_().getId(),
+    pinSalt:PropertiesService.getScriptProperties().getProperty('PIN_SALT')||'',
+    tables
+  };
+}
+
 function publicUser_(u){return{userId:String(u.USER_ID||''),name:String(u.NAME||''),role:String(u.ROLE||'EMPLOYEE'),admin:truth_(u.ADMIN),active:truth_(u.ACTIVE),permissions:{raw:truth_(u.PERM_RAW),dye:truth_(u.PERM_DYE),production:truth_(u.PERM_PRODUCTION),stitching:truth_(u.PERM_STITCHING),qc:truth_(u.PERM_QC),reports:truth_(u.PERM_REPORTS)}}}
 function actor_(id,perm,admin){const f=findUser_(uid_(id));if(!f||!truth_(f.user.ACTIVE))throw err_('User not active.',401);const u=publicUser_(f.user);if(admin&&!u.admin)throw err_('Admin permission required.',403);if(perm&&!u.admin&&!u.permissions[perm])throw err_('Permission denied.',403);return u}
 function login_(p){const id=uid_(p.userId),pin=String(p.pin||'');if(!id||!pin)throw err_('Employee ID and PIN required.',400);const f=findUser_(id);if(!f||!truth_(f.user.ACTIVE))throw err_('Invalid Employee ID or PIN.',401);const now=new Date();if(f.user.LOCKED_UNTIL&&new Date(f.user.LOCKED_UNTIL).getTime()>now.getTime())throw err_('Too many failed attempts. Try again later.',429);if(!safe_(hashPin_(id,pin),String(f.user.PIN_HASH||''))){let a=Number(f.user.FAILED_ATTEMPTS||0)+1,l='';if(a>=5){l=new Date(now.getTime()+10*60*1000);a=0}sh_(ERP.S.USERS).getRange(f.row,13,1,2).setValues([[a,l]]);throw err_(l?'Login locked for 10 minutes.':'Invalid Employee ID or PIN.',l?429:401)}sh_(ERP.S.USERS).getRange(f.row,13,1,3).setValues([[0,'',now]]);return{user:publicUser_(f.user),kpis:kpis_()}}
