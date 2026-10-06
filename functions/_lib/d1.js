@@ -72,7 +72,7 @@ export async function migrateSnapshotToD1(env,snapshot){
 
 export async function reconcileD1(env){
   if(!hasD1(env))throw err('D1 binding DB is missing.',500);
-  const db=env.DB,meta=(await d1Status(env)).meta||{},source=JSON.parse(meta.source_counts||'{}'),counts={};
+  const db=env.DB;await db.exec(D1_SCHEMA);const meta=(await d1Status(env)).meta||{},source=JSON.parse(meta.source_counts||'{}'),counts={};
   for(const [sheet,table] of Object.entries(TABLE_MAP)){const r=await row(db,`SELECT COUNT(*) c FROM ${table}`);counts[sheet]=n(r?.c)}
   const checks={};
   for(const k of Object.keys(TABLE_MAP))checks[k]={source:n(source[k]),d1:n(counts[k]),match:n(source[k])===n(counts[k])};
