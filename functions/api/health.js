@@ -1,2 +1,2 @@
-import {json,errorResponse} from '../_lib/common.js';import {callGas} from '../_lib/gas.js';
-export async function onRequestGet(context){try{const r=await callGas(context.env,'health',{});return json(r)}catch(e){return errorResponse(e)}}
+import {json,errorResponse} from '../_lib/common.js';import {callGas} from '../_lib/gas.js';import {d1Ready,d1Status} from '../_lib/d1.js';
+export async function onRequestGet(context){try{const status=await d1Status(context.env);if(await d1Ready(context.env))return json({ok:true,backend:'D1',d1:status});const r=await callGas(context.env,'health',{});return json({...r,backend:'GOOGLE_SHEETS',d1:status})}catch(e){return errorResponse(e)}}
