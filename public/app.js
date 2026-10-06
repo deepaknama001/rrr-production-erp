@@ -54,77 +54,95 @@ function smartEmpty(msg){return `<div class="smart-empty"><b>Nothing available</
 async function openDyeIssue(){
   const requestId=newRequestId();let l;
   try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
-  const dyeVendors=(l.vendors||[]).filter(v=>isTrue(v.DYE_VENDOR)&&isTrue(v.ACTIVE));
-  const rolls=(l.rawRolls||[]).filter(r=>Number(r.BALANCE_MTR)>0);
+  const vendors=(l.vendors||[]).filter(v=>isTrue(v.DYE_VENDOR)&&isTrue(v.ACTIVE));
+  const fabrics=l.rawFabricGroups||[];
   const colors=(l.colors||[]).filter(c=>isTrue(c.ACTIVE));
-  if(!dyeVendors.length)return toast('Create at least one active Dye Vendor in Masters → Vendors.','bad',4200);
+  if(!vendors.length)return toast('Create at least one active Dye Vendor in Masters → Vendors.','bad',4200);
   if(!colors.length)return toast('Create at least one active Color in Masters → Colors.','bad',4200);
-  if(!rolls.length)return toast('No raw fabric roll has available balance for dyeing.','bad',4200);
-  const rollOptions=arr=>arr.map(r=>`<option value="${esc(r.ROLL_ID)}">${esc(r.FABRIC_NAME||r.FABRIC)} · Vendor Roll ${esc(r.VENDOR_ROLL_NO||'-')} · ${moneyless(r.BALANCE_MTR)} m available</option>`).join('');
+  if(!fabrics.length)return toast('No raw fabric stock is available for dye planning.','bad',4200);
+
   $('#modalBody').innerHTML=`
-    <div class="panel-head"><div><h3>New Dye Issue</h3><small>Create one dye batch from one fabric type. Multiple source rolls are allowed.</small></div><button class="btn ghost" id="closeModal">Close</button></div>
-    <form id="dyeBulkForm">
+    <div class="panel-head"><div><h3>New Dye Plan</h3><small>Plan one fabric into multiple colors. Raw rolls are allocated automatically in the backend.</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="dyePlanForm">
       <div class="form-grid">
         <div class="field"><label>Issue Date</label><input name="ISSUE_DATE" type="date" required value="${todayLocal()}"></div>
-        <div class="field"><label>Dye Vendor</label><select name="DYE_VENDOR_ID" required><option value="">Select dye vendor</option>${vendorOptions(dyeVendors,'DYE_VENDOR')}</select></div>
-        <div class="field"><label>Color</label><select name="COLOR_ID" required><option value="">Select color</option>${colorOptions(colors)}</select></div>
-        <div class="field"><label>Batch Fabric</label><input id="dyeBatchFabric" value="Select first roll" readonly></div>
-        <div class="field wide"><label>Notes</label><input name="NOTES"></div>
+        <div class="field"><label>Fabric</label><select name="FABRIC_ID" id="dyeFabric" required><option value="">Select fabric</option>${fabrics.map(f=>`<option value="${esc(f.FABRIC_ID)}">${esc(f.FABRIC_NAME)} · ${moneyless(f.AVAILABLE_MTR)} m · ${f.ROLL_COUNT} roll(s)</option>`).join('')}</select></div>
+        <div class="field"><label>Default Dye Vendor</label><select id="defaultDyeVendor"><option value="">Select default vendor</option>${vendorOptions(vendors,'DYE_VENDOR')}</select></div>
+        <div class="field"><label>Available Fabric</label><input id="dyeAvailable" readonly value="—"></div>
+        <div class="field wide"><label>Plan Notes</label><input name="NOTES"></div>
       </div>
-      <div class="roll-head"><div><b>Source Rolls</b><small>Only rolls with remaining balance are shown. Full-issued rolls disappear automatically.</small></div><button type="button" class="btn teal" id="addDyeRoll">+ Add Roll</button></div>
-      <div class="roll-table"><table class="data"><thead><tr><th>#</th><th>Raw Roll</th><th>Available</th><th>Issue Meter</th><th></th></tr></thead><tbody id="dyeRollRows"></tbody></table></div>
-      <div class="roll-summary"><span>Selected Rolls <b id="dyeRollCount">0</b></span><span>Total Issue <b id="dyeTotal">0.00</b> m</span></div>
-      <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Save Dye Issue</button></div>
+
+      <div class="roll-head"><div><b>Color Plan</b><small>Add all colors here. Example: 10 colors × 200 m. Same color cannot repeat in one plan.</small></div><button type="button" class="btn teal" id="addColorRow">+ Add Color</button></div>
+      <div class="roll-table"><table class="data"><thead><tr><th>#</th><th>Color</th><th>Dye Vendor</th><th>Meter</th><th></th></tr></thead><tbody id="colorPlanRows"></tbody></table></div>
+
+      <div class="dye-plan-summary">
+        <div><span>Available</span><b id="sumAvailable">0.00 m</b></div>
+        <div><span>Planned</span><b id="sumPlanned">0.00 m</b></div>
+        <div><span>Remaining</span><b id="sumRemaining">0.00 m</b></div>
+        <div><span>Colors</span><b id="sumColors">0</b></div>
+      </div>
+
+      <div class="smart-note"><b>Automatic roll allocation:</b> system will consume available rolls in sequence and can split one roll across multiple colors. The backend keeps exact roll-to-color traceability.</div>
+      <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Create Dye Plan</button></div>
     </form>`;
   $('#modal').classList.remove('hidden');
-  let batchFabric='';
-  function selectedRollIds(exceptRow=null){
-    return [...$('#dyeRollRows').children].filter(row=>row!==exceptRow).map(row=>row.querySelector('.dye-roll')?.value||'').filter(Boolean);
+
+  const fabricSel=$('#dyeFabric'),defaultVendor=$('#defaultDyeVendor');
+  function selectedColors(except=null){return [...$('#colorPlanRows').children].filter(r=>r!==except).map(r=>r.querySelector('.plan-color')?.value||'').filter(Boolean)}
+  function currentAvailable(){const f=fabrics.find(x=>String(x.FABRIC_ID)===String(fabricSel.value));return Number(f?.AVAILABLE_MTR||0)}
+  function refreshSummary(){
+    const rows=[...$('#colorPlanRows').children],avail=currentAvailable(),planned=rows.reduce((s,r)=>s+(Number(r.querySelector('.plan-meter')?.value)||0),0);
+    $('#dyeAvailable').value=fabricSel.value?moneyless(avail)+' m':'—';
+    $('#sumAvailable').textContent=moneyless(avail)+' m';
+    $('#sumPlanned').textContent=moneyless(planned)+' m';
+    $('#sumRemaining').textContent=moneyless(Math.max(0,avail-planned))+' m';
+    $('#sumColors').textContent=rows.filter(r=>r.querySelector('.plan-color')?.value).length;
+    $('#sumRemaining').classList.toggle('over',planned>avail+0.0001);
   }
-  function currentFabric(){
-    const chosen=[...$('#dyeRollRows').children].map(row=>rolls.find(x=>String(x.ROLL_ID)===String(row.querySelector('.dye-roll')?.value))).find(Boolean);
-    return chosen?String(chosen.FABRIC_ID||''):'';
-  }
-  function refreshDyeRollOptions(){
-    batchFabric=currentFabric();
-    const fabricRow=rolls.find(x=>String(x.FABRIC_ID)===String(batchFabric));
-    $('#dyeBatchFabric').value=batchFabric?(fabricRow?.FABRIC_NAME||fabricRow?.FABRIC||batchFabric):'Select first roll';
-    [...$('#dyeRollRows').children].forEach(row=>{
-      const sel=row.querySelector('.dye-roll'),current=sel.value,used=new Set(selectedRollIds(row));
-      const allowed=rolls.filter(r=>(!batchFabric||String(r.FABRIC_ID)===String(batchFabric))&&(!used.has(String(r.ROLL_ID))||String(r.ROLL_ID)===String(current)));
-      sel.innerHTML='<option value="">Select available roll</option>'+rollOptions(allowed);
-      if(current&&allowed.some(r=>String(r.ROLL_ID)===String(current)))sel.value=current;
+  function refreshColorOptions(){
+    [...$('#colorPlanRows').children].forEach(row=>{
+      const sel=row.querySelector('.plan-color'),current=sel.value,used=new Set(selectedColors(row));
+      const allowed=colors.filter(c=>!used.has(String(c.COLOR_ID))||String(c.COLOR_ID)===String(current));
+      sel.innerHTML='<option value="">Select color</option>'+colorOptions(allowed);
+      if(current&&allowed.some(c=>String(c.COLOR_ID)===String(current)))sel.value=current;
     });
   }
-  function updateSummary(){
-    const trs=[...$('#dyeRollRows').children],selected=trs.filter(tr=>tr.querySelector('.dye-roll')?.value).length;
-    $('#dyeRollCount').textContent=selected;
-    $('#dyeTotal').textContent=trs.reduce((s,tr)=>s+(Number(tr.querySelector('.dye-qty').value)||0),0).toFixed(2);
+  function addColorRow(prefillVendor=true){
+    const tr=document.createElement('tr'),n=$('#colorPlanRows').children.length+1;
+    tr.innerHTML=`<td class="plan-no">${n}</td>
+      <td><select class="plan-color" required><option value="">Select color</option></select></td>
+      <td><select class="plan-vendor" required><option value="">Select dye vendor</option>${vendorOptions(vendors,'DYE_VENDOR')}</select></td>
+      <td><input class="plan-meter" type="number" min="0.01" step="0.01" placeholder="200" required></td>
+      <td><button type="button" class="icon-remove">×</button></td>`;
+    $('#colorPlanRows').appendChild(tr);refreshColorOptions();
+    if(prefillVendor&&defaultVendor.value)tr.querySelector('.plan-vendor').value=defaultVendor.value;
+    tr.querySelector('.plan-color').onchange=()=>{refreshColorOptions();refreshSummary()};
+    tr.querySelector('.plan-meter').oninput=()=>{const avail=currentAvailable(),planned=[...$('#colorPlanRows .plan-meter')].reduce((s,x)=>s+(Number(x.value)||0),0);if(avail&&planned>avail+0.0001)toast('Planned meter exceeds available fabric. Reduce one or more color quantities.','bad',2600);refreshSummary()};
+    tr.querySelector('.icon-remove').onclick=()=>{tr.remove();[...$('#colorPlanRows').children].forEach((x,i)=>x.querySelector('.plan-no').textContent=i+1);refreshColorOptions();refreshSummary()};
+    refreshSummary();
   }
-  function addRow(){
-    const tr=document.createElement('tr'),n=$('#dyeRollRows').children.length+1;
-    tr.innerHTML=`<td class="dye-no">${n}</td><td><select class="dye-roll" required><option value="">Select available roll</option></select></td><td class="dye-avail">—</td><td><input class="dye-qty" type="number" min="0.01" step="0.01" required placeholder="0.00"></td><td><button type="button" class="icon-remove">×</button></td>`;
-    $('#dyeRollRows').appendChild(tr);refreshDyeRollOptions();
-    const sel=tr.querySelector('.dye-roll'),qty=tr.querySelector('.dye-qty');
-    sel.onchange=()=>{
-      const rr=rolls.find(x=>String(x.ROLL_ID)===String(sel.value));
-      if(!rr){tr.querySelector('.dye-avail').textContent='—';qty.value='';qty.removeAttribute('max');refreshDyeRollOptions();updateSummary();return}
-      const used=selectedRollIds(tr).includes(String(sel.value));
-      if(used){toast('This roll is already selected in this batch.','bad',3000);sel.value='';tr.querySelector('.dye-avail').textContent='—';qty.value='';refreshDyeRollOptions();updateSummary();return}
-      const existingFabric=currentFabric();
-      if(existingFabric&&String(rr.FABRIC_ID)!==String(existingFabric)){toast('Different fabric type cannot be mixed in the same dye batch. Create a separate dye batch.','bad',4200);sel.value='';tr.querySelector('.dye-avail').textContent='—';qty.value='';refreshDyeRollOptions();updateSummary();return}
-      tr.querySelector('.dye-avail').textContent=moneyless(rr.BALANCE_MTR)+' m';qty.max=rr.BALANCE_MTR;qty.value=moneyless(rr.BALANCE_MTR);refreshDyeRollOptions();updateSummary();
-    };
-    qty.oninput=()=>{const max=Number(qty.max||0),v=Number(qty.value||0);if(max&&v>max){qty.value=max;toast('Issue quantity cannot exceed available roll balance.','bad',2600)}updateSummary()};
-    tr.querySelector('.icon-remove').onclick=()=>{tr.remove();[...$('#dyeRollRows').children].forEach((x,i)=>x.querySelector('.dye-no').textContent=i+1);refreshDyeRollOptions();updateSummary()};
-    updateSummary();
-  }
-  $('#addDyeRoll').onclick=addRow;$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;addRow();
-  $('#dyeBulkForm').onsubmit=async e=>{
-    e.preventDefault();const base=Object.fromEntries(new FormData(e.target).entries());
-    const items=[...$('#dyeRollRows').children].map(tr=>({ROLL_ID:tr.querySelector('.dye-roll').value,ISSUE_MTR:tr.querySelector('.dye-qty').value}));
-    if(!items.length)return toast('Add at least one roll.','bad');
-    try{const d=await api('/api/data',{method:'POST',activity:'Creating dye batch…',success:'Dye issue saved',body:JSON.stringify({module:'dye_bulk',record:{...base,items},requestId})});dropCaches();closeModal();toast(`Dye Batch ${d.record.DYE_BATCH_ID} saved · ${d.record.ROLL_COUNT} roll(s) · ${moneyless(d.record.TOTAL_MTR)} m`,'ok',4200);go('dye',true)}catch(err){toast(err.message,'bad',4200)}
+
+  fabricSel.onchange=refreshSummary;
+  defaultVendor.onchange=()=>{if(!defaultVendor.value)return;[...$('#colorPlanRows .plan-vendor')].forEach(s=>{if(!s.value)s.value=defaultVendor.value})};
+  $('#addColorRow').onclick=()=>addColorRow(true);
+  $('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+
+  for(let i=0;i<10;i++)addColorRow(false);
+
+  $('#dyePlanForm').onsubmit=async e=>{
+    e.preventDefault();
+    const base=Object.fromEntries(new FormData(e.target).entries()),rows=[...$('#colorPlanRows').children];
+    const items=rows.map(r=>({COLOR_ID:r.querySelector('.plan-color').value,DYE_VENDOR_ID:r.querySelector('.plan-vendor').value||defaultVendor.value,ISSUE_MTR:r.querySelector('.plan-meter').value})).filter(x=>x.COLOR_ID||x.ISSUE_MTR);
+    if(!base.FABRIC_ID)return toast('Select fabric first.','bad',3000);
+    if(!items.length)return toast('Add at least one color quantity.','bad',3000);
+    const avail=currentAvailable(),planned=items.reduce((s,x)=>s+(Number(x.ISSUE_MTR)||0),0);
+    if(planned>avail+0.0001)return toast('Total planned meter exceeds available fabric.','bad',3500);
+    const missing=items.find(x=>!x.COLOR_ID||!x.DYE_VENDOR_ID||!(Number(x.ISSUE_MTR)>0));
+    if(missing)return toast('Every used row needs Color, Dye Vendor and Meter.','bad',3500);
+    try{
+      const d=await api('/api/data',{method:'POST',activity:'Creating multi-color dye plan…',success:'Dye plan created',body:JSON.stringify({module:'dye_plan',record:{...base,items},requestId})});
+      dropCaches();closeModal();toast(`Dye Plan ${d.record.DYE_PLAN_ID} created · ${d.record.BATCH_COUNT} colors · ${moneyless(d.record.TOTAL_MTR)} m`,'ok',5000);go('dye',true);
+    }catch(err){toast(err.message,'bad',4500)}
   };
 }
 
