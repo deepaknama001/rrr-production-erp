@@ -1,4 +1,4 @@
-const APP_BUILD='0.10';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.11';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0};
@@ -25,7 +25,7 @@ async function go(m,force=false){if(!allowed(m))return;setStatus('↻ Opening '+
 async function renderDashboard(force=false){const s=$('#stage');s.innerHTML=`<section class="hero"><div><h2>Production Control</h2><p>Raw fabric to warehouse handover — one traceable workflow.</p></div><div>${new Date().toLocaleDateString()}</div></section><section class="kpis">${['Raw Available','At Dye','Dyed Available','Cut Pending','At Stitching','Ready Warehouse'].map(x=>`<div class="kpi"><span>${x}</span><strong>—</strong></div>`).join('')}</section><section class="grid2"><div class="panel"><div class="panel-head"><h3>Quick Actions</h3></div><div class="quick">${[['raw','New Fabric Inward'],['dye','Issue to Dye'],['production','Plan Production'],['stitching','Create Stitch Challan'],['qc','QC Entry'],['handover','Warehouse Handover']].filter(x=>allowed(x[0])).map(x=>`<button onclick="window.ERP.quick('${x[0]}')"><b>${x[1]}</b><small>Open module</small></button>`).join('')}</div></div><div class="panel"><div class="panel-head"><h3>System</h3></div><p>Cloudflare D1 primary database</p><p>Cloudflare secure frontend & API</p><p>User-wise permissions & audit trail</p></div></section>`;try{const d=await getCachedModule('dashboard',force);state.user=d.user||d.actor||state.user;const v=d.kpis||{};[v.rawAvailable,v.atDye,v.dyedAvailable,v.cutPending,v.atStitching,v.readyWarehouse].forEach((x,i)=>document.querySelectorAll('.kpi strong')[i].textContent=x??0)}catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}}
 const configs={raw:{title:'Raw Fabric',columns:['ROLL_ID','INWARD_DATE','SUPPLIER','VENDOR_ROLL_NO','FABRIC','INWARD_MTR','STATUS'],action:'New Inward',fields:['INWARD_DATE','SUPPLIER_ID','VENDOR_ROLL_NO','FABRIC_ID','INWARD_MTR','INVOICE_CHALLAN','LOT_REF','NOTES']},dye:{title:'Dyeing',columns:['DYE_PLAN_ID','DYE_BATCH_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR','ROLL_COUNT','ISSUE_MTR','RECEIVED_MTR','VARIANCE_MTR','USABLE_MTR','PLAN_VARIANCE_MTR','STATUS','__ACTION'],action:'New Dye Plan',fields:['ISSUE_DATE','DYE_VENDOR_ID','ROLL_ID','COLOR_ID','ISSUE_MTR','NOTES']},production:{title:'Production / Cutting',columns:['PRODUCTION_BATCH_ID','PLAN_DATE','STYLE','DYE_BATCH_ID','PLANNED_QTY','ALLOCATED_MTR','TOTAL_CUT','STATUS'],action:'New Production Batch',fields:['PLAN_DATE','DYE_BATCH_ID','STYLE_ID','PLANNED_QTY','ALLOCATED_MTR','NOTES']},stitching:{title:'Stitching',columns:['CHALLAN_ID','ISSUE_DATE','STITCHING_VENDOR','PRODUCTION_BATCH_ID','TOTAL_ISSUED','TOTAL_RECEIVED','PENDING_QTY','STATUS'],action:'New Challan',fields:['ISSUE_DATE','STITCHING_VENDOR_ID','PRODUCTION_BATCH_ID','M_ISSUED','L_ISSUED','XL_ISSUED','2XL_ISSUED','3XL_ISSUED','OTHER_ISSUED','NOTES']},qc:{title:'QC & Rework',columns:['QC_ID','QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','STATUS'],action:'New QC Entry',fields:['QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','DEFECT_REASON','NOTES']},handover:{title:'Warehouse Handover',columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','PENDING_QTY','STATUS'],action:'New Handover',fields:['HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE_ID','COLOR_ID','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','WAREHOUSE_REF','NOTES']}};
 async function renderModule(m,force=false){const c=configs[m],s=$('#stage');s.innerHTML=`<section class="panel"><div class="panel-head"><h3>${c.title}</h3><button class="btn teal" id="newBtn">+ ${c.action}</button></div><div class="toolbar"><input class="search" id="searchBox" placeholder="Search..."></div><div class="table-wrap"><table class="data"><thead><tr>${c.columns.map(x=>'<th>'+x.replaceAll('_',' ')+'</th>').join('')}</tr></thead><tbody id="rows"><tr><td colspan="${c.columns.length}">Loading…</td></tr></tbody></table></div></section>`;$('#newBtn').onclick=()=>openActionForm(m);try{const d=await getCachedModule(m,force);drawRows(c,d.items||[]);$('#searchBox').oninput=e=>drawRows(c,(d.items||[]).filter(r=>JSON.stringify(r).toLowerCase().includes(e.target.value.toLowerCase())))}catch(e){drawRows(c,[]);toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}}
-function drawRows(c,items){$('#rows').innerHTML=items.length?items.map((r,i)=>'<tr>'+c.columns.map(k=>{if(k==='STATUS')return `<td>${badge(r[k])}</td>`;if(k==='__ACTION')return `<td>${c===configs.dye&&String(r.STATUS)!=='RECEIVED'?'<button class="btn ghost dye-receive-btn" data-i="'+i+'">Receive</button>':'—'}</td>`;return `<td>${esc(r[k])}</td>`}).join('')+'</tr>').join(''):`<tr><td colspan="${c.columns.length}">No records yet.</td></tr>`;if(c===configs.dye)document.querySelectorAll('.dye-receive-btn').forEach(b=>b.onclick=()=>openDyeReceive(items[Number(b.dataset.i)]))}
+function drawRows(c,items){$('#rows').innerHTML=items.length?items.map((r,i)=>'<tr>'+c.columns.map(k=>{if(k==='STATUS')return `<td>${badge(r[k])}</td>`;if(k==='__ACTION')return `<td>${c===configs.dye?'<div class="row-actions">'+(!/^RECEIVED/.test(String(r.STATUS))?'<button class="btn ghost dye-receive-btn" data-i="'+i+'">Receive</button>':'')+'<button class="btn ghost dye-manage-btn" data-i="'+i+'">Manage</button></div>':'—'}</td>`;return `<td>${esc(r[k])}</td>`}).join('')+'</tr>').join(''):`<tr><td colspan="${c.columns.length}">No records yet.</td></tr>`;if(c===configs.dye){document.querySelectorAll('.dye-receive-btn').forEach(b=>b.onclick=()=>openDyeReceive(items[Number(b.dataset.i)]));document.querySelectorAll('.dye-manage-btn').forEach(b=>b.onclick=()=>openDyeManage(items[Number(b.dataset.i)]))}
 function badge(v){const s=String(v||''),cl=/reject|defect|negative/i.test(s)?'danger':/pending|partial|rework|vendor/i.test(s)?'warn':'ok';return `<span class="badge ${cl}">${esc(s)}</span>`}
 async function openActionForm(m){
   if(m==='raw')return openRawInward();
@@ -154,6 +154,77 @@ async function openDyeIssue(){
       dropCaches();closeModal();toast(`Dye Plan ${d.record.DYE_PLAN_ID} created · ${d.record.BATCH_COUNT} colors · ${moneyless(d.record.TOTAL_MTR)} m`,'ok',5000);go('dye',true);
     }catch(err){toast(err.message,'bad',4500)}
   };
+}
+
+
+async function openDyeManage(batchRow){
+  const batchId=String(batchRow.DYE_BATCH_ID||'');let detail,l;
+  try{
+    const [d,look]=await Promise.all([
+      api('/api/data?module=dye_detail&id='+encodeURIComponent(batchId),{activity:'Loading dye batch…'}),
+      getLookups(false)
+    ]);
+    detail=d.detail;l=look;
+  }catch(e){return toast(e.message,'bad',4200)}
+  const downstream=Number(detail.downstreamCount||0),receipts=detail.receipts||[],lines=detail.lines||[];
+  const canEditIssue=downstream===0&&receipts.length===0,canCorrectReceipt=downstream===0&&receipts.length>0,canCancel=downstream===0;
+  const vendors=(l.vendors||[]).filter(v=>isTrue(v.ACTIVE)&&isTrue(v.DYE_VENDOR));
+  const colors=(l.colors||[]).filter(x=>isTrue(x.ACTIVE));
+  const defects=(l.defects||[]).filter(d=>!d.STAGE||/dye/i.test(String(d.STAGE)));
+  const receiptHtml=receipts.length?receipts.map((r,i)=>`
+    <div class="correction-card">
+      <div class="correction-head"><b>Receipt ${esc(r.RECEIPT_ID)}</b><span>${esc(r.STATUS||'')}</span></div>
+      <div class="form-grid">
+        <div class="field"><label>Receipt Date</label><input class="cr-date" type="date" value="${esc(String(r.RECEIPT_DATE||'').slice(0,10))}" ${canCorrectReceipt?'':'disabled'}></div>
+        <div class="field"><label>Received Meter</label><input class="cr-received" type="number" step="0.01" min="0.01" value="${esc(r.RECEIVED_MTR)}" ${canCorrectReceipt?'':'disabled'}></div>
+        <div class="field"><label>Defect/Hold Meter</label><input class="cr-defect" type="number" step="0.01" min="0" value="${esc(r.DEFECT_MTR)}" ${canCorrectReceipt?'':'disabled'}></div>
+        <div class="field"><label>Final Receipt</label><select class="cr-final" ${canCorrectReceipt?'':'disabled'}><option value="false" ${isTrue(r.FINAL_RECEIPT)?'':'selected'}>Partial</option><option value="true" ${isTrue(r.FINAL_RECEIPT)?'selected':''}>Final</option></select></div>
+        <div class="field"><label>Defect Reason</label><select class="cr-reason" ${canCorrectReceipt?'':'disabled'}><option value="">Select reason</option>${defects.map(d=>`<option value="${esc(d.DEFECT_NAME)}" ${String(d.DEFECT_NAME)===String(r.DEFECT_REASON||'')?'selected':''}>${esc(d.DEFECT_NAME)}</option>`).join('')}</select></div>
+        <div class="field wide"><label>Notes</label><input class="cr-notes" value="${esc(r.NOTES||'')}" ${canCorrectReceipt?'':'disabled'}></div>
+      </div>
+      ${canCorrectReceipt?`<div class="form-actions"><button type="button" class="btn primary receipt-correct-btn" data-i="${i}">Save Receipt Correction</button></div>`:''}
+    </div>`).join(''):'<div class="smart-note">No dye receipt has been entered for this batch yet.</div>';
+
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>Manage Dye Batch</h3><small>${esc(batchId)} · corrections are audit logged</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    ${downstream>0?'<div class="smart-note danger-note"><b>Locked:</b> this dye batch is already used in Production. Direct destructive changes are blocked.</div>':''}
+    <div class="correction-card">
+      <div class="correction-head"><b>Dye Issue</b><span>${canEditIssue?'Editable':'Locked'}</span></div>
+      <form id="dyeIssueEditForm">
+        <div class="form-grid">
+          <div class="field"><label>Issue Date</label><input name="ISSUE_DATE" type="date" value="${esc(String(detail.ISSUE_DATE||'').slice(0,10))}" ${canEditIssue?'':'disabled'}></div>
+          <div class="field"><label>Dye Vendor</label><select name="DYE_VENDOR_ID" ${canEditIssue?'':'disabled'}>${vendors.map(v=>`<option value="${esc(v.VENDOR_ID)}" ${String(v.VENDOR_ID)===String(detail.DYE_VENDOR_ID)?'selected':''}>${esc(v.VENDOR_NAME)}</option>`).join('')}</select></div>
+          <div class="field"><label>Color</label><select name="COLOR_ID" ${canEditIssue?'':'disabled'}>${colors.map(x=>`<option value="${esc(x.COLOR_ID)}" ${String(x.COLOR_ID)===String(detail.COLOR_ID)?'selected':''}>${esc(x.COLOR_NAME)}</option>`).join('')}</select></div>
+          <div class="field wide"><label>Notes</label><input name="NOTES" value="${esc(detail.NOTES||'')}" ${canEditIssue?'':'disabled'}></div>
+        </div>
+        <div class="roll-table"><table class="data"><thead><tr><th>Roll</th><th>Vendor Roll</th><th>Current Issue</th><th>Max Available</th></tr></thead><tbody>
+          ${lines.map((x,i)=>`<tr><td>${esc(x.ROLL_ID)}<input type="hidden" class="edit-roll-id" value="${esc(x.ROLL_ID)}"></td><td>${esc(x.VENDOR_ROLL_NO||'')}</td><td><input class="edit-roll-qty" type="number" min="0.01" step="0.01" value="${esc(x.ISSUE_MTR)}" ${canEditIssue?'':'disabled'}></td><td>${moneyless(x.MAX_AVAILABLE_MTR)} m</td></tr>`).join('')}
+        </tbody></table></div>
+        ${canEditIssue?'<div class="form-actions"><button class="btn primary">Save Issue Correction</button></div>':''}
+      </form>
+    </div>
+    <div class="panel-head" style="margin-top:14px"><h3>Dye Receipts</h3></div>
+    ${receiptHtml}
+    ${canCancel?`<div class="danger-zone"><div><b>Cancel this dye batch</b><small>Removes this batch and its dye receipts, restores raw-fabric availability, and writes an audit entry.</small></div><button class="btn danger" id="cancelDyeBatchBtn">Cancel Batch</button></div>`:''}
+  `;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;
+
+  if(canEditIssue){
+    $('#dyeIssueEditForm').onsubmit=async e=>{
+      e.preventDefault();const fd=new FormData(e.target),items=[...document.querySelectorAll('#dyeIssueEditForm tbody tr')].map(tr=>({ROLL_ID:tr.querySelector('.edit-roll-id').value,ISSUE_MTR:tr.querySelector('.edit-roll-qty').value}));
+      try{await api('/api/data',{method:'POST',activity:'Saving dye issue correction…',success:'Dye issue corrected',body:JSON.stringify({module:'dye_edit_batch',record:{DYE_BATCH_ID:batchId,ISSUE_DATE:fd.get('ISSUE_DATE'),DYE_VENDOR_ID:fd.get('DYE_VENDOR_ID'),COLOR_ID:fd.get('COLOR_ID'),NOTES:fd.get('NOTES'),items},requestId:newRequestId()})});dropCaches();closeModal();go('dye',true)}catch(err){toast(err.message,'bad',5000)}
+    };
+  }
+  document.querySelectorAll('.receipt-correct-btn').forEach(btn=>btn.onclick=async()=>{
+    const card=btn.closest('.correction-card'),r=receipts[Number(btn.dataset.i)];
+    const record={RECEIPT_ID:r.RECEIPT_ID,RECEIPT_DATE:card.querySelector('.cr-date').value,RECEIVED_MTR:card.querySelector('.cr-received').value,DEFECT_MTR:card.querySelector('.cr-defect').value,FINAL_RECEIPT:card.querySelector('.cr-final').value==='true',DEFECT_REASON:card.querySelector('.cr-reason').value,NOTES:card.querySelector('.cr-notes').value};
+    try{await api('/api/data',{method:'POST',activity:'Saving receipt correction…',success:'Dye receipt corrected',body:JSON.stringify({module:'dye_edit_receipt',record,requestId:newRequestId()})});dropCaches();closeModal();go('dye',true)}catch(err){toast(err.message,'bad',5000)}
+  });
+  $('#cancelDyeBatchBtn')?.addEventListener('click',async()=>{
+    if(!confirm('Cancel '+batchId+'? Its dye receipts will also be removed and raw-fabric availability restored.'))return;
+    const reason=prompt('Reason for cancellation:','Mistaken entry')||'Mistaken entry';
+    try{await api('/api/data',{method:'POST',activity:'Cancelling dye batch…',success:'Dye batch cancelled',body:JSON.stringify({module:'dye_cancel_batch',record:{DYE_BATCH_ID:batchId,REASON:reason},requestId:newRequestId()})});dropCaches();closeModal();go('dye',true)}catch(err){toast(err.message,'bad',5000)}
+  });
 }
 
 async function openDyeReceive(batchRow){
