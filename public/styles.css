@@ -42,3 +42,11 @@ button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justif
 .smart-note{margin-top:12px;border:1px solid #dfe6ee;background:#f8fbfd;border-radius:12px;padding:11px 13px;font-size:9px;color:#617084}
 .smart-note b{color:#263247}
 @media(max-width:760px){.dye-plan-summary{grid-template-columns:repeat(2,1fr)}}
+
+.d1-status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.d1-status-grid>div{border:1px solid var(--line);background:#f8fafc;border-radius:12px;padding:11px 12px;min-width:0}
+.d1-status-grid span{display:block;font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.d1-status-grid b{display:block;margin-top:5px;font-size:11px;color:#172033;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.d1-actions{justify-content:flex-start;margin:8px 0 14px}
+.smart-note code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:#eef2f6;border-radius:5px;padding:1px 5px}
+@media(max-width:900px){.d1-status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
