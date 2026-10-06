@@ -9,7 +9,7 @@ export async function onRequestGet(context){
     const status=await d1Status(context.env);
     if(!status.bound)return json({bound:false,ready:false});
     const rec=await reconcileD1(context.env);
-    return json(rec);
+    return json({bound:true,ready:!!rec.active,...rec});
   }catch(e){return errorResponse(e)}
 }
 export async function onRequestPost(context){
