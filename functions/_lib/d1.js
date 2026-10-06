@@ -361,7 +361,7 @@ async function lookupData(db){
 }
 export async function getDataD1(env,{module,actorUserId}){
   const db=env.DB,m=String(module||'dashboard'),perm={raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc',reports:'reports'}[m]||null,a=await actor(db,actorUserId,perm,false);
-  if(m==='dashboard')return{user:a,kpis:await kpisD1(db)};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db)};if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
+  if(m==='dashboard')return{user:a,kpis:await kpisD1(db)};if(m==='dye_detail'){const batch=arguments[1]?.id||'';return{detail:await getDyeBatchDetail(db,batch)}};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db)};if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
 }
 
 async function saveMaster(db,r,a){
@@ -419,6 +419,96 @@ async function saveDyeReceive(db,r,a){
   await db.prepare('INSERT INTO dye_receipts(RECEIPT_ID,DYE_BATCH_ID,RECEIPT_DATE,RECEIVED_MTR,DEFECT_MTR,USABLE_MTR,VARIANCE_MTR,FINAL_RECEIPT,STATUS,DEFECT_REASON,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(id,batch,dateOnly(r.RECEIPT_DATE),received,defect,usable,variance,final?1:0,status,String(r.DEFECT_REASON||''),String(r.NOTES||''),a.userId,t,a.userId,t).run();
   const after=await dyeBatchSummary(db,batch),plan=after?.DYE_PLAN_ID?await dyePlanSummary(db,after.DYE_PLAN_ID):null;await audit(db,a,'DYE_RECEIVE','DYE',batch,'',JSON.stringify({receiptId:id,received,defect,usable,finalReceipt:final,batchVariance:after?.VARIANCE_MTR||0,planVariance:plan?.VARIANCE_MTR||0}));return{RECEIPT_ID:id,DYE_BATCH_ID:batch,RECEIVED_MTR:received,DEFECT_MTR:defect,USABLE_MTR:usable,FINAL_RECEIPT:final,BATCH:after,PLAN:plan}
 }
+
+async function dyeDownstreamCount(db,batch){
+  const r=await row(db,'SELECT COUNT(*) c FROM production_batches WHERE DYE_BATCH_ID=?',batch);
+  return n(r?.c);
+}
+async function getDyeBatchDetail(db,batch){
+  const head=await row(db,`
+    SELECT j.DYE_BATCH_ID,j.DYE_PLAN_ID,MAX(j.ISSUE_DATE) ISSUE_DATE,MAX(j.DYE_VENDOR_ID) DYE_VENDOR_ID,
+           MAX(j.FABRIC_ID) FABRIC_ID,MAX(j.COLOR_ID) COLOR_ID,SUM(j.ISSUE_MTR) ISSUE_MTR,
+           MAX(j.NOTES) NOTES
+    FROM dye_jobs j WHERE j.DYE_BATCH_ID=? GROUP BY j.DYE_BATCH_ID,j.DYE_PLAN_ID`,batch);
+  if(!head)throw err('Dye batch not found.',404);
+  const lines=await rows(db,`
+    SELECT j.ROW_ID,j.ROLL_ID,j.VENDOR_ROLL_NO,j.ISSUE_MTR,
+           MAX(0,r.INWARD_MTR-COALESCE(x.other_issued,0)) MAX_AVAILABLE_MTR
+    FROM dye_jobs j
+    JOIN raw_inward r ON r.ROLL_ID=j.ROLL_ID
+    LEFT JOIN (
+      SELECT ROLL_ID,SUM(ISSUE_MTR) other_issued FROM dye_jobs WHERE DYE_BATCH_ID<>? GROUP BY ROLL_ID
+    ) x ON x.ROLL_ID=j.ROLL_ID
+    WHERE j.DYE_BATCH_ID=? ORDER BY j.ROW_ID`,batch,batch);
+  const receipts=await rows(db,'SELECT * FROM dye_receipts WHERE DYE_BATCH_ID=? ORDER BY CREATED_AT,RECEIPT_ID',batch);
+  return{...head,lines,receipts,downstreamCount:await dyeDownstreamCount(db,batch)}
+}
+async function editDyeBatch(db,r,a){
+  const batch=String(r.DYE_BATCH_ID||'');if(!batch)throw err('Dye batch is required.',400);
+  if(await dyeDownstreamCount(db,batch)>0)throw err('This dye batch is already used in Production. Direct issue edit is blocked. Use a correction/reversal workflow.',409);
+  const old=await getDyeBatchDetail(db,batch);
+  if(old.receipts.length)throw err('This batch already has dye receipts. Correct/cancel the receipt first, then edit the issue.',409);
+
+  const vendor=String(r.DYE_VENDOR_ID||old.DYE_VENDOR_ID),color=String(r.COLOR_ID||old.COLOR_ID),
+        issueDate=dateOnly(r.ISSUE_DATE||old.ISSUE_DATE),notes=String(r.NOTES??old.NOTES??''),
+        items=Array.isArray(r.items)?r.items:[];
+  if(!await row(db,'SELECT 1 ok FROM vendors WHERE VENDOR_ID=? AND ACTIVE=1 AND DYE_VENDOR=1',vendor))throw err('Select a valid active Dye Vendor.',400);
+  if(!await row(db,'SELECT 1 ok FROM colors WHERE COLOR_ID=? AND ACTIVE=1',color))throw err('Select a valid active color.',400);
+  if(!items.length)throw err('At least one source roll is required.',400);
+
+  const seen=new Set(),resolved=[];
+  for(let i=0;i<items.length;i++){
+    const roll=String(items[i].ROLL_ID||''),qty=n(items[i].ISSUE_MTR);
+    if(!roll)throw err('Roll is required on line '+(i+1)+'.',400);
+    if(seen.has(roll))throw err('Same roll cannot be selected twice.',409);seen.add(roll);
+    requirePos(qty,'Issue meter on line '+(i+1));
+    const rr=await row(db,'SELECT * FROM raw_inward WHERE ROLL_ID=?',roll);if(!rr)throw err('Raw roll '+roll+' not found.',404);
+    if(String(rr.FABRIC_ID)!==String(old.FABRIC_ID))throw err('All rolls must be of the same original batch fabric.',409);
+    const other=await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) q FROM dye_jobs WHERE ROLL_ID=? AND DYE_BATCH_ID<>?',roll,batch);
+    const max=n(rr.INWARD_MTR)-n(other?.q);
+    if(qty>max+0.0001)throw err('Issue exceeds available meter for roll '+(rr.VENDOR_ROLL_NO||roll)+'. Available: '+max,409);
+    resolved.push({rr,qty});
+  }
+
+  const t=now();
+  await db.prepare('DELETE FROM dye_jobs WHERE DYE_BATCH_ID=?').bind(batch).run();
+  const stmts=resolved.map(({rr,qty})=>db.prepare(
+    'INSERT INTO dye_jobs(ROW_ID,DYE_BATCH_ID,ISSUE_DATE,DYE_VENDOR_ID,ROLL_ID,VENDOR_ROLL_NO,FABRIC_ID,COLOR_ID,ISSUE_MTR,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT,DYE_PLAN_ID) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+  ).bind(uuid(),batch,issueDate,vendor,rr.ROLL_ID,rr.VENDOR_ROLL_NO||'',old.FABRIC_ID,color,qty,'AT DYE VENDOR',notes,a.userId,t,a.userId,t,old.DYE_PLAN_ID));
+  await db.batch(stmts);
+  const after=await getDyeBatchDetail(db,batch);
+  await audit(db,a,'EDIT_DYE_BATCH','DYE',batch,JSON.stringify(old),JSON.stringify(after));
+  return after
+}
+async function editDyeReceipt(db,r,a){
+  const receiptId=String(r.RECEIPT_ID||''),receipt=await row(db,'SELECT * FROM dye_receipts WHERE RECEIPT_ID=?',receiptId);
+  if(!receipt)throw err('Dye receipt not found.',404);
+  if(await dyeDownstreamCount(db,receipt.DYE_BATCH_ID)>0)throw err('This dye batch is already used in Production. Direct receipt edit is blocked. Use a correction/reversal workflow.',409);
+
+  const received=n(r.RECEIVED_MTR),defect=n(r.DEFECT_MTR),final=truth(r.FINAL_RECEIPT);
+  requirePos(received,'Received meter');if(defect<0||defect>received)throw err('Defect meter must be between 0 and received meter.',409);
+  const usable=received-defect,t=now();
+  const other=await row(db,'SELECT COALESCE(SUM(RECEIVED_MTR),0) received FROM dye_receipts WHERE DYE_BATCH_ID=? AND RECEIPT_ID<>?',receipt.DYE_BATCH_ID,receiptId);
+  const issued=await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) issued FROM dye_jobs WHERE DYE_BATCH_ID=?',receipt.DYE_BATCH_ID);
+  const cumulative=n(other?.received)+received,variance=final?cumulative-n(issued?.issued):0;
+  const status=final?(variance>0.0001?'CLOSED EXCESS':variance<-0.0001?'CLOSED SHORT':'CLOSED EXACT'):'PARTIAL';
+  await db.prepare(`UPDATE dye_receipts SET RECEIPT_DATE=?,RECEIVED_MTR=?,DEFECT_MTR=?,USABLE_MTR=?,VARIANCE_MTR=?,FINAL_RECEIPT=?,STATUS=?,DEFECT_REASON=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE RECEIPT_ID=?`)
+    .bind(dateOnly(r.RECEIPT_DATE||receipt.RECEIPT_DATE),received,defect,usable,variance,final?1:0,status,String(r.DEFECT_REASON||''),String(r.NOTES||''),a.userId,t,receiptId).run();
+  const after=await row(db,'SELECT * FROM dye_receipts WHERE RECEIPT_ID=?',receiptId);
+  await audit(db,a,'EDIT_DYE_RECEIPT','DYE',receiptId,JSON.stringify(receipt),JSON.stringify(after));
+  return after
+}
+async function cancelDyeBatch(db,r,a){
+  const batch=String(r.DYE_BATCH_ID||'');if(!batch)throw err('Dye batch is required.',400);
+  if(await dyeDownstreamCount(db,batch)>0)throw err('This dye batch is already used in Production and cannot be cancelled directly.',409);
+  const old=await getDyeBatchDetail(db,batch);
+  await db.batch([
+    db.prepare('DELETE FROM dye_receipts WHERE DYE_BATCH_ID=?').bind(batch),
+    db.prepare('DELETE FROM dye_jobs WHERE DYE_BATCH_ID=?').bind(batch)
+  ]);
+  await audit(db,a,'CANCEL_DYE_BATCH','DYE',batch,JSON.stringify(old),JSON.stringify({cancelled:true,reason:String(r.REASON||'Mistaken entry')}));
+  return{DYE_BATCH_ID:batch,cancelled:true}
+}
 async function saveProduction(db,r,a){
   const batch=String(r.DYE_BATCH_ID||''),style=String(r.STYLE_ID||''),alloc=n(r.ALLOCATED_MTR);requirePos(alloc,'Allocated meter');const st=await row(db,'SELECT * FROM styles WHERE STYLE_ID=? AND ACTIVE=1',style);if(!st)throw err('Select a valid active style.',400);const dj=await row(db,'SELECT FABRIC_ID,COLOR_ID FROM dye_jobs WHERE DYE_BATCH_ID=? LIMIT 1',batch);if(!dj)throw err('Select a valid dye batch.',400);if(st.DEFAULT_FABRIC_ID&&String(st.DEFAULT_FABRIC_ID)!==String(dj.FABRIC_ID))throw err('Selected style is mapped to a different fabric type.',409);if(await dyeBalance(db,batch)+0.0001<alloc)throw err('Allocated meter exceeds dyed usable balance.',409);
   const id=await nextId(db,'PB'),t=now();await db.prepare('INSERT INTO production_batches(ROW_ID,PRODUCTION_BATCH_ID,PLAN_DATE,DYE_BATCH_ID,STYLE_ID,FABRIC_ID,COLOR_ID,PLANNED_QTY,ALLOCATED_MTR,M_CUT,L_CUT,XL_CUT,"2XL_CUT","3XL_CUT",OTHER_CUT,TOTAL_CUT,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(uuid(),id,dateOnly(r.PLAN_DATE),batch,style,dj.FABRIC_ID,dj.COLOR_ID,n(r.PLANNED_QTY),alloc,0,0,0,0,0,0,0,'PLANNED',String(r.NOTES||''),a.userId,t,a.userId,t).run();await audit(db,a,'CREATE','PRODUCTION',id,'',JSON.stringify(r));return{PRODUCTION_BATCH_ID:id}
@@ -445,6 +535,6 @@ async function completeRequest(db,id,result){if(id)await db.prepare('UPDATE requ
 async function failRequest(db,id){if(id)await db.prepare("DELETE FROM request_log WHERE request_id=? AND result_json='__PENDING__'").bind(id).run()}
 
 export async function saveRecordD1(env,p){
-  const db=env.DB,m=String(p.module||''),perm={raw:'raw',raw_bulk:'raw',dye:'dye',dye_bulk:'dye',dye_plan:'dye',dye_receive:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[m]||null,a=await actor(db,p.actorUserId,perm,false),req=String(p.requestId||''),reservation=await reserveRequest(db,req,m);if(!reservation.owner)return reservation.result;
-  try{let record;if(m==='raw_bulk')record=await saveRawBulk(db,p.record||{},a);else if(m==='dye')record=await saveDyeSingle(db,p.record||{},a);else if(m==='dye_bulk')record=await saveDyeBulk(db,p.record||{},a);else if(m==='dye_plan')record=await saveDyePlan(db,p.record||{},a);else if(m==='dye_receive')record=await saveDyeReceive(db,p.record||{},a);else if(m==='production')record=await saveProduction(db,p.record||{},a);else if(m==='stitching')record=await saveStitching(db,p.record||{},a);else if(m==='qc')record=await saveQc(db,p.record||{},a);else if(m==='handover')record=await saveHandover(db,p.record||{},a);else if(m==='master'){await actor(db,p.actorUserId,null,true);record=await saveMaster(db,p.record||{},a)}else if(m==='raw'){record=await saveRawBulk(db,{...p.record,items:[{FABRIC_ID:p.record?.FABRIC_ID,VENDOR_ROLL_NO:p.record?.VENDOR_ROLL_NO,INWARD_MTR:p.record?.INWARD_MTR,NOTES:p.record?.NOTES}]},a)}else throw err('This legacy transaction type is not available in D1 mode.',404);const result={saved:true,record};await completeRequest(db,req,result);return result}catch(e){await failRequest(db,req);throw e}
+  const db=env.DB,m=String(p.module||''),perm={raw:'raw',raw_bulk:'raw',dye:'dye',dye_bulk:'dye',dye_plan:'dye',dye_receive:'dye',dye_edit_batch:'dye',dye_edit_receipt:'dye',dye_cancel_batch:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[m]||null,a=await actor(db,p.actorUserId,perm,false),req=String(p.requestId||''),reservation=await reserveRequest(db,req,m);if(!reservation.owner)return reservation.result;
+  try{let record;if(m==='raw_bulk')record=await saveRawBulk(db,p.record||{},a);else if(m==='dye')record=await saveDyeSingle(db,p.record||{},a);else if(m==='dye_bulk')record=await saveDyeBulk(db,p.record||{},a);else if(m==='dye_plan')record=await saveDyePlan(db,p.record||{},a);else if(m==='dye_receive')record=await saveDyeReceive(db,p.record||{},a);else if(m==='dye_edit_batch')record=await editDyeBatch(db,p.record||{},a);else if(m==='dye_edit_receipt')record=await editDyeReceipt(db,p.record||{},a);else if(m==='dye_cancel_batch')record=await cancelDyeBatch(db,p.record||{},a);else if(m==='production')record=await saveProduction(db,p.record||{},a);else if(m==='stitching')record=await saveStitching(db,p.record||{},a);else if(m==='qc')record=await saveQc(db,p.record||{},a);else if(m==='handover')record=await saveHandover(db,p.record||{},a);else if(m==='master'){await actor(db,p.actorUserId,null,true);record=await saveMaster(db,p.record||{},a)}else if(m==='raw'){record=await saveRawBulk(db,{...p.record,items:[{FABRIC_ID:p.record?.FABRIC_ID,VENDOR_ROLL_NO:p.record?.VENDOR_ROLL_NO,INWARD_MTR:p.record?.INWARD_MTR,NOTES:p.record?.NOTES}]},a)}else throw err('This legacy transaction type is not available in D1 mode.',404);const result={saved:true,record};await completeRequest(db,req,result);return result}catch(e){await failRequest(db,req);throw e}
 }
