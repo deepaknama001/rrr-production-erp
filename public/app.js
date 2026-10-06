@@ -1,5 +1,6 @@
-const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.8';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
+(function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0};
 function setStatus(text,kind='ok'){const el=$('#syncStatus');if(!el)return;el.textContent=text;el.className='status '+kind}
 function newRequestId(){return (crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math.random().toString(36).slice(2))}
@@ -48,14 +49,23 @@ function vendorOptions(vendors,role){return (vendors||[]).filter(v=>isTrue(v.ACT
 function colorOptions(colors){return (colors||[]).filter(x=>isTrue(x.ACTIVE)).map(x=>`<option value="${esc(x.COLOR_ID)}">${esc(x.COLOR_NAME)}${x.COLOR_CODE?' · '+esc(x.COLOR_CODE):''}</option>`).join('')}
 function styleOptions(styles){return (styles||[]).filter(x=>isTrue(x.ACTIVE)).map(x=>`<option value="${esc(x.STYLE_ID)}">${esc(x.STYLE_NAME)}${x.STYLE_CODE?' · '+esc(x.STYLE_CODE):''}</option>`).join('')}
 function smartEmpty(msg){return `<div class="smart-empty"><b>Nothing available</b><span>${esc(msg)}</span></div>`}
+function deriveRawFabricGroups(rawRolls=[]){
+  const m={};
+  (rawRolls||[]).filter(r=>Number(r.BALANCE_MTR)>0).forEach(r=>{
+    const k=String(r.FABRIC_ID||'');if(!k)return;
+    const x=m[k]||(m[k]={FABRIC_ID:k,FABRIC_NAME:r.FABRIC_NAME||r.FABRIC||k,AVAILABLE_MTR:0,ROLL_COUNT:0});
+    x.AVAILABLE_MTR+=Number(r.BALANCE_MTR||0);x.ROLL_COUNT++;
+  });
+  return Object.values(m).sort((x,y)=>String(x.FABRIC_NAME).localeCompare(String(y.FABRIC_NAME)));
+}
 
 
 
 async function openDyeIssue(){
   const requestId=newRequestId();let l;
-  try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
+  try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
   const vendors=(l.vendors||[]).filter(v=>isTrue(v.DYE_VENDOR)&&isTrue(v.ACTIVE));
-  const fabrics=l.rawFabricGroups||[];
+  const fabrics=(l.rawFabricGroups&&l.rawFabricGroups.length?l.rawFabricGroups:deriveRawFabricGroups(l.rawRolls||[]));
   const colors=(l.colors||[]).filter(c=>isTrue(c.ACTIVE));
   if(!vendors.length)return toast('Create at least one active Dye Vendor in Masters → Vendors.','bad',4200);
   if(!colors.length)return toast('Create at least one active Color in Masters → Colors.','bad',4200);
@@ -147,7 +157,7 @@ async function openDyeIssue(){
 }
 
 async function openProductionPlan(){
-  const requestId=newRequestId();let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
+  const requestId=newRequestId();let l;try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
   const batches=l.dyeBatches||[],styles=l.styles||[];
   if(!batches.length)return toast('No dyed usable stock is available. Dye receipt must be completed before production allocation.','bad',4500);
   if(!styles.length)return toast('Create active Styles in Masters first.','bad',3500);
@@ -168,7 +178,7 @@ async function openProductionPlan(){
 }
 
 async function openStitchingIssue(){
-  const requestId=newRequestId();let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
+  const requestId=newRequestId();let l;try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
   const vendors=(l.vendors||[]).filter(v=>isTrue(v.STITCHING_VENDOR)&&isTrue(v.ACTIVE)),batches=l.productionBatches||[];
   if(!vendors.length)return toast('Create an active Stitching Vendor in Masters → Vendors.','bad',4200);
   if(!batches.length)return toast('No cut-piece stock is available for stitching issue. Complete cutting first.','bad',4200);
@@ -193,7 +203,7 @@ async function openStitchingIssue(){
 }
 
 async function openQcEntry(){
-  const requestId=newRequestId();let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
+  const requestId=newRequestId();let l;try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
   const challans=l.stitchingChallans||[],defects=l.defects||[];
   if(!challans.length)return toast('No stitching receipt is pending QC. Receive garments from stitching first.','bad',4500);
   $('#modalBody').innerHTML=`
@@ -216,7 +226,7 @@ async function openQcEntry(){
 }
 
 async function openWarehouseHandover(){
-  const requestId=newRequestId();let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
+  const requestId=newRequestId();let l;try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
   const ready=l.warehouseReady||[];
   if(!ready.length)return toast('No QC-passed garment quantity is pending warehouse handover.','bad',4200);
   $('#modalBody').innerHTML=`
