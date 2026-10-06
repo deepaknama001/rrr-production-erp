@@ -34,3 +34,11 @@ button{transition:transform .13s ease,box-shadow .18s ease,opacity .18s ease,bac
 button.tap{transform:scale(.965)}button:disabled{cursor:not-allowed;opacity:.72}
 button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justify-content:center;gap:7px}
 .nav button.is-busy,.quick button.is-busy{justify-content:flex-start}
+
+.dye-plan-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-top:12px}
+.dye-plan-summary>div{border:1px solid var(--line);background:#f8fafc;border-radius:11px;padding:10px 12px}
+.dye-plan-summary span{display:block;font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.dye-plan-summary b{display:block;font-size:13px;margin-top:4px}.dye-plan-summary b.over{color:var(--danger)}
+.smart-note{margin-top:12px;border:1px solid #dfe6ee;background:#f8fbfd;border-radius:12px;padding:11px 13px;font-size:9px;color:#617084}
+.smart-note b{color:#263247}
+@media(max-width:760px){.dye-plan-summary{grid-template-columns:repeat(2,1fr)}}
