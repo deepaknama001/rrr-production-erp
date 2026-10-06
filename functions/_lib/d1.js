@@ -64,9 +64,28 @@ export async function migrateSnapshotToD1(env,snapshot){
   await setMeta(db,'source_spreadsheet_id',snapshot?.spreadsheetId||'');
   await setMeta(db,'migrated_at',snapshot?.exportedAt||now());
   await setMeta(db,'source_counts',JSON.stringify(counts));
-  await setMeta(db,'migration_complete','1');
-  return{ok:true,counts,sequences:seq,migratedAt:snapshot?.exportedAt||now()};
+  await setMeta(db,'migration_loaded','1');
+  await setMeta(db,'migration_complete','0');
+  return{ok:true,counts,sequences:seq,migratedAt:snapshot?.exportedAt||now(),activated:false};
 }
+
+
+export async function reconcileD1(env){
+  if(!hasD1(env))throw err('D1 binding DB is missing.',500);
+  const db=env.DB,meta=(await d1Status(env)).meta||{},source=JSON.parse(meta.source_counts||'{}'),counts={};
+  for(const [sheet,table] of Object.entries(TABLE_MAP)){const r=await row(db,`SELECT COUNT(*) c FROM ${table}`);counts[sheet]=n(r?.c)}
+  const checks={};
+  for(const k of Object.keys(TABLE_MAP))checks[k]={source:n(source[k]),d1:n(counts[k]),match:n(source[k])===n(counts[k])};
+  const raw=await row(db,`SELECT COALESCE(SUM(INWARD_MTR),0) total,COALESCE(SUM(CASE WHEN COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' THEN INWARD_MTR ELSE 0 END),0) active FROM raw_inward`);
+  const dye=await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) issued FROM dye_jobs');
+  const receipt=await row(db,'SELECT COALESCE(SUM(RECEIVED_MTR),0) received,COALESCE(SUM(USABLE_MTR),0) usable,COALESCE(SUM(DEFECT_MTR),0) defect FROM dye_receipts');
+  return{loaded:String(meta.migration_loaded||'')==='1',active:String(meta.migration_complete||'')==='1',checks,allCountsMatch:Object.values(checks).every(x=>x.match),totals:{rawTotal:n(raw?.total),rawActive:n(raw?.active),dyeIssued:n(dye?.issued),dyeReceived:n(receipt?.received),dyeUsable:n(receipt?.usable),dyeDefect:n(receipt?.defect)},meta};
+}
+export async function activateD1(env){
+  const rec=await reconcileD1(env);if(!rec.loaded)throw err('D1 migration data has not been loaded.',409);if(!rec.allCountsMatch)throw err('D1 row-count reconciliation failed. Activation blocked.',409);
+  await setMeta(env.DB,'migration_complete','1');await setMeta(env.DB,'activated_at',now());return await reconcileD1(env)
+}
+export async function deactivateD1(env){if(!hasD1(env))throw err('D1 binding DB is missing.',500);await setMeta(env.DB,'migration_complete','0');await setMeta(env.DB,'deactivated_at',now());return await reconcileD1(env)}
 
 async function row(db,sql,...args){return db.prepare(sql).bind(...args).first()}
 async function rows(db,sql,...args){return (await db.prepare(sql).bind(...args).all()).results||[]}
