@@ -69,7 +69,7 @@ async function openDyeIssue(){
   const colors=(l.colors||[]).filter(c=>isTrue(c.ACTIVE));
   if(!vendors.length)return toast('Create at least one active Dye Vendor in Masters → Vendors.','bad',4200);
   if(!colors.length)return toast('Create at least one active Color in Masters → Colors.','bad',4200);
-  if(!fabrics.length)return toast('No raw fabric stock is available for dye planning.','bad',4200);
+  if(!fabrics.length){const activeRolls=(l.rawRolls||[]).filter(r=>Number(r.BALANCE_MTR)>0);return toast(activeRolls.length?'Dye planning lookup is outdated. Deploy the latest Apps Script backend, then refresh.':'No raw fabric stock is available for dye planning.','bad',5200)}
 
   $('#modalBody').innerHTML=`
     <div class="panel-head"><div><h3>New Dye Plan</h3><small>Plan one fabric into multiple colors. Raw rolls are allocated automatically in the backend.</small></div><button class="btn ghost" id="closeModal">Close</button></div>
