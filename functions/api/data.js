@@ -1,3 +1,21 @@
-import {json,readJson,errorResponse} from '../_lib/common.js';import {callGas} from '../_lib/gas.js';import {requireAuth} from '../_lib/auth.js';import {d1Ready,getDataD1,saveRecordD1} from '../_lib/d1.js';
-export async function onRequestGet(context){try{const actor=await requireAuth(context);const module=new URL(context.request.url).searchParams.get('module')||'dashboard';const useD1=await d1Ready(context.env);const r=useD1?await getDataD1(context.env,{module,actorUserId:actor.uid}):await callGas(context.env,'get_data',{module,actorUserId:actor.uid});return json({...r,actor,backend:useD1?'D1':'GOOGLE_SHEETS'})}catch(e){return errorResponse(e)}}
-export async function onRequestPost(context){try{const actor=await requireAuth(context),b=await readJson(context.request),payload={module:String(b.module||''),record:b.record||{},requestId:String(b.requestId||''),actorUserId:actor.uid},useD1=await d1Ready(context.env);const r=useD1?await saveRecordD1(context.env,payload):await callGas(context.env,'save_record',payload);return json({...r,backend:useD1?'D1':'GOOGLE_SHEETS'})}catch(e){return errorResponse(e)}}
+import {json,readJson,errorResponse} from '../_lib/common.js';
+import {requireAuth} from '../_lib/auth.js';
+import {getDataD1,saveRecordD1} from '../_lib/d1.js';
+export async function onRequestGet(context){
+  try{
+    if(!context.env.DB)return json({error:'D1 database binding is unavailable.'},503);
+    const actor=await requireAuth(context);
+    const module=new URL(context.request.url).searchParams.get('module')||'dashboard';
+    const r=await getDataD1(context.env,{module,actorUserId:actor.uid});
+    return json({...r,actor,backend:'D1'});
+  }catch(e){return errorResponse(e)}
+}
+export async function onRequestPost(context){
+  try{
+    if(!context.env.DB)return json({error:'D1 database binding is unavailable.'},503);
+    const actor=await requireAuth(context),b=await readJson(context.request);
+    const payload={module:String(b.module||''),record:b.record||{},requestId:String(b.requestId||''),actorUserId:actor.uid};
+    const r=await saveRecordD1(context.env,payload);
+    return json({...r,backend:'D1'});
+  }catch(e){return errorResponse(e)}
+}
