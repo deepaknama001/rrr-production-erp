@@ -23,9 +23,9 @@ function showApp(){$('#loginView').classList.add('hidden');$('#appView').classLi
 function renderNav(){$('#nav').innerHTML=NAV.filter(x=>allowed(x[0])).map(([m,i,l])=>`<button data-m="${m}">${i} &nbsp; ${l}</button>`).join('');$('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>go(b.dataset.m))}
 async function go(m,force=false){if(!allowed(m))return;setStatus('↻ Opening '+(NAV.find(x=>x[0]===m)?.[2]||m)+'…','busy');state.current=m;sessionStorage.setItem('rrr_prod_page',m);document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.m===m));$('#pageTitle').textContent=NAV.find(x=>x[0]===m)?.[2]||m;if(m==='dashboard')return renderDashboard(force);if(m==='reports')return renderReports(force);if(m==='masters')return renderMasters(force);if(m==='users')return renderUsers(force);return renderModule(m,force)}
 async function renderDashboard(force=false){const s=$('#stage');s.innerHTML=`<section class="hero"><div><h2>Production Control</h2><p>Raw fabric to warehouse handover — one traceable workflow.</p></div><div>${new Date().toLocaleDateString()}</div></section><section class="kpis">${['Raw Available','At Dye','Dyed Available','Cut Pending','At Stitching','Ready Warehouse'].map(x=>`<div class="kpi"><span>${x}</span><strong>—</strong></div>`).join('')}</section><section class="grid2"><div class="panel"><div class="panel-head"><h3>Quick Actions</h3></div><div class="quick">${[['raw','New Fabric Inward'],['dye','Issue to Dye'],['production','Plan Production'],['stitching','Create Stitch Challan'],['qc','QC Entry'],['handover','Warehouse Handover']].filter(x=>allowed(x[0])).map(x=>`<button onclick="window.ERP.quick('${x[0]}')"><b>${x[1]}</b><small>Open module</small></button>`).join('')}</div></div><div class="panel"><div class="panel-head"><h3>System</h3></div><p>Google Sheets permanent database</p><p>Cloudflare secure frontend</p><p>User-wise permissions & audit trail</p></div></section>`;try{const d=await getCachedModule('dashboard',force);state.user=d.user||d.actor||state.user;const v=d.kpis||{};[v.rawAvailable,v.atDye,v.dyedAvailable,v.cutPending,v.atStitching,v.readyWarehouse].forEach((x,i)=>document.querySelectorAll('.kpi strong')[i].textContent=x??0)}catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}}
-const configs={raw:{title:'Raw Fabric',columns:['ROLL_ID','INWARD_DATE','SUPPLIER','VENDOR_ROLL_NO','FABRIC','INWARD_MTR','STATUS'],action:'New Inward',fields:['INWARD_DATE','SUPPLIER_ID','VENDOR_ROLL_NO','FABRIC_ID','INWARD_MTR','INVOICE_CHALLAN','LOT_REF','NOTES']},dye:{title:'Dyeing',columns:['DYE_PLAN_ID','DYE_BATCH_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR','ROLL_COUNT','ISSUE_MTR','RECEIVED_MTR','USABLE_MTR','STATUS'],action:'New Dye Plan',fields:['ISSUE_DATE','DYE_VENDOR_ID','ROLL_ID','COLOR_ID','ISSUE_MTR','NOTES']},production:{title:'Production / Cutting',columns:['PRODUCTION_BATCH_ID','PLAN_DATE','STYLE','DYE_BATCH_ID','PLANNED_QTY','ALLOCATED_MTR','TOTAL_CUT','STATUS'],action:'New Production Batch',fields:['PLAN_DATE','DYE_BATCH_ID','STYLE_ID','PLANNED_QTY','ALLOCATED_MTR','NOTES']},stitching:{title:'Stitching',columns:['CHALLAN_ID','ISSUE_DATE','STITCHING_VENDOR','PRODUCTION_BATCH_ID','TOTAL_ISSUED','TOTAL_RECEIVED','PENDING_QTY','STATUS'],action:'New Challan',fields:['ISSUE_DATE','STITCHING_VENDOR_ID','PRODUCTION_BATCH_ID','M_ISSUED','L_ISSUED','XL_ISSUED','2XL_ISSUED','3XL_ISSUED','OTHER_ISSUED','NOTES']},qc:{title:'QC & Rework',columns:['QC_ID','QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','STATUS'],action:'New QC Entry',fields:['QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','DEFECT_REASON','NOTES']},handover:{title:'Warehouse Handover',columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','PENDING_QTY','STATUS'],action:'New Handover',fields:['HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE_ID','COLOR_ID','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','WAREHOUSE_REF','NOTES']}};
+const configs={raw:{title:'Raw Fabric',columns:['ROLL_ID','INWARD_DATE','SUPPLIER','VENDOR_ROLL_NO','FABRIC','INWARD_MTR','STATUS'],action:'New Inward',fields:['INWARD_DATE','SUPPLIER_ID','VENDOR_ROLL_NO','FABRIC_ID','INWARD_MTR','INVOICE_CHALLAN','LOT_REF','NOTES']},dye:{title:'Dyeing',columns:['DYE_PLAN_ID','DYE_BATCH_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR','ROLL_COUNT','ISSUE_MTR','RECEIVED_MTR','USABLE_MTR','STATUS','__ACTION'],action:'New Dye Plan',fields:['ISSUE_DATE','DYE_VENDOR_ID','ROLL_ID','COLOR_ID','ISSUE_MTR','NOTES']},production:{title:'Production / Cutting',columns:['PRODUCTION_BATCH_ID','PLAN_DATE','STYLE','DYE_BATCH_ID','PLANNED_QTY','ALLOCATED_MTR','TOTAL_CUT','STATUS'],action:'New Production Batch',fields:['PLAN_DATE','DYE_BATCH_ID','STYLE_ID','PLANNED_QTY','ALLOCATED_MTR','NOTES']},stitching:{title:'Stitching',columns:['CHALLAN_ID','ISSUE_DATE','STITCHING_VENDOR','PRODUCTION_BATCH_ID','TOTAL_ISSUED','TOTAL_RECEIVED','PENDING_QTY','STATUS'],action:'New Challan',fields:['ISSUE_DATE','STITCHING_VENDOR_ID','PRODUCTION_BATCH_ID','M_ISSUED','L_ISSUED','XL_ISSUED','2XL_ISSUED','3XL_ISSUED','OTHER_ISSUED','NOTES']},qc:{title:'QC & Rework',columns:['QC_ID','QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','STATUS'],action:'New QC Entry',fields:['QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','DEFECT_REASON','NOTES']},handover:{title:'Warehouse Handover',columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','PENDING_QTY','STATUS'],action:'New Handover',fields:['HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE_ID','COLOR_ID','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','WAREHOUSE_REF','NOTES']}};
 async function renderModule(m,force=false){const c=configs[m],s=$('#stage');s.innerHTML=`<section class="panel"><div class="panel-head"><h3>${c.title}</h3><button class="btn teal" id="newBtn">+ ${c.action}</button></div><div class="toolbar"><input class="search" id="searchBox" placeholder="Search..."></div><div class="table-wrap"><table class="data"><thead><tr>${c.columns.map(x=>'<th>'+x.replaceAll('_',' ')+'</th>').join('')}</tr></thead><tbody id="rows"><tr><td colspan="${c.columns.length}">Loading…</td></tr></tbody></table></div></section>`;$('#newBtn').onclick=()=>openActionForm(m);try{const d=await getCachedModule(m,force);drawRows(c,d.items||[]);$('#searchBox').oninput=e=>drawRows(c,(d.items||[]).filter(r=>JSON.stringify(r).toLowerCase().includes(e.target.value.toLowerCase())))}catch(e){drawRows(c,[]);toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}}
-function drawRows(c,items){$('#rows').innerHTML=items.length?items.map(r=>'<tr>'+c.columns.map(k=>`<td>${k==='STATUS'?badge(r[k]):esc(r[k])}</td>`).join('')+'</tr>').join(''):`<tr><td colspan="${c.columns.length}">No records yet.</td></tr>`}
+function drawRows(c,items){$('#rows').innerHTML=items.length?items.map((r,i)=>'<tr>'+c.columns.map(k=>{if(k==='STATUS')return `<td>${badge(r[k])}</td>`;if(k==='__ACTION')return `<td>${c===configs.dye&&String(r.STATUS)!=='RECEIVED'?'<button class="btn ghost dye-receive-btn" data-i="'+i+'">Receive</button>':'—'}</td>`;return `<td>${esc(r[k])}</td>`}).join('')+'</tr>').join(''):`<tr><td colspan="${c.columns.length}">No records yet.</td></tr>`;if(c===configs.dye)document.querySelectorAll('.dye-receive-btn').forEach(b=>b.onclick=()=>openDyeReceive(items[Number(b.dataset.i)]))}
 function badge(v){const s=String(v||''),cl=/reject|defect|negative/i.test(s)?'danger':/pending|partial|rework|vendor/i.test(s)?'warn':'ok';return `<span class="badge ${cl}">${esc(s)}</span>`}
 async function openActionForm(m){
   if(m==='raw')return openRawInward();
@@ -154,6 +154,51 @@ async function openDyeIssue(){
       dropCaches();closeModal();toast(`Dye Plan ${d.record.DYE_PLAN_ID} created · ${d.record.BATCH_COUNT} colors · ${moneyless(d.record.TOTAL_MTR)} m`,'ok',5000);go('dye',true);
     }catch(err){toast(err.message,'bad',4500)}
   };
+}
+
+async function openDyeReceive(batchRow){
+  const requestId=newRequestId(),batchId=String(batchRow.DYE_BATCH_ID||'');let l;
+  try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
+  const batch=(l.dyePendingReceipt||[]).find(x=>String(x.DYE_BATCH_ID)===batchId)||batchRow;
+  const pending=Number(batch.PENDING_MTR??Math.max(0,Number(batch.ISSUE_MTR||0)-Number(batch.RECEIVED_MTR||0)));
+  if(pending<=0)return toast('This dye batch has no pending quantity to receive.','bad',3500);
+  const defects=(l.defects||[]).filter(d=>!d.STAGE||/dye/i.test(String(d.STAGE)));
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>Receive Dyed Fabric</h3><small>${esc(batch.DYE_BATCH_ID)} · ${esc(batch.FABRIC_NAME||batch.FABRIC||'')} · ${esc(batch.COLOR_NAME||batch.COLOR||'')}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="dyeReceiveForm">
+      <div class="form-grid">
+        <div class="field"><label>Receipt Date</label><input name="RECEIPT_DATE" type="date" required value="${todayLocal()}"></div>
+        <div class="field"><label>Dye Vendor</label><input readonly value="${esc(batch.DYE_VENDOR_NAME||batch.DYE_VENDOR||'')}"></div>
+        <div class="field"><label>Issued Meter</label><input readonly value="${moneyless(batch.ISSUE_MTR)} m"></div>
+        <div class="field"><label>Already Received</label><input readonly value="${moneyless(batch.RECEIVED_MTR||0)} m"></div>
+        <div class="field"><label>Pending Meter</label><input id="dyePending" readonly value="${moneyless(pending)} m"></div>
+        <div class="field"><label>Received Now</label><input name="RECEIVED_MTR" id="receiveNow" type="number" min="0.01" step="0.01" max="${pending}" required value="${moneyless(pending)}"></div>
+        <div class="field"><label>Defect Meter</label><input name="DEFECT_MTR" id="defectNow" type="number" min="0" step="0.01" value="0"></div>
+        <div class="field"><label>Usable Meter</label><input id="usableNow" readonly value="${moneyless(pending)} m"></div>
+        <div class="field"><label>Defect Reason</label><select name="DEFECT_REASON"><option value="">Select reason</option>${defects.map(d=>`<option value="${esc(d.DEFECT_NAME)}">${esc(d.DEFECT_NAME)}</option>`).join('')}</select></div>
+        <div class="field"><label>Final Receipt / Close Batch</label><select name="FINAL_RECEIPT" id="finalReceipt"><option value="false">No — partial receipt</option><option value="true" selected>Yes — close batch</option></select></div>
+        <div class="field wide"><label>Notes</label><input name="NOTES"></div>
+      </div>
+      <div class="dye-plan-summary">
+        <div><span>Pending Before</span><b>${moneyless(pending)} m</b></div>
+        <div><span>Receive Now</span><b id="sumReceiveNow">${moneyless(pending)} m</b></div>
+        <div><span>Usable Now</span><b id="sumUsableNow">${moneyless(pending)} m</b></div>
+        <div><span>Expected Shrink/Loss on Close</span><b id="sumShrink">0 m</b></div>
+      </div>
+      <div class="smart-note"><b>Rule:</b> Usable = Received − Defect. If “Close Batch” is Yes, any remaining pending quantity becomes shrinkage/loss automatically.</div>
+      <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Save Dye Receipt</button></div>
+    </form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  const recv=$('#receiveNow'),def=$('#defectNow'),final=$('#finalReceipt');
+  function calc(){
+    let r=Math.max(0,Number(recv.value||0)),d=Math.max(0,Number(def.value||0));
+    if(r>pending){r=pending;recv.value=moneyless(r)}
+    if(d>r){d=r;def.value=moneyless(d)}
+    const usable=r-d,shrink=final.value==='true'?Math.max(0,pending-r):0;
+    $('#usableNow').value=moneyless(usable)+' m';$('#sumReceiveNow').textContent=moneyless(r)+' m';$('#sumUsableNow').textContent=moneyless(usable)+' m';$('#sumShrink').textContent=moneyless(shrink)+' m';
+  }
+  recv.oninput=calc;def.oninput=calc;final.onchange=calc;calc();
+  $('#dyeReceiveForm').onsubmit=async e=>{e.preventDefault();const rec=Object.fromEntries(new FormData(e.target).entries());rec.DYE_BATCH_ID=batchId;rec.FINAL_RECEIPT=rec.FINAL_RECEIPT==='true';try{await api('/api/data',{method:'POST',activity:'Saving dye receipt…',success:'Dye receipt saved',body:JSON.stringify({module:'dye_receive',record:rec,requestId})});dropCaches();closeModal();go('dye',true)}catch(err){toast(err.message,'bad',4200)}};
 }
 
 async function openProductionPlan(){
