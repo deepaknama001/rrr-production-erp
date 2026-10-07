@@ -292,3 +292,13 @@ button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justif
   background:#fff;
   z-index:2;
 }
+
+/* v0.22 Dye plan summary */
+.dye-view-tabs{margin-bottom:12px}
+.dye-view-tabs button{min-width:100px}
+.plan-summary-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 12px}
+.plan-summary-kpis>div{border:1px solid #d7dee8;border-radius:10px;background:#f8fafc;padding:10px 12px;display:grid;gap:4px}
+.plan-summary-kpis span{font-size:8px;font-weight:850;text-transform:uppercase;letter-spacing:.05em;color:#7a8596}
+.plan-summary-kpis strong{font-size:15px;font-weight:900;color:#1f2937}
+.plan-detail-table{margin-top:12px}
+@media(max-width:760px){.plan-summary-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
