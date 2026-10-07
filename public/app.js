@@ -677,8 +677,12 @@ function htmlText(el){return String(el?.textContent||'').replace(/\s+/g,' ').tri
 function getVisibleExportData(){
   const rt=state.grids[state.activeGridKey];
   if(rt&&rt.filtered){
-    const title=rt.opt.title||currentPageLabel(),cols=(rt.prefs.visibleColumns||rt.opt.columns||[]).filter(k=>k!=='__ACTION');
-    return{title,headers:cols.map(gridLabel),rows:rt.filtered.map(r=>cols.map(k=>String(gridCell(k,r[k]).replace?gridCell(k,r[k]).replace(/<[^>]+>/g,''):gridCell(k,r[k]))))};
+    const title=rt.opt.title||currentPageLabel(),cols=(rt.prefs.columnOrder||rt.prefs.visibleColumns||rt.opt.columns||[]).filter(k=>k!=='__ACTION'&&(rt.prefs.visibleColumns||[]).includes(k));
+    let source=rt.filtered||[];
+    if(rt.prefs.exportScope==='page')source=rt.pageRows||[];
+    if(rt.prefs.exportScope==='selected')source=(rt.items||[]).filter(r=>rt.selected?.has(r.__gridIndex));
+    if(rt.prefs.exportScope==='selected'&&!source.length)throw new Error('Select at least one row before exporting selected records.');
+    return{title,headers:cols.map(gridLabel),rows:source.map(r=>cols.map(k=>{const v=gridCell(k,r[k]);return String(v?.replace?v.replace(/<[^>]+>/g,''):v)}))};
   }
   const title=currentPageLabel();
   const kpis=[...document.querySelectorAll('#stage .kpi')].filter(x=>x.offsetParent!==null).map(x=>[htmlText(x.querySelector('span')),htmlText(x.querySelector('strong'))]).filter(x=>x[0]);
