@@ -38,7 +38,11 @@ function fmtDate(v,withTime=false){
 }
 function isQtyKey(k){return /(?:QTY|COUNT|PIECES|_CUT$|_ISSUED$|_RECEIVED$|PENDING)/i.test(String(k))}
 function syncShell(){if($('#appVersion'))$('#appVersion').textContent='v'+APP_BUILD;const exp=document.querySelector('.export-menu-wrap');if(exp){const ok=state.current==='dashboard'?canAction('reports','export'):((state.current==='masters'||state.current==='users')?!!state.user?.admin:canAction(state.current,'export'));exp.classList.toggle('hidden',!ok)}}
-function showApp(){$('#loginView').classList.add('hidden');$('#appView').classList.remove('hidden');$('#sideName').textContent=state.user.name;$('#sideRole').textContent=state.user.role;syncShell();renderNav();go(allowed(state.current)?state.current:'dashboard')}
+let notificationTimer=null;
+function setExceptionBadge(n){const b=$('#notificationBtn'),c=$('#notificationCount');if(!b||!c)return;const x=Math.max(0,Number(n||0));c.textContent=x>99?'99+':String(x);b.classList.toggle('hidden',x===0)}
+async function refreshExceptionBadge(){if(!state.token)return;try{const r=await fetch('/api/data?module=dashboard',{headers:{authorization:'Bearer '+state.token}});if(!r.ok)return;const d=await r.json();setExceptionBadge(d.alerts?.exceptionCount||0)}catch{}}
+function startNotificationPolling(){clearInterval(notificationTimer);refreshExceptionBadge();notificationTimer=setInterval(refreshExceptionBadge,5*60*1000)}
+function showApp(){$('#loginView').classList.add('hidden');$('#appView').classList.remove('hidden');$('#sideName').textContent=state.user.name;$('#sideRole').textContent=state.user.role;syncShell();renderNav();startNotificationPolling();go(allowed(state.current)?state.current:'dashboard')}
 function setMobileNav(open){document.body.classList.toggle('nav-open',!!open);$('#navOverlay')?.classList.toggle('hidden',!open)}
 function renderNav(){$('#nav').innerHTML=NAV.filter(x=>allowed(x[0])).map(([m,i,l])=>`<button data-m="${m}">${i} &nbsp; ${l}</button>`).join('');$('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>{setMobileNav(false);go(b.dataset.m)})}
 async function go(m,force=false){if(!allowed(m))return;state.activeGridKey='';setStatus('↻ Opening '+(NAV.find(x=>x[0]===m)?.[2]||m)+'…','busy');state.current=m;sessionStorage.setItem('rrr_prod_page',m);syncShell();setMobileNav(false);document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.m===m));$('#pageTitle').textContent=NAV.find(x=>x[0]===m)?.[2]||m;if(m==='dashboard')return renderDashboard(force);if(m==='reports')return renderReports(force);if(m==='masters')return renderMasters(force);if(m==='users')return renderUsers(force);return renderModule(m,force)}
@@ -54,7 +58,7 @@ async function renderDashboard(force=false){
     const d=await getCachedModule('dashboard',force);state.user=d.user||d.actor||state.user;
     try{localStorage.setItem('rrr_prod_user',JSON.stringify(state.user))}catch{}
     const v=d.kpis||{};[v.rawAvailable,v.atDye,v.dyedAvailable,v.cutPending,v.atStitching,v.readyWarehouse].forEach((x,i)=>document.querySelectorAll('#dashKpis .kpi strong')[i].textContent=isQtyKey(Object.keys(v)[i]||'')?Math.round(Number(x||0)):moneyless(x??0));
-    const a=d.alerts||{},rates=a.rates||{},ex=a.exceptions||[];
+    const a=d.alerts||{},rates=a.rates||{},ex=a.exceptions||[];setExceptionBadge(a.exceptionCount||0);
     $('#dashAlerts').innerHTML=`<div class="mini-metrics">
       <div><span>Exceptions</span><b class="${Number(a.exceptionCount||0)>0?'metric-bad':''}">${Number(a.exceptionCount||0)}</b></div>
       <div><span>Dye Defect</span><b>${Number(rates.dyeDefectPct||0).toFixed(2)}%</b></div>
@@ -1556,6 +1560,7 @@ document.addEventListener('keydown',e=>{
 window.addEventListener('beforeunload',e=>{if($('#modal')?.dataset.dirty==='1'){e.preventDefault();e.returnValue=''}});
 $('#loginForm').onsubmit=async e=>{e.preventDefault();$('#loginError').textContent='';try{const d=await api('/api/login',{method:'POST',activity:'Logging in…',success:'Login successful',body:JSON.stringify({userId:$('#userId').value,pin:$('#pin').value})});state.token=d.token;state.user=d.user;localStorage.setItem('rrr_prod_token',d.token);localStorage.setItem('rrr_prod_user',JSON.stringify(d.user));dropCaches();if(d.kpis)writeCache('dashboard',{user:d.user,kpis:d.kpis});showApp()}catch(err){$('#loginError').textContent=err.message}}
 $('#logoutBtn').onclick=()=>{localStorage.removeItem('rrr_prod_token');localStorage.removeItem('rrr_prod_user');sessionStorage.clear();location.reload()};async function refreshCurrent(){if(state.refreshing)return;state.refreshing=true;const b=$('#refreshBtn');b?.classList.add('spinning');setStatus('↻ Refreshing…','busy');try{dropCaches();await go(state.current,true);setStatus('● Updated just now','ok')}catch(e){setStatus('● Refresh failed','bad');if(e.status===401){localStorage.removeItem('rrr_prod_token');localStorage.removeItem('rrr_prod_user');location.reload()}else toast(e.message,'bad',3500)}finally{state.refreshing=false;b?.classList.remove('spinning')}}
+$('#notificationBtn')?.addEventListener('click',()=>go('reports').then(()=>setTimeout(()=>document.querySelector('[data-rpt="exceptions"]')?.click(),50)));
 $('#refreshBtn')?.addEventListener('click',refreshCurrent);
 $('#exportMenuBtn')?.addEventListener('click',e=>{e.stopPropagation();$('#exportMenu')?.classList.toggle('hidden')});
 $('#exportExcelBtn')?.addEventListener('click',()=>{$('#exportMenu')?.classList.add('hidden');exportExcel()});
