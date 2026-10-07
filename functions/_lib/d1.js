@@ -1375,6 +1375,14 @@ async function saveReworkIssue(db,r,a,req=''){
     ]);return{REWORK_ID:id}
   }finally{await releaseLock(db,'qc:'+qcId)}
 }
+async function refreshQcReworkStatus(db,qcId,a){
+  const q=await row(db,'SELECT * FROM qc_events WHERE QC_ID=?',qcId);if(!q)return;
+  const s=await row(db,`SELECT COALESCE(SUM(ISSUE_QTY),0) issued,COALESCE(SUM(RETURNED_QTY),0) returned
+    FROM rework_jobs WHERE QC_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'`,qcId);
+  const issued=intQty(s?.issued||0,'Rework issued'),returned=intQty(s?.returned||0,'Rework returned'),pending=Math.max(0,issued-returned);
+  const status=pending>0?(returned>0?'REWORK PARTIAL':'REWORK PENDING'):'QC COMPLETE';
+  await db.prepare('UPDATE qc_events SET STATUS=?,UPDATED_BY=?,UPDATED_AT=? WHERE QC_ID=?').bind(status,a.userId,now(),qcId).run()
+}
 async function saveReworkReceive(db,r,a,req=''){
   const id=String(r.REWORK_ID||''),rw=await row(db,"SELECT * FROM rework_jobs WHERE REWORK_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id);if(!rw)throw err('Rework job not found.',404);
   const ret=intQty(r.RETURN_QTY,'Rework return quantity',false),pass=intQty(r.PASS_QTY,'Rework pass quantity'),reject=intQty(r.REJECT_QTY,'Rework reject quantity');if(pass+reject!==ret)throw err('Rework pass + reject must equal returned qty.',409);
@@ -1385,18 +1393,23 @@ async function saveReworkReceive(db,r,a,req=''){
     const newReturned=intQty(rw.RETURNED_QTY,'Returned quantity')+ret,newPass=intQty(rw.PASS_QTY,'Pass quantity')+pass,newReject=intQty(rw.REJECT_QTY,'Reject quantity')+reject,status=newReturned>=intQty(rw.ISSUE_QTY,'Issue quantity')?'REWORK CLOSED':'PARTIAL REWORK RETURN',t=now();assertTransition('rework',rw.STATUS,status);
     await db.batch([
       db.prepare('UPDATE rework_jobs SET RETURNED_QTY=?,PASS_QTY=?,REJECT_QTY=?,STATUS=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE REWORK_ID=?').bind(newReturned,newPass,newReject,status,String(r.NOTES??rw.NOTES??''),a.userId,t,id),
-      db.prepare('UPDATE qc_events SET REWORK_RETURNED_QTY=COALESCE(REWORK_RETURNED_QTY,0)+?,FINAL_ACCEPTED_QTY=COALESCE(FINAL_ACCEPTED_QTY,0)+?,STATUS=?,UPDATED_BY=?,UPDATED_AT=? WHERE QC_ID=?').bind(ret,pass,status==='REWORK CLOSED'?'QC COMPLETE':'REWORK PARTIAL',a.userId,t,rw.QC_ID),
+      db.prepare('UPDATE qc_events SET REWORK_RETURNED_QTY=COALESCE(REWORK_RETURNED_QTY,0)+?,FINAL_ACCEPTED_QTY=COALESCE(FINAL_ACCEPTED_QTY,0)+?,UPDATED_BY=?,UPDATED_AT=? WHERE QC_ID=?').bind(ret,pass,a.userId,t,rw.QC_ID),
       auditStmt(db,a,'REWORK_RECEIVE','QC',id,JSON.stringify(rw),JSON.stringify({returnQty:ret,pass,reject,status}))
-    ]);return await getQcDetail(db,rw.QC_ID)
+    ]);
+    await refreshQcReworkStatus(db,rw.QC_ID,a);
+    return await getQcDetail(db,rw.QC_ID)
   }finally{await releaseLock(db,'qc:'+rw.QC_ID)}
 }
 async function cancelRework(db,r,a){
   const id=String(r.REWORK_ID||''),rw=await row(db,"SELECT * FROM rework_jobs WHERE REWORK_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id);if(!rw)throw err('Rework job not found.',404);
   if(intQty(rw.RETURNED_QTY,'Returned quantity')>0)throw err('Rework cannot be cancelled after return is received. Correct downstream QC instead.',409);
-  const reason=String(r.REASON||'Mistaken entry'),t=now();await db.batch([
+  const reason=String(r.REASON||'Mistaken entry'),t=now();
+  await db.batch([
     db.prepare("UPDATE rework_jobs SET STATUS='CANCELLED',NOTES=COALESCE(NOTES,'')||?,UPDATED_BY=?,UPDATED_AT=? WHERE REWORK_ID=?").bind(' | Cancelled: '+reason,a.userId,t,id),
     auditStmt(db,a,'CANCEL_REWORK','QC',id,JSON.stringify(rw),JSON.stringify({cancelled:true,reason}))
-  ]);return{REWORK_ID:id,cancelled:true}
+  ]);
+  await refreshQcReworkStatus(db,rw.QC_ID,a);
+  return{REWORK_ID:id,cancelled:true}
 }
 
 async function editHandover(db,r,a){
