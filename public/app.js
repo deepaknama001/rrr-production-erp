@@ -288,6 +288,17 @@ async function mountDataGrid(container,opt){
       if(!prefs.visibleColumns.length){cb.checked=true;prefs.visibleColumns=[col]}
       saveGridPrefs(key,prefs);render()
     });
+    colMenu.querySelectorAll('.col-up,.col-down').forEach(b=>b.onclick=e=>{e.stopPropagation();const k=b.dataset.colmove,i=prefs.columnOrder.indexOf(k),j=i+(b.classList.contains('col-up')?-1:1);if(i<0||j<0||j>=prefs.columnOrder.length)return;[prefs.columnOrder[i],prefs.columnOrder[j]]=[prefs.columnOrder[j],prefs.columnOrder[i]];saveGridPrefs(key,prefs);render()});
+    const viewBtn=container.querySelector('.view-btn'),viewMenu=container.querySelector('.view-menu');viewBtn.onclick=e=>{e.stopPropagation();viewMenu.classList.toggle('hidden')};viewMenu.onclick=e=>e.stopPropagation();
+    container.querySelector('.save-view-btn').onclick=()=>{const n=container.querySelector('.view-name').value.trim();if(!n)return toast('Enter a view name.','bad',2500);prefs.namedViews[n]=gridViewSnapshot(prefs);saveGridPrefs(key,prefs);toast('View saved: '+n,'ok',2200);render()};
+    container.querySelectorAll('.load-view').forEach(b=>b.onclick=()=>{const v=prefs.namedViews[b.dataset.view];if(!v)return;Object.assign(prefs,{...v,filters:structuredClone(v.filters||{}),visibleColumns:[...(v.visibleColumns||dataCols)],columnOrder:[...(v.columnOrder||dataCols)],columnWidths:{...(v.columnWidths||{})},page:1});saveGridPrefs(key,prefs);render()});
+    container.querySelectorAll('.delete-view').forEach(b=>b.onclick=()=>{delete prefs.namedViews[b.dataset.view];saveGridPrefs(key,prefs);render()});
+    container.querySelector('.density-btn').onclick=()=>{prefs.density=prefs.density==='compact'?'comfortable':'compact';saveGridPrefs(key,prefs);render()};
+    container.querySelector('.export-scope').onchange=e=>{prefs.exportScope=e.target.value;saveGridPrefs(key,prefs)};
+    container.querySelectorAll('.col-resizer').forEach(grip=>grip.onmousedown=e=>{e.preventDefault();e.stopPropagation();const k=grip.dataset.resize,th=grip.closest('th'),sx=e.clientX,sw=th.getBoundingClientRect().width;const move=ev=>{prefs.columnWidths[k]=Math.max(70,Math.min(520,sw+ev.clientX-sx));th.style.width=prefs.columnWidths[k]+'px';th.style.minWidth=prefs.columnWidths[k]+'px';th.style.maxWidth=prefs.columnWidths[k]+'px'};const up=()=>{document.removeEventListener('mousemove',move);document.removeEventListener('mouseup',up);saveGridPrefs(key,prefs);render()};document.addEventListener('mousemove',move);document.addEventListener('mouseup',up)});
+    const pageIds=pageRows.map(r=>r.__gridIndex),selectPage=container.querySelector('.select-page');if(selectPage){const all=pageIds.length&&pageIds.every(x=>selected.has(x));selectPage.checked=all;selectPage.indeterminate=!all&&pageIds.some(x=>selected.has(x));selectPage.onchange=()=>{for(const x of pageIds)selectPage.checked?selected.add(x):selected.delete(x);render()}}
+    container.querySelectorAll('.row-select').forEach(cb=>cb.onchange=()=>{const x=Number(cb.dataset.ridx);cb.checked?selected.add(x):selected.delete(x);render()});
+    container.querySelector('.clear-selection')?.addEventListener('click',()=>{selected.clear();render()});
     container.querySelector('.page-size').onchange=e=>{prefs.pageSize=Number(e.target.value);prefs.page=1;saveGridPrefs(key,prefs);render()};
     container.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>{prefs.page=Number(b.dataset.page);saveGridPrefs(key,prefs);render()});
     container.querySelector('.prev').onclick=()=>{if(prefs.page>1){prefs.page--;saveGridPrefs(key,prefs);render()}};
@@ -298,7 +309,7 @@ async function mountDataGrid(container,opt){
   rt.render=render;render();return rt
 }
 document.addEventListener('click',e=>{
-  if(!e.target.closest('.grid-tool-wrap'))document.querySelectorAll('.column-menu').forEach(x=>x.classList.add('hidden'));
+  if(!e.target.closest('.grid-tool-wrap'))document.querySelectorAll('.column-menu,.view-menu').forEach(x=>x.classList.add('hidden'));
   if(!e.target.closest('th'))document.querySelectorAll('.th-filter-menu').forEach(x=>x.classList.add('hidden'));
   if(!e.target.closest('.export-menu-wrap'))$('#exportMenu')?.classList.add('hidden')
 });
