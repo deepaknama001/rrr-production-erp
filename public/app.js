@@ -323,14 +323,14 @@ function summaryForModule(m,items){
   if(m==='production'){
     for(const r of items){
       const key=[r.DYE_BATCH_ID||'',r.STYLE_ID||r.STYLE||''].join('|'),g=add(key,{SUMMARY_ID:key,PLAN_DATE:r.PLAN_DATE,DYE_BATCH_ID:r.DYE_BATCH_ID,STYLE:r.STYLE,BATCH_COUNT:0,PLANNED_QTY:0,ALLOCATED_MTR:0,TOTAL_CUT:0},r);
-      g.BATCH_COUNT++;g.PLANNED_QTY+=Number(r.PLANNED_QTY||0);g.ALLOCATED_MTR+=Number(r.ALLOCATED_MTR||0);g.TOTAL_CUT+=Number(r.TOTAL_CUT||0)
+      g.BATCH_COUNT++;g.PLANNED_QTY+=Number(r.PLANNED_QTY||0);g.ALLOCATED_MTR+=Number(r.ALLOCATED_MTR||0);g.TOTAL_CUT+=Number(r.ACTUAL_CUT_QTY??r.TOTAL_CUT??0)
     }
     return [...groups.values()].map(g=>({...g,STATUS:g.__items.every(x=>/complete|closed|done/i.test(String(x.STATUS||'')))?'COMPLETE':'IN PROCESS'}))
   }
   if(m==='stitching'){
     for(const r of items){
       const key=String(r.PRODUCTION_BATCH_ID||r.CHALLAN_ID),g=add(key,{PRODUCTION_BATCH_ID:key,ISSUE_DATE:r.ISSUE_DATE,VENDORS:new Set(),CHALLAN_COUNT:0,TOTAL_ISSUED:0,TOTAL_RECEIVED:0,PENDING_QTY:0},r);
-      g.VENDORS.add(String(r.STITCHING_VENDOR||''));g.CHALLAN_COUNT++;g.TOTAL_ISSUED+=Number(r.TOTAL_ISSUED||0);g.TOTAL_RECEIVED+=Number(r.TOTAL_RECEIVED||0);g.PENDING_QTY+=Number(r.PENDING_QTY||0)
+      g.VENDORS.add(String(r.STITCHING_VENDOR||''));g.CHALLAN_COUNT++;g.TOTAL_ISSUED+=Number(r.ACTUAL_ISSUED??r.TOTAL_ISSUED??0);g.TOTAL_RECEIVED+=Number(r.ACTUAL_RECEIVED??r.TOTAL_RECEIVED??0);g.PENDING_QTY+=Number(r.PENDING_QTY||0)
     }
     return [...groups.values()].map(g=>({...g,STITCHING_VENDOR:[...g.VENDORS].filter(Boolean).join(', '),STATUS:g.PENDING_QTY<=.0001?'COMPLETE':'AT STITCHING'}))
   }
@@ -344,7 +344,7 @@ function summaryForModule(m,items){
   if(m==='handover'){
     for(const r of items){
       const key=String(r.PRODUCTION_BATCH_ID||r.HANDOVER_ID),g=add(key,{PRODUCTION_BATCH_ID:key,HANDOVER_DATE:r.HANDOVER_DATE,STYLES:new Set(),COLORS:new Set(),HANDOVER_COUNT:0,ACCEPTED_QTY:0,WAREHOUSE_RECEIVED_QTY:0,PENDING_QTY:0},r);
-      g.STYLES.add(String(r.STYLE||''));g.COLORS.add(String(r.COLOR||''));g.HANDOVER_COUNT++;g.ACCEPTED_QTY+=Number(r.ACCEPTED_QTY||0);g.WAREHOUSE_RECEIVED_QTY+=Number(r.WAREHOUSE_RECEIVED_QTY||0);g.PENDING_QTY+=Number(r.PENDING_QTY||0)
+      g.STYLES.add(String(r.STYLE||''));g.COLORS.add(String(r.COLOR||''));g.HANDOVER_COUNT++;g.ACCEPTED_QTY+=Number(r.ACCEPTED_QTY||0);g.WAREHOUSE_RECEIVED_QTY+=Number(r.TOTAL_WAREHOUSE_RECEIVED??r.WAREHOUSE_RECEIVED_QTY??0);g.PENDING_QTY+=Number(r.PENDING_QTY||0)
     }
     return [...groups.values()].map(g=>({...g,STYLE:[...g.STYLES].filter(Boolean).join(', '),COLOR:[...g.COLORS].filter(Boolean).join(', '),STATUS:g.PENDING_QTY<=.0001?'COMPLETE':'PENDING'}))
   }
@@ -418,13 +418,13 @@ async function renderModule(m,force=false){
   const cfg=configs[m],s=$('#stage');
   if(m==='dye')return renderDyeModule(force);
   s.innerHTML=`<section class="panel">
-    <div class="panel-head"><div><h3>${cfg.title}</h3><small>Summary, transaction detail and full genealogy</small></div><button class="btn teal" id="newBtn">+ ${cfg.action}</button></div>
+    <div class="panel-head"><div><h3>${cfg.title}</h3><small>Summary, transaction detail and full genealogy</small></div>${canAction(m,'create')?`<button class="btn teal" id="newBtn">+ ${cfg.action}</button>`:''}</div>
     <div class="master-tabs module-view-tabs" id="moduleViewTabs">
       <button data-view="summary">Summary View</button><button data-view="detail">Detail View</button><button data-view="trail">Trail View</button>
     </div>
     <div id="gridHost">Loading…</div>
   </section>`;
-  $('#newBtn').onclick=()=>openActionForm(m);
+  if($('#newBtn'))$('#newBtn').onclick=()=>openActionForm(m);
   try{
     const d=await getCachedModule(m,force),items=d.items||[],summaries=summaryForModule(m,items);
     let current='summary',selectedTrail=null;
@@ -448,9 +448,11 @@ async function renderModule(m,force=false){
       return mountDataGrid(host,{
         key:'module:'+m+':detail',title:cfg.title+' - Detail',items,columns:cfg.columns,filters:cfg.filters||[],
         actionRenderer:r=>{
-          if(m==='raw')return actionMenuHtml([{cls:'raw-manage-btn',label:'Manage'},{cls:'txn-trail-btn',label:'Trail'}],r.__gridIndex);
-          if(['production','stitching','qc','handover'].includes(m))return actionMenuHtml([{cls:'txn-cancel-btn',label:'Manage'},{cls:'txn-trail-btn',label:'Trail'}],r.__gridIndex);
-          return actionMenuHtml([{cls:'txn-trail-btn',label:'Trail'}],r.__gridIndex)
+          const actions=[];
+          if(m==='raw'&&(canAction('raw','edit')||canAction('raw','cancel')))actions.push({cls:'raw-manage-btn',label:'Manage'});
+          if(['production','stitching','qc','handover'].includes(m)&&(canAction(m,'edit')||canAction(m,'cancel')||canAction(m,'create')))actions.push({cls:'txn-cancel-btn',label:'Manage'});
+          if(canAction(m,'view'))actions.push({cls:'txn-trail-btn',label:'Trail'});
+          return actionMenuHtml(actions,r.__gridIndex)
         },
         bindActions:(pageRows,h)=>{
           if(m==='raw')h.querySelectorAll('.raw-manage-btn').forEach(b=>b.onclick=()=>openRawManage(items[Number(b.dataset.idx)]));
@@ -506,7 +508,7 @@ async function renderDyeModule(force=false){
   s.innerHTML=`<section class="panel">
     <div class="panel-head">
       <div><h3>Dyeing</h3><small>Plan-level control with color/batch drill-down</small></div>
-      <button class="btn teal" id="newBtn">+ New Dye Plan</button>
+      ${canAction('dye','create')?'<button class="btn teal" id="newBtn">+ New Dye Plan</button>':''}
     </div>
     <div class="master-tabs dye-view-tabs" id="dyeViewTabs">
       <button data-view="plan">Plan View</button>
@@ -515,7 +517,7 @@ async function renderDyeModule(force=false){
     </div>
     <div id="gridHost">Loading…</div>
   </section>`;
-  $('#newBtn').onclick=()=>openActionForm('dye');
+  if($('#newBtn'))$('#newBtn').onclick=()=>openActionForm('dye');
   try{
     const d=await getCachedModule('dye',force),items=d.items||[];
     let view='plan',selectedTrail=null;
@@ -775,24 +777,13 @@ async function openRawManage(row){
     try{await api('/api/data',{method:'POST',activity:'Cancelling raw inward…',success:'Raw inward cancelled',body:JSON.stringify({module:'raw_cancel',record:{ROLL_ID:row.ROLL_ID,REASON:reason},requestId:newRequestId()})});dropCaches();closeModal();go('raw',true)}catch(err){toast(err.message,'bad',5000)}
   });
 }
-function openTxnManage(module,row){
-  const map={
-    production:{id:'PRODUCTION_BATCH_ID',cancel:'production_cancel',label:'Production Batch'},
-    stitching:{id:'CHALLAN_ID',cancel:'stitching_cancel',label:'Stitching Challan'},
-    qc:{id:'QC_ID',cancel:'qc_cancel',label:'QC Entry'},
-    handover:{id:'HANDOVER_ID',cancel:'handover_cancel',label:'Warehouse Handover'}
-  },cfg=map[module];if(!cfg)return;
-  const id=row[cfg.id];
-  $('#modalBody').innerHTML=`
-    <div class="panel-head"><div><h3>Manage ${cfg.label}</h3><small>${esc(id)} · safe correction policy</small></div><button class="btn ghost" id="closeModal">Close</button></div>
-    <div class="smart-note"><b>Global dependency rule:</b> cancellation is allowed only while no downstream transaction depends on this entry. If dependency exists, the system will block it and tell you what must be reversed first.</div>
-    <div class="danger-zone"><div><b>Cancel mistaken entry</b><small>Balances will recalculate automatically and the action will be audit logged.</small></div><button class="btn danger" id="cancelTxnBtn">Cancel Entry</button></div>`;
-  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;
-  $('#cancelTxnBtn').onclick=async()=>{
-    if(!confirm('Cancel '+cfg.label+' '+id+'?'))return;const reason=prompt('Reason for cancellation:','Mistaken entry')||'Mistaken entry';
-    try{await api('/api/data',{method:'POST',activity:'Cancelling entry…',success:'Entry cancelled',body:JSON.stringify({module:cfg.cancel,record:{[cfg.id]:id,REASON:reason},requestId:newRequestId()})});dropCaches();closeModal();go(module,true)}catch(err){toast(err.message,'bad',5000)}
-  }
+async function openTxnManage(module,row){
+  if(module==='production')return openProductionManage(row);
+  if(module==='stitching')return openStitchingManage(row);
+  if(module==='qc')return openQcManage(row);
+  if(module==='handover')return openHandoverManage(row)
 }
+
 async function openDyeIssue(){
   const requestId=newRequestId();let l;
   try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
