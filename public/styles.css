@@ -277,3 +277,18 @@ button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justif
   .data th{font-size:9px;padding:10px}.data td{font-size:11px;padding:10px}
   .th-filter-menu{width:220px}
 }
+
+/* v0.21 Ensure floating filter popups remain fully accessible */
+.th-filter-menu{
+  overflow:hidden;
+}
+.th-filter-values{
+  max-height:240px;
+  overflow:auto;
+}
+.th-filter-actions{
+  position:sticky;
+  bottom:0;
+  background:#fff;
+  z-index:2;
+}
