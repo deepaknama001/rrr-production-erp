@@ -1122,6 +1122,191 @@ async function saveHandover(db,r,a,req=''){
     ]);return{HANDOVER_ID:id}
   }finally{await releaseLock(db,'warehouse-ready:'+pb+':'+style+':'+color+':'+size)}
 }
+
+async function editProduction(db,r,a,req=''){
+  const id=String(r.PRODUCTION_BATCH_ID||''),old=await row(db,"SELECT * FROM production_batches WHERE PRODUCTION_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id);
+  if(!old)throw err('Production batch not found.',404);
+  const cut=await row(db,"SELECT 1 ok FROM production_cut_actuals WHERE PRODUCTION_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id);
+  const stitch=n((await row(db,"SELECT COUNT(*) c FROM stitching_jobs WHERE PRODUCTION_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
+  const newAlloc=n(r.ALLOCATED_MTR??old.ALLOCATED_MTR),newStyle=String(r.STYLE_ID??old.STYLE_ID),newDate=dateOnly(r.PLAN_DATE||old.PLAN_DATE),planned=intQty(r.PLANNED_QTY??old.PLANNED_QTY,'Planned garment quantity');
+  if(cut||stitch){
+    if(Math.abs(newAlloc-n(old.ALLOCATED_MTR))>.0001||newStyle!==String(old.STYLE_ID))throw err('Style and allocated meter are locked after cutting/stitching starts.',409)
+  }else{
+    requirePos(newAlloc,'Allocated meter');
+    const st=await row(db,'SELECT * FROM styles WHERE STYLE_ID=? AND ACTIVE=1',newStyle);if(!st)throw err('Select a valid active style.',400);
+    if(st.DEFAULT_FABRIC_ID&&String(st.DEFAULT_FABRIC_ID)!==String(old.FABRIC_ID))throw err('Selected style is mapped to a different fabric.',409);
+    const available=await dyeBalance(db,old.DYE_BATCH_ID)+n(old.ALLOCATED_MTR);
+    if(newAlloc>available+.0001)throw err('Allocated meter exceeds dyed usable balance. Available including current allocation: '+available.toFixed(2),409)
+  }
+  await acquireLock(db,'production:'+id,req);
+  try{
+    const t=now();
+    await db.batch([
+      db.prepare('UPDATE production_batches SET PLAN_DATE=?,STYLE_ID=?,PLANNED_QTY=?,ALLOCATED_MTR=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE PRODUCTION_BATCH_ID=?')
+        .bind(newDate,newStyle,planned,newAlloc,String(r.NOTES??old.NOTES??''),a.userId,t,id),
+      auditStmt(db,a,'EDIT_PRODUCTION','PRODUCTION',id,JSON.stringify(old),JSON.stringify({PLAN_DATE:newDate,STYLE_ID:newStyle,PLANNED_QTY:planned,ALLOCATED_MTR:newAlloc,NOTES:String(r.NOTES??old.NOTES??'')}))
+    ]);
+    return await getProductionDetail(db,id)
+  }finally{await releaseLock(db,'production:'+id)}
+}
+
+async function editStitching(db,r,a,req=''){
+  const id=String(r.CHALLAN_ID||''),old=await row(db,"SELECT * FROM stitching_jobs WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id);
+  if(!old)throw err('Stitching challan not found.',404);
+  const receipts=n((await row(db,"SELECT COUNT(*) c FROM stitching_receipts WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
+  const qc=n((await row(db,"SELECT COUNT(*) c FROM qc_events WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
+  if(receipts||qc)throw err('Issue quantities/vendor are locked after receipt or QC. Reverse downstream first.',409);
+  const vendor=String(r.STITCHING_VENDOR_ID??old.STITCHING_VENDOR_ID);
+  if(!await row(db,'SELECT 1 ok FROM vendors WHERE VENDOR_ID=? AND ACTIVE=1 AND STITCHING_VENDOR=1',vendor))throw err('Select a valid active Stitching Vendor.',400);
+  let items=Array.isArray(r.items)?r.items:await issueLinesForChallan(db,id),lines=[],seen=new Set();
+  const base=await cutBalanceLines(db,old.PRODUCTION_BATCH_ID),current=await issueLinesForChallan(db,id);
+  const available=Object.fromEntries(base.map(x=>[x.SIZE_ID,x.BALANCE_QTY]));
+  for(const x of current)available[x.SIZE_ID]=(available[x.SIZE_ID]||0)+x.QTY;
+  for(const x of items){
+    const sid=String(x.SIZE_ID||'');if(!sid)continue;if(seen.has(sid))throw err('Same size cannot appear twice.',409);seen.add(sid);
+    const qty=intQty(x.QTY,'Issue quantity');if(qty>(available[sid]||0))throw err('Issue exceeds available cut stock for size '+sid+'. Available: '+(available[sid]||0),409);
+    if(qty>0)lines.push({SIZE_ID:sid,QTY:qty})
+  }
+  const total=lines.reduce((s,x)=>s+x.QTY,0);if(total<=0)throw err('Total stitching issue must be greater than 0.',400);
+  await acquireLock(db,'production:'+old.PRODUCTION_BATCH_ID,req);
+  try{
+    const t=now(),legacy={M:0,L:0,XL:0,'2XL':0,'3XL':0,OTHER:0};
+    for(const x of lines){const sr=await sizeMasterRow(db,x.SIZE_ID),nm=legacySizeName(sr?.SIZE_NAME||x.SIZE_ID);if(nm)legacy[nm]+=x.QTY}
+    const stmts=[
+      db.prepare('UPDATE stitching_jobs SET ISSUE_DATE=?,STITCHING_VENDOR_ID=?,M_ISSUED=?,L_ISSUED=?,XL_ISSUED=?,"2XL_ISSUED"=?,"3XL_ISSUED"=?,OTHER_ISSUED=?,TOTAL_ISSUED=?,PENDING_QTY=?,STATUS=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE CHALLAN_ID=?')
+        .bind(dateOnly(r.ISSUE_DATE||old.ISSUE_DATE),vendor,legacy.M,legacy.L,legacy.XL,legacy['2XL'],legacy['3XL'],legacy.OTHER,total,total,'PENDING FROM VENDOR',String(r.NOTES??old.NOTES??''),a.userId,t,id),
+      db.prepare('DELETE FROM stitching_issue_lines WHERE CHALLAN_ID=?').bind(id)
+    ];
+    for(const x of lines)stmts.push(db.prepare('INSERT INTO stitching_issue_lines(LINE_ID,CHALLAN_ID,SIZE_ID,QTY,CREATED_AT,UPDATED_AT) VALUES(?,?,?,?,?,?)').bind(uuid(),id,x.SIZE_ID,x.QTY,t,t));
+    stmts.push(auditStmt(db,a,'EDIT_STITCHING','STITCHING',id,JSON.stringify(old),JSON.stringify({vendor,total,lines})));
+    await db.batch(stmts);return await getStitchingDetail(db,id)
+  }finally{await releaseLock(db,'production:'+old.PRODUCTION_BATCH_ID)}
+}
+
+async function refreshStitchingHeader(db,challan,a){
+  const st=await row(db,'SELECT * FROM stitching_jobs WHERE CHALLAN_ID=?',challan);if(!st)return;
+  const received=await receivedLinesForChallan(db,challan),total=received.reduce((s,x)=>s+x.QTY,0),issued=(await issueLinesForChallan(db,challan)).reduce((s,x)=>s+x.QTY,0),pending=Math.max(0,issued-total),legacy={M:0,L:0,XL:0,'2XL':0,'3XL':0,OTHER:0};
+  for(const x of received){const nm=legacySizeName(x.SIZE_NAME||x.SIZE_ID);if(nm)legacy[nm]+=x.QTY}
+  await db.prepare('UPDATE stitching_jobs SET M_RECEIVED=?,L_RECEIVED=?,XL_RECEIVED=?,"2XL_RECEIVED"=?,"3XL_RECEIVED"=?,OTHER_RECEIVED=?,TOTAL_RECEIVED=?,PENDING_QTY=?,STATUS=?,UPDATED_BY=?,UPDATED_AT=? WHERE CHALLAN_ID=?')
+    .bind(legacy.M,legacy.L,legacy.XL,legacy['2XL'],legacy['3XL'],legacy.OTHER,total,pending,pending>0?'PARTIAL RECEIVED':'RECEIVED COMPLETE',a.userId,now(),challan).run()
+}
+async function saveStitchingReceipt(db,r,a,req=''){
+  const challan=String(r.CHALLAN_ID||''),st=await row(db,"SELECT * FROM stitching_jobs WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",challan);if(!st)throw err('Invalid stitching challan.',400);
+  const pending=await stitchingPendingLines(db,challan),bal=Object.fromEntries(pending.map(x=>[x.SIZE_ID,x.PENDING_QTY])),items=Array.isArray(r.items)?r.items:[],lines=[],seen=new Set();
+  for(const x of items){const sid=String(x.SIZE_ID||'');if(!sid)continue;if(seen.has(sid))throw err('Same size cannot appear twice.',409);seen.add(sid);const qty=intQty(x.QTY,'Receipt quantity');if(qty>(bal[sid]||0))throw err('Receipt exceeds pending quantity for selected size. Pending: '+(bal[sid]||0),409);if(qty>0)lines.push({SIZE_ID:sid,QTY:qty})}
+  const total=lines.reduce((s,x)=>s+x.QTY,0);if(total<=0)throw err('Enter at least one received piece.',400);
+  await acquireLock(db,'stitching:'+challan,req);
+  try{
+    const fresh=await stitchingPendingLines(db,challan),fb=Object.fromEntries(fresh.map(x=>[x.SIZE_ID,x.PENDING_QTY]));for(const x of lines)if(x.QTY>(fb[x.SIZE_ID]||0))throw err('Pending quantity changed. Refresh and retry.',409);
+    const id=await nextId(db,'SR'),t=now(),stmts=[db.prepare('INSERT INTO stitching_receipts(RECEIPT_ID,CHALLAN_ID,RECEIPT_DATE,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,challan,dateOnly(r.RECEIPT_DATE),'RECEIVED',String(r.NOTES||''),a.userId,t,a.userId,t)];
+    for(const x of lines)stmts.push(db.prepare('INSERT INTO stitching_receipt_lines(LINE_ID,RECEIPT_ID,CHALLAN_ID,SIZE_ID,QTY,CREATED_AT,UPDATED_AT) VALUES(?,?,?,?,?,?,?)').bind(uuid(),id,challan,x.SIZE_ID,x.QTY,t,t));
+    stmts.push(auditStmt(db,a,'STITCHING_RECEIVE','STITCHING',challan,'',JSON.stringify({receiptId:id,lines,total})));
+    await db.batch(stmts);await refreshStitchingHeader(db,challan,a);return await getStitchingDetail(db,challan)
+  }finally{await releaseLock(db,'stitching:'+challan)}
+}
+async function cancelStitchingReceipt(db,r,a){
+  const id=String(r.RECEIPT_ID||''),rec=await row(db,"SELECT * FROM stitching_receipts WHERE RECEIPT_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id);if(!rec)throw err('Stitching receipt not found.',404);
+  const qc=n((await row(db,"SELECT COUNT(*) c FROM qc_events WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",rec.CHALLAN_ID))?.c);if(qc)throw err('Receipt cannot be cancelled after QC exists on this challan. Reverse QC first.',409);
+  const reason=String(r.REASON||'Mistaken entry'),t=now();
+  await db.batch([
+    db.prepare("UPDATE stitching_receipts SET STATUS='CANCELLED',NOTES=COALESCE(NOTES,'')||?,UPDATED_BY=?,UPDATED_AT=? WHERE RECEIPT_ID=?").bind(' | Cancelled: '+reason,a.userId,t,id),
+    auditStmt(db,a,'CANCEL_STITCH_RECEIPT','STITCHING',id,JSON.stringify(rec),JSON.stringify({cancelled:true,reason}))
+  ]);
+  await refreshStitchingHeader(db,rec.CHALLAN_ID,a);return{RECEIPT_ID:id,cancelled:true}
+}
+
+async function editQc(db,r,a){
+  const id=String(r.QC_ID||''),old=await row(db,"SELECT * FROM qc_events WHERE QC_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id);if(!old)throw err('QC entry not found.',404);
+  const rw=n((await row(db,"SELECT COUNT(*) c FROM rework_jobs WHERE QC_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c),wh=n((await row(db,"SELECT COUNT(*) c FROM warehouse_handover WHERE PRODUCTION_BATCH_ID=? AND STYLE_ID=? AND COLOR_ID=? AND SIZE=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",old.PRODUCTION_BATCH_ID,old.STYLE_ID,old.COLOR_ID,old.SIZE))?.c);
+  if(rw||wh)throw err('QC quantities are locked after rework or warehouse handover starts.',409);
+  const q=intQty(r.QC_QTY??old.QC_QTY,'QC quantity',false),pass=intQty(r.PASS_QTY??old.PASS_QTY,'Pass quantity'),rework=intQty(r.REWORK_QTY??old.REWORK_QTY,'Rework quantity'),reject=intQty(r.REJECT_QTY??old.REJECT_QTY,'Reject quantity');
+  if(pass+rework+reject!==q)throw err('Pass + Rework + Reject must exactly equal QC Qty.',409);
+  const pending=(await qcPendingLines(db,old.CHALLAN_ID)).find(x=>x.SIZE_ID===old.SIZE||String(x.SIZE_NAME).toUpperCase()===String(old.SIZE).toUpperCase())?.PENDING_QTY||0;
+  if(q>pending+intQty(old.QC_QTY,'Existing QC qty'))throw err('QC quantity exceeds received quantity available for this size.',409);
+  const t=now();await db.batch([
+    db.prepare('UPDATE qc_events SET QC_DATE=?,QC_QTY=?,PASS_QTY=?,REWORK_QTY=?,REJECT_QTY=?,FINAL_ACCEPTED_QTY=?,DEFECT_REASON=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE QC_ID=?')
+      .bind(dateOnly(r.QC_DATE||old.QC_DATE),q,pass,rework,reject,pass,String(r.DEFECT_REASON??old.DEFECT_REASON??''),String(r.NOTES??old.NOTES??''),a.userId,t,id),
+    auditStmt(db,a,'EDIT_QC','QC',id,JSON.stringify(old),JSON.stringify({q,pass,rework,reject}))
+  ]);return await getQcDetail(db,id)
+}
+async function saveReworkIssue(db,r,a,req=''){
+  const qcId=String(r.QC_ID||''),q=await row(db,"SELECT * FROM qc_events WHERE QC_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",qcId);if(!q)throw err('QC entry not found.',404);
+  const issued=n((await row(db,"SELECT COALESCE(SUM(ISSUE_QTY),0) q FROM rework_jobs WHERE QC_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",qcId))?.q),available=intQty(q.REWORK_QTY,'QC rework qty')-Math.round(issued),qty=intQty(r.ISSUE_QTY,'Rework issue quantity',false);
+  if(qty>available)throw err('Rework issue exceeds available rework quantity. Available: '+available,409);
+  const vendor=String(r.VENDOR_ID||q.VENDOR_ID||'');if(vendor&&!await row(db,'SELECT 1 ok FROM vendors WHERE VENDOR_ID=? AND ACTIVE=1',vendor))throw err('Invalid active rework vendor.',400);
+  await acquireLock(db,'qc:'+qcId,req);
+  try{
+    const id=await nextId(db,'RW'),t=now();
+    await db.batch([
+      db.prepare('INSERT INTO rework_jobs(REWORK_ID,QC_ID,CHALLAN_ID,PRODUCTION_BATCH_ID,VENDOR_ID,SIZE_ID,ISSUE_DATE,ISSUE_QTY,RETURNED_QTY,PASS_QTY,REJECT_QTY,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .bind(id,qcId,q.CHALLAN_ID,q.PRODUCTION_BATCH_ID,vendor,q.SIZE,dateOnly(r.ISSUE_DATE),qty,0,0,0,'AT REWORK',String(r.NOTES||''),a.userId,t,a.userId,t),
+      auditStmt(db,a,'REWORK_ISSUE','QC',id,'',JSON.stringify({qcId,qty,vendor}))
+    ]);return{REWORK_ID:id}
+  }finally{await releaseLock(db,'qc:'+qcId)}
+}
+async function saveReworkReceive(db,r,a,req=''){
+  const id=String(r.REWORK_ID||''),rw=await row(db,"SELECT * FROM rework_jobs WHERE REWORK_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id);if(!rw)throw err('Rework job not found.',404);
+  const ret=intQty(r.RETURN_QTY,'Rework return quantity',false),pass=intQty(r.PASS_QTY,'Rework pass quantity'),reject=intQty(r.REJECT_QTY,'Rework reject quantity');if(pass+reject!==ret)throw err('Rework pass + reject must equal returned qty.',409);
+  const remaining=intQty(rw.ISSUE_QTY,'Issue quantity')-intQty(rw.RETURNED_QTY,'Returned quantity');if(ret>remaining)throw err('Return exceeds rework pending quantity. Pending: '+remaining,409);
+  await acquireLock(db,'qc:'+rw.QC_ID,req);
+  try{
+    const q=await row(db,'SELECT * FROM qc_events WHERE QC_ID=?',rw.QC_ID);if(!q)throw err('Source QC not found.',409);
+    const newReturned=intQty(rw.RETURNED_QTY,'Returned quantity')+ret,newPass=intQty(rw.PASS_QTY,'Pass quantity')+pass,newReject=intQty(rw.REJECT_QTY,'Reject quantity')+reject,status=newReturned>=intQty(rw.ISSUE_QTY,'Issue quantity')?'REWORK CLOSED':'PARTIAL REWORK RETURN',t=now();
+    await db.batch([
+      db.prepare('UPDATE rework_jobs SET RETURNED_QTY=?,PASS_QTY=?,REJECT_QTY=?,STATUS=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE REWORK_ID=?').bind(newReturned,newPass,newReject,status,String(r.NOTES??rw.NOTES??''),a.userId,t,id),
+      db.prepare('UPDATE qc_events SET REWORK_RETURNED_QTY=COALESCE(REWORK_RETURNED_QTY,0)+?,FINAL_ACCEPTED_QTY=COALESCE(FINAL_ACCEPTED_QTY,0)+?,STATUS=?,UPDATED_BY=?,UPDATED_AT=? WHERE QC_ID=?').bind(ret,pass,status==='REWORK CLOSED'?'QC COMPLETE':'REWORK PARTIAL',a.userId,t,rw.QC_ID),
+      auditStmt(db,a,'REWORK_RECEIVE','QC',id,JSON.stringify(rw),JSON.stringify({returnQty:ret,pass,reject,status}))
+    ]);return await getQcDetail(db,rw.QC_ID)
+  }finally{await releaseLock(db,'qc:'+rw.QC_ID)}
+}
+async function cancelRework(db,r,a){
+  const id=String(r.REWORK_ID||''),rw=await row(db,"SELECT * FROM rework_jobs WHERE REWORK_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id);if(!rw)throw err('Rework job not found.',404);
+  if(intQty(rw.RETURNED_QTY,'Returned quantity')>0)throw err('Rework cannot be cancelled after return is received. Correct downstream QC instead.',409);
+  const reason=String(r.REASON||'Mistaken entry'),t=now();await db.batch([
+    db.prepare("UPDATE rework_jobs SET STATUS='CANCELLED',NOTES=COALESCE(NOTES,'')||?,UPDATED_BY=?,UPDATED_AT=? WHERE REWORK_ID=?").bind(' | Cancelled: '+reason,a.userId,t,id),
+    auditStmt(db,a,'CANCEL_REWORK','QC',id,JSON.stringify(rw),JSON.stringify({cancelled:true,reason}))
+  ]);return{REWORK_ID:id,cancelled:true}
+}
+
+async function editHandover(db,r,a){
+  const id=String(r.HANDOVER_ID||''),old=await row(db,"SELECT * FROM warehouse_handover WHERE HANDOVER_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id);if(!old)throw err('Handover not found.',404);
+  const extra=n((await row(db,"SELECT COUNT(*) c FROM warehouse_receipts WHERE HANDOVER_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
+  const accepted=intQty(r.ACCEPTED_QTY??old.ACCEPTED_QTY,'Handover quantity',false),received=intQty(r.WAREHOUSE_RECEIVED_QTY??old.WAREHOUSE_RECEIVED_QTY,'Warehouse received quantity');
+  if(received>accepted)throw err('Warehouse received cannot exceed handover qty.',409);
+  if(extra&&(accepted!==intQty(old.ACCEPTED_QTY)||received!==intQty(old.WAREHOUSE_RECEIVED_QTY)))throw err('Quantities are locked after additional warehouse receipts. Only date/reference/notes can be edited.',409);
+  if(!extra){
+    const ready=(await warehouseReady(db)).find(x=>String(x.PRODUCTION_BATCH_ID)===String(old.PRODUCTION_BATCH_ID)&&String(x.STYLE_ID)===String(old.STYLE_ID)&&String(x.COLOR_ID)===String(old.COLOR_ID)&&String(x.SIZE)===String(old.SIZE));
+    const max=intQty(old.ACCEPTED_QTY,'Current handover')+intQty(ready?.PENDING_QTY||0,'Available quantity');if(accepted>max)throw err('Handover qty exceeds QC-passed availability.',409)
+  }
+  const pending=Math.max(0,accepted-received),t=now();await db.batch([
+    db.prepare('UPDATE warehouse_handover SET HANDOVER_DATE=?,ACCEPTED_QTY=?,WAREHOUSE_RECEIVED_QTY=?,PENDING_QTY=?,WAREHOUSE_REF=?,STATUS=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE HANDOVER_ID=?')
+      .bind(dateOnly(r.HANDOVER_DATE||old.HANDOVER_DATE),accepted,received,pending,String(r.WAREHOUSE_REF??old.WAREHOUSE_REF??''),pending?'PARTIAL':'RECEIVED',String(r.NOTES??old.NOTES??''),a.userId,t,id),
+    auditStmt(db,a,'EDIT_HANDOVER','HANDOVER',id,JSON.stringify(old),JSON.stringify({accepted,received,pending}))
+  ]);return await getHandoverDetail(db,id)
+}
+async function saveWarehouseReceipt(db,r,a,req=''){
+  const id=String(r.HANDOVER_ID||''),h=await getHandoverDetail(db,id),qty=intQty(r.RECEIVED_QTY,'Warehouse receipt quantity',false);if(qty>intQty(h.PENDING_QTY,'Pending quantity'))throw err('Receipt exceeds pending warehouse quantity. Pending: '+h.PENDING_QTY,409);
+  await acquireLock(db,'handover:'+id,req);
+  try{
+    const fresh=await getHandoverDetail(db,id);if(qty>intQty(fresh.PENDING_QTY,'Pending quantity'))throw err('Warehouse pending quantity changed. Refresh and retry.',409);
+    const rid=await nextId(db,'WR'),t=now(),newPending=intQty(fresh.PENDING_QTY)-qty;
+    await db.batch([
+      db.prepare('INSERT INTO warehouse_receipts(RECEIPT_ID,HANDOVER_ID,RECEIPT_DATE,RECEIVED_QTY,WAREHOUSE_REF,NOTES,STATUS,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(rid,id,dateOnly(r.RECEIPT_DATE),qty,String(r.WAREHOUSE_REF||''),String(r.NOTES||''),'RECEIVED',a.userId,t,a.userId,t),
+      db.prepare('UPDATE warehouse_handover SET PENDING_QTY=?,STATUS=?,UPDATED_BY=?,UPDATED_AT=? WHERE HANDOVER_ID=?').bind(newPending,newPending?'PARTIAL':'RECEIVED',a.userId,t,id),
+      auditStmt(db,a,'WAREHOUSE_RECEIVE','HANDOVER',id,'',JSON.stringify({receiptId:rid,qty}))
+    ]);return await getHandoverDetail(db,id)
+  }finally{await releaseLock(db,'handover:'+id)}
+}
+async function cancelWarehouseReceipt(db,r,a){
+  const id=String(r.RECEIPT_ID||''),rec=await row(db,"SELECT * FROM warehouse_receipts WHERE RECEIPT_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id);if(!rec)throw err('Warehouse receipt not found.',404);
+  const reason=String(r.REASON||'Mistaken entry'),t=now();
+  await db.batch([
+    db.prepare("UPDATE warehouse_receipts SET STATUS='CANCELLED',NOTES=COALESCE(NOTES,'')||?,UPDATED_BY=?,UPDATED_AT=? WHERE RECEIPT_ID=?").bind(' | Cancelled: '+reason,a.userId,t,id),
+    auditStmt(db,a,'CANCEL_WAREHOUSE_RECEIPT','HANDOVER',id,JSON.stringify(rec),JSON.stringify({cancelled:true,reason}))
+  ]);
+  const h=await getHandoverDetail(db,rec.HANDOVER_ID);await db.prepare('UPDATE warehouse_handover SET PENDING_QTY=?,STATUS=?,UPDATED_BY=?,UPDATED_AT=? WHERE HANDOVER_ID=?').bind(h.PENDING_QTY,h.PENDING_QTY?'PARTIAL':'RECEIVED',a.userId,now(),rec.HANDOVER_ID).run();return{RECEIPT_ID:id,cancelled:true}
+}
+
 async function reserveRequest(db,id,module){
   if(!id)return{owner:true};
   const ins=await db.prepare("INSERT OR IGNORE INTO request_log(request_id,module,result_json,created_at) VALUES(?,?,?,?)").bind(id,module,'__PENDING__',now()).run();
