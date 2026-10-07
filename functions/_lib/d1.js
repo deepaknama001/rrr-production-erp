@@ -27,7 +27,8 @@ let schemaReadyPromise=null;
 async function ensureSchema(env){
   if(!env?.DB)return;
   if(!schemaReadyPromise)schemaReadyPromise=(async()=>{
-    await env.DB.exec(D1_SCHEMA);
+    const ready=await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").first();
+    if(!ready)throw err('D1 schema is not initialized. Run the database migrations first.',503);
     try{
       await env.DB.batch([
         env.DB.prepare("DELETE FROM request_log WHERE created_at < datetime('now','-7 day')"),
