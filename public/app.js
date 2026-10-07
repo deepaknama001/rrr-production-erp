@@ -1,4 +1,4 @@
-const APP_BUILD='0.16';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.17';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -139,7 +139,16 @@ async function renderModule(m,force=false){
     });
   }catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}
 }
-function badge(v){const s=String(v||''),cl=/reject|defect|negative/i.test(s)?'danger':/pending|partial|rework|vendor/i.test(s)?'warn':'ok';return `<span class="badge ${cl}">${esc(s)}</span>`}
+function badge(v){
+  const s=String(v||'').trim(),x=s.toUpperCase();let cl='neutral';
+  if(/CANCEL|REJECT|DEFECT|FAILED|ERROR|SHORT|NEGATIVE|BLOCK/.test(x))cl='danger';
+  else if(/REWORK|HOLD|PARTIAL|PENDING|WAIT|DUE|OPEN/.test(x))cl='warn';
+  else if(/AT DYE|AT STITCH|IN PROCESS|PROCESSING|ISSUED|PLANNED|ALLOCATED|CUTTING/.test(x))cl='info';
+  else if(/EXCESS|EXTRA|OVER/.test(x))cl='purple';
+  else if(/AVAILABLE|ACTIVE|RECEIVED EXACT|RECEIVED$|CLOSED|COMPLETE|COMPLETED|PASSED|PASS|READY|DONE|SUCCESS/.test(x))cl='ok';
+  else if(/FULLY ISSUED|DISABLED|INACTIVE/.test(x))cl='muted';
+  return `<span class="badge ${cl}">${esc(s)}</span>`
+}
 async function openActionForm(m){
   if(m==='raw')return openRawInward();
   if(m==='dye')return openDyeIssue();
