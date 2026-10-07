@@ -1230,49 +1230,70 @@ async function openProductionPlan(){
 
 async function openStitchingIssue(){
   const requestId=newRequestId();let l;try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
-  const vendors=(l.vendors||[]).filter(v=>isTrue(v.STITCHING_VENDOR)&&isTrue(v.ACTIVE)),batches=l.productionBatches||[];
+  const vendors=(l.vendors||[]).filter(v=>isTrue(v.STITCHING_VENDOR)&&isTrue(v.ACTIVE)),batches=l.productionBatches||[],sizes=(l.sizes||[]).filter(x=>isTrue(x.ACTIVE));
   if(!vendors.length)return toast('Create an active Stitching Vendor in Masters → Vendors.','bad',4200);
+  if(!sizes.length)return toast('Create active Sizes in Masters → Sizes.','bad',4200);
   if(!batches.length)return toast('No cut-piece stock is available for stitching issue. Complete cutting first.','bad',4200);
   $('#modalBody').innerHTML=`
-    <div class="panel-head"><div><h3>Create Stitching Challan</h3><small>Only production batches with unissued cut pieces are shown.</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <div class="panel-head"><div><h3>Create Stitching Issue</h3><small>Size-wise available cut stock loads from the selected production batch.</small></div><button class="btn ghost" id="closeModal">Close</button></div>
     <form id="stitchSmartForm"><div class="form-grid">
       <div class="field"><label>Issue Date</label><input name="ISSUE_DATE" type="date" required value="${todayLocal()}"></div>
       <div class="field"><label>Stitching Vendor</label><select name="STITCHING_VENDOR_ID" required><option value="">Select stitching vendor</option>${vendorOptions(vendors,'STITCHING_VENDOR')}</select></div>
-      <div class="field wide"><label>Production Batch</label><select name="PRODUCTION_BATCH_ID" id="stitchBatch" required><option value="">Select cut batch</option>${batches.map(b=>`<option value="${esc(b.PRODUCTION_BATCH_ID)}">${esc(b.PRODUCTION_BATCH_ID)} · ${esc(b.STYLE_NAME||b.STYLE)} · ${esc(b.COLOR_NAME||b.COLOR_ID)} · ${moneyless(b.CUT_BALANCE)} pcs available</option>`).join('')}</select></div>
-      <div class="field"><label>Available Cut Pieces</label><input id="stitchAvail" readonly value="—"></div>
-      <div class="field"><label>M <small id="balM"></small></label><input name="M_ISSUED" type="number" min="0" step="1" value="0"></div>
-      <div class="field"><label>L <small id="balL"></small></label><input name="L_ISSUED" type="number" min="0" step="1" value="0"></div>
-      <div class="field"><label>XL <small id="balXL"></small></label><input name="XL_ISSUED" type="number" min="0" step="1" value="0"></div>
-      <div class="field"><label>2XL <small id="bal2XL"></small></label><input name="2XL_ISSUED" type="number" min="0" step="1" value="0"></div>
-      <div class="field"><label>3XL <small id="bal3XL"></small></label><input name="3XL_ISSUED" type="number" min="0" step="1" value="0"></div>
-      <div class="field"><label>Other <small id="balOTHER"></small></label><input name="OTHER_ISSUED" type="number" min="0" step="1" value="0"></div>
+      <div class="field wide"><label>Production Batch</label><select name="PRODUCTION_BATCH_ID" id="stitchBatch" required><option value="">Select cut batch</option>${batches.map(b=>`<option value="${esc(b.PRODUCTION_BATCH_ID)}">${esc(b.PRODUCTION_BATCH_ID)} · ${esc(b.STYLE_NAME||b.STYLE||'')} · ${esc(b.COLOR_NAME||b.COLOR_ID||'')} · ${Number(b.CUT_BALANCE||0)} pcs available</option>`).join('')}</select></div>
       <div class="field wide"><label>Notes</label><input name="NOTES"></div>
-    </div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Create Challan</button></div></form>`;
+    </div>
+    <div class="subsection"><h4>Size-wise Issue</h4><div id="stitchSizeHost" class="dynamic-size-grid"><div class="field wide"><small>Select production batch first.</small></div></div><div class="size-total">Total Issue <b id="stitchIssueTotal">0</b> pcs</div></div>
+    <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Create Stitching Issue</button></div></form>`;
   $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
-  $('#stitchBatch').onchange=e=>{const b=batches.find(x=>String(x.PRODUCTION_BATCH_ID)===String(e.target.value));$('#stitchAvail').value=b?moneyless(b.CUT_BALANCE)+' pcs':'—';const pairs=[['M','M_BALANCE'],['L','L_BALANCE'],['XL','XL_BALANCE'],['2XL','2XL_BALANCE'],['3XL','3XL_BALANCE'],['OTHER','OTHER_BALANCE']];pairs.forEach(([sz,key])=>{const bal=b?Number(b[key]||0):0;const input=$('#stitchSmartForm').elements[sz+'_ISSUED'];if(input)input.max=bal;const hint=$('#bal'+sz);if(hint)hint.textContent='· '+moneyless(bal)+' available'})};
-  $('#stitchSmartForm').onsubmit=async e=>{e.preventDefault();const rec=Object.fromEntries(new FormData(e.target).entries());try{await api('/api/data',{method:'POST',activity:'Creating stitching challan…',success:'Stitching challan saved',body:JSON.stringify({module:'stitching',record:rec,requestId})});dropCaches();closeModal();go('stitching',true)}catch(err){toast(err.message,'bad',4200)}};
+  let currentBalances={};
+  $('#stitchBatch').onchange=async e=>{
+    const id=e.target.value,host=$('#stitchSizeHost');if(!id){host.innerHTML='<div class="field wide"><small>Select production batch first.</small></div>';return}
+    host.innerHTML='<div class="field wide"><small>Loading size balances…</small></div>';
+    try{
+      const d=await fetchDetail('production',id);currentBalances=Object.fromEntries((d.sizeBalances||[]).map(x=>[x.SIZE_ID,Number(x.BALANCE_QTY||0)]));
+      host.innerHTML=sizeLineFields(sizes,{},'size-qty',currentBalances);
+      host.querySelectorAll('.size-qty').forEach(x=>x.addEventListener('input',()=>{$('#stitchIssueTotal').textContent=[...host.querySelectorAll('.size-qty')].reduce((s,y)=>s+(Number(y.value)||0),0)}))
+    }catch(err){host.innerHTML='<div class="field wide"><small>Could not load balances.</small></div>';toast(err.message,'bad',4000)}
+  };
+  $('#stitchSmartForm').onsubmit=async e=>{
+    e.preventDefault();const rec={...Object.fromEntries(new FormData(e.target).entries()),items:collectSizeLines(e.target)};
+    if(!rec.items.length)return toast('Enter at least one size quantity.','bad',3000);
+    try{await api('/api/data',{method:'POST',activity:'Creating stitching issue…',success:'Stitching issue saved',body:JSON.stringify({module:'stitching',record:rec,requestId})});dropCaches();closeModal();go('stitching',true)}catch(err){toast(err.message,'bad',4200)}
+  };
 }
 
 async function openQcEntry(){
   const requestId=newRequestId();let l;try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
-  const challans=l.stitchingChallans||[],defects=l.defects||[];
+  const challans=l.stitchingChallans||[],defects=(l.defects||[]).filter(x=>isTrue(x.ACTIVE));
   if(!challans.length)return toast('No stitching receipt is pending QC. Receive garments from stitching first.','bad',4500);
   $('#modalBody').innerHTML=`
-    <div class="panel-head"><div><h3>QC Entry</h3><small>Only received pieces still pending QC are selectable.</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <div class="panel-head"><div><h3>QC Entry</h3><small>Received pieces pending QC are loaded size-wise from the selected challan.</small></div><button class="btn ghost" id="closeModal">Close</button></div>
     <form id="qcSmartForm"><div class="form-grid">
       <div class="field"><label>QC Date</label><input name="QC_DATE" type="date" required value="${todayLocal()}"></div>
-      <div class="field"><label>Stitching Challan</label><select name="CHALLAN_ID" id="qcChallan" required><option value="">Select challan</option>${challans.map(x=>`<option value="${esc(x.CHALLAN_ID)}">${esc(x.CHALLAN_ID)} · ${esc(x.VENDOR_NAME)} · ${esc(x.STYLE_NAME)} · ${moneyless(x.QC_PENDING)} pcs pending QC</option>`).join('')}</select></div>
-      <div class="field"><label>Pending QC Qty</label><input id="qcPending" readonly value="—"></div>
+      <div class="field"><label>Stitching Challan</label><select name="CHALLAN_ID" id="qcChallan" required><option value="">Select challan</option>${challans.map(x=>`<option value="${esc(x.CHALLAN_ID)}">${esc(x.CHALLAN_ID)} · ${esc(x.VENDOR_NAME||'')} · ${esc(x.STYLE_NAME||'')} · ${Number(x.QC_PENDING||0)} pcs pending QC</option>`).join('')}</select></div>
       <div class="field"><label>Size</label><select name="SIZE" id="qcSize" required><option value="">Select challan first</option></select></div>
+      <div class="field"><label>Pending QC Qty</label><input id="qcPending" readonly value="—"></div>
       <div class="field"><label>QC Qty</label><input name="QC_QTY" id="qcQty" type="number" min="1" step="1" required></div>
-      <div class="field"><label>Pass</label><input name="PASS_QTY" type="number" min="0" step="1" value="0"></div>
+      <div class="field"><label>Pass</label><input name="PASS_QTY" id="qcPass" type="number" min="0" step="1" value="0"></div>
       <div class="field"><label>Rework</label><input name="REWORK_QTY" type="number" min="0" step="1" value="0"></div>
       <div class="field"><label>Reject</label><input name="REJECT_QTY" type="number" min="0" step="1" value="0"></div>
       <div class="field"><label>Defect Reason</label><select name="DEFECT_REASON"><option value="">Select reason</option>${defects.map(d=>`<option value="${esc(d.DEFECT_NAME)}">${esc(d.DEFECT_NAME)}${d.STAGE?' · '+esc(d.STAGE):''}</option>`).join('')}</select></div>
       <div class="field wide"><label>Notes</label><input name="NOTES"></div>
-    </div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Save QC</button></div></form>`;
+    </div><div class="recon-strip"><span>QC Split Total <b id="qcSplitTotal">0</b></span><span>Difference <b id="qcSplitDiff">0</b></span></div>
+    <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Save QC</button></div></form>`;
   $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
-  $('#qcChallan').onchange=e=>{const x=challans.find(z=>String(z.CHALLAN_ID)===String(e.target.value));$('#qcPending').value=x?moneyless(x.QC_PENDING)+' pcs':'—';const sizes=[['M','M_QC_PENDING'],['L','L_QC_PENDING'],['XL','XL_QC_PENDING'],['2XL','2XL_QC_PENDING'],['3XL','3XL_QC_PENDING'],['OTHER','OTHER_QC_PENDING']];const sel=$('#qcSize');sel.innerHTML='<option value="">Select size</option>'+(x?sizes.filter(([s,k])=>Number(x[k]||0)>0).map(([s,k])=>'<option value="'+s+'">'+s+' · '+moneyless(x[k])+' pending</option>').join(''):'');$('#qcQty').value='';$('#qcQty').max=''};$('#qcSize').onchange=e=>{const x=challans.find(z=>String(z.CHALLAN_ID)===String($('#qcChallan').value));const key={M:'M_QC_PENDING',L:'L_QC_PENDING',XL:'XL_QC_PENDING','2XL':'2XL_QC_PENDING','3XL':'3XL_QC_PENDING',OTHER:'OTHER_QC_PENDING'}[e.target.value];const bal=x&&key?Number(x[key]||0):0;$('#qcQty').max=bal;$('#qcQty').value=bal?moneyless(bal):''};
+  let pendingLines=[];
+  $('#qcChallan').onchange=async e=>{
+    const id=e.target.value,sel=$('#qcSize');sel.innerHTML='<option value="">Loading…</option>';$('#qcPending').value='—';$('#qcQty').value='';
+    if(!id)return;
+    try{
+      const d=await fetchDetail('stitching',id);pendingLines=d.qcPendingLines||[];
+      sel.innerHTML='<option value="">Select size</option>'+pendingLines.map(x=>`<option value="${esc(x.SIZE_ID)}">${esc(x.SIZE_NAME)} · ${x.PENDING_QTY} pending</option>`).join('')
+    }catch(err){sel.innerHTML='<option value="">Could not load</option>';toast(err.message,'bad',4000)}
+  };
+  $('#qcSize').onchange=e=>{const x=pendingLines.find(z=>String(z.SIZE_ID)===String(e.target.value)),bal=Number(x?.PENDING_QTY||0);$('#qcPending').value=bal+' pcs';$('#qcQty').max=bal;$('#qcQty').value=bal||'';$('#qcPass').value=bal||0;calcQc()};
+  function calcQc(){const f=$('#qcSmartForm'),q=Number(f.elements.QC_QTY.value||0),sum=Number(f.elements.PASS_QTY.value||0)+Number(f.elements.REWORK_QTY.value||0)+Number(f.elements.REJECT_QTY.value||0);$('#qcSplitTotal').textContent=sum;$('#qcSplitDiff').textContent=q-sum;$('#qcSplitDiff').classList.toggle('bad',q!==sum)}
+  $('#qcSmartForm').addEventListener('input',calcQc);
   $('#qcSmartForm').onsubmit=async e=>{e.preventDefault();const rec=Object.fromEntries(new FormData(e.target).entries());try{await api('/api/data',{method:'POST',activity:'Saving QC result…',success:'QC saved',body:JSON.stringify({module:'qc',record:rec,requestId})});dropCaches();closeModal();go('qc',true)}catch(err){toast(err.message,'bad',4200)}};
 }
 
