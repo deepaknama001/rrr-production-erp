@@ -174,7 +174,12 @@ export async function saveUiPreferenceD1(env,actorUserId,page,prefs){
   await db.prepare('INSERT INTO settings(KEY,VALUE,UPDATED_AT) VALUES(?,?,?) ON CONFLICT(KEY) DO UPDATE SET VALUE=excluded.VALUE,UPDATED_AT=excluded.UPDATED_AT').bind(key,value,t).run();
   return{page,prefs:prefs||{}}
 }
-export async function listUsersD1(env,actorUserId){const db=env.DB;await actor(db,actorUserId,null,true);return{items:(await rows(db,'SELECT * FROM users ORDER BY NAME,USER_ID')).map(publicUser)}}
+export async function listUsersD1(env,actorUserId){
+  await ensureSchema(env);const db=env.DB;await actor(db,actorUserId,null,true);
+  const us=await rows(db,'SELECT * FROM users ORDER BY NAME,USER_ID'),items=[];
+  for(const u of us){const p=publicUser(u);p.actions=await actionPerms(db,u.USER_ID);items.push(p)}
+  return{items}
+}
 export async function saveUserD1(env,p){
   const db=env.DB,a=await actor(db,p.actorUserId,null,true),id=String(p.userId||'').trim().toUpperCase(),name=String(p.name||'').trim(),pin=String(p.pin||''),role=String(p.role||'EMPLOYEE').toUpperCase();
   if(!id||!name)throw err('User ID and name required.',400);if(pin&&!/^\d{4,8}$/.test(pin))throw err('PIN must be 4–8 digits.',400);
@@ -184,7 +189,19 @@ export async function saveUserD1(env,p){
   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   ON CONFLICT(USER_ID) DO UPDATE SET NAME=excluded.NAME,PIN_HASH=excluded.PIN_HASH,ROLE=excluded.ROLE,PERM_RAW=excluded.PERM_RAW,PERM_DYE=excluded.PERM_DYE,PERM_PRODUCTION=excluded.PERM_PRODUCTION,PERM_STITCHING=excluded.PERM_STITCHING,PERM_QC=excluded.PERM_QC,PERM_REPORTS=excluded.PERM_REPORTS,ADMIN=excluded.ADMIN,ACTIVE=excluded.ACTIVE,UPDATED_AT=excluded.UPDATED_AT`)
   .bind(id,name,hash,role,truth(p.perm_raw)?1:0,truth(p.perm_dye)?1:0,truth(p.perm_production)?1:0,truth(p.perm_stitching)?1:0,truth(p.perm_qc)?1:0,truth(p.perm_reports)?1:0,truth(p.admin)?1:0,p.active===false?0:1,n(old?.FAILED_ATTEMPTS),old?.LOCKED_UNTIL||'',old?.LAST_LOGIN||'',old?.CREATED_AT||t,t).run();
-  const saved=await userRow(db,id);await audit(db,a,'SAVE_USER','USERS',id,old?JSON.stringify(publicUser(old)):'',JSON.stringify(publicUser(saved)));return{user:publicUser(saved)}
+  if(p.actions&&typeof p.actions==='object'){
+    const stmts=[];
+    for(const [module,x] of Object.entries(p.actions)){
+      if(!['raw','dye','production','stitching','qc','reports'].includes(module))continue;
+      stmts.push(db.prepare(`INSERT INTO user_action_permissions(USER_ID,MODULE,CAN_VIEW,CAN_CREATE,CAN_EDIT,CAN_CANCEL,CAN_EXPORT,CAN_AUDIT)
+        VALUES(?,?,?,?,?,?,?,?)
+        ON CONFLICT(USER_ID,MODULE) DO UPDATE SET CAN_VIEW=excluded.CAN_VIEW,CAN_CREATE=excluded.CAN_CREATE,CAN_EDIT=excluded.CAN_EDIT,CAN_CANCEL=excluded.CAN_CANCEL,CAN_EXPORT=excluded.CAN_EXPORT,CAN_AUDIT=excluded.CAN_AUDIT`)
+        .bind(id,module,truth(x.view)?1:0,truth(x.create)?1:0,truth(x.edit)?1:0,truth(x.cancel)?1:0,truth(x.export)?1:0,truth(x.audit)?1:0))
+    }
+    if(stmts.length)await db.batch(stmts)
+  }
+  const saved=await userRow(db,id),pu=publicUser(saved);pu.actions=await actionPerms(db,id);
+  await audit(db,a,'SAVE_USER','USERS',id,old?JSON.stringify(publicUser(old)):'',JSON.stringify(pu));return{user:pu}
 }
 
 async function vendorName(db,id){return (await row(db,'SELECT VENDOR_NAME FROM vendors WHERE VENDOR_ID=?',id))?.VENDOR_NAME||id||''}
