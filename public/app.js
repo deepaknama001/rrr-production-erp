@@ -89,23 +89,27 @@ function stitchPrintHtml(doc){
   return docsPrintBase(doc.DOC_NO,body)
 }
 function stickerPrintHtml(doc){
-  const items=doc.payload?.items||[];
-  const stickers=items.map((p,i)=>{
-    const preferred=['M','L','XL','2XL','3XL'],map=new Map((p.sizes||[]).map(x=>[String(x.size).toUpperCase(),x.qty]));
-    const extras=(p.sizes||[]).filter(x=>!preferred.includes(String(x.size).toUpperCase()));
-    const sizes=[...preferred.map(s=>({size:s,qty:Number(map.get(s)||0)})),...extras];
-    return '<div class="sticker"><div class="st-title">'+esc(p.style||'Production Item')+'</div><div class="st-main"><div class="st-info">'+
-      '<div class="st-row"><b>Date</b><span>'+esc(fmtDate(p.date))+'</span></div>'+
-      '<div class="st-row"><b>Challan No.</b><span>'+esc(p.sourceId||'')+'</span></div>'+
-      '<div class="st-row"><b>Colour</b><span>'+esc(p.color||'')+'</span></div>'+
-      '<div class="st-row"><b>Fabric</b><span>'+esc(p.fabric||'')+'</span></div>'+
-      '<div class="st-row"><b>Fabric Qty.</b><span><strong>'+docsNum(p.fabricQty)+' Mtr</strong></span></div>'+
-      '<div class="st-row"><b>Total Pcs.</b><span><strong>'+docsNum(p.totalPcs)+'</strong></span></div>'+
-      '<div class="st-row"><b>Vendor Name</b><span>'+esc(p.vendor||'')+'</span></div>'+
-      '</div><div class="sizes">'+sizes.map(x=>'<div class="size-row"><b>'+esc(x.size)+'</b><span>'+docsNum(x.qty)+'</span></div>').join('')+'</div></div>'+
-      '<div class="st-notes"><b>Notes</b><br>'+esc(p.notes||'')+'</div></div>'+(((i+1)%4===0&&i<items.length-1)?'<div class="page-break"></div>':'')
-  }).join('');
-  return docsPrintBase(doc.DOC_NO,'<div class="stickers">'+stickers+'</div>')
+  const items=doc.payload?.items||[],pages=[];
+  for(let p=0;p<items.length;p+=4){
+    const chunk=items.slice(p,p+4);
+    const stickers=chunk.map(item=>{
+      const preferred=['M','L','XL','2XL','3XL'],map=new Map((item.sizes||[]).map(x=>[String(x.size).toUpperCase(),x.qty]));
+      const extras=(item.sizes||[]).filter(x=>!preferred.includes(String(x.size).toUpperCase()));
+      const sizes=[...preferred.map(s=>({size:s,qty:Number(map.get(s)||0)})),...extras];
+      return '<div class="sticker"><div class="st-title">'+esc(item.style||'Production Item')+'</div><div class="st-main"><div class="st-info">'+
+        '<div class="st-row"><b>Date</b><span>'+esc(fmtDate(item.date))+'</span></div>'+
+        '<div class="st-row"><b>Challan No.</b><span>'+esc(item.sourceId||'')+'</span></div>'+
+        '<div class="st-row"><b>Colour</b><span>'+esc(item.color||'')+'</span></div>'+
+        '<div class="st-row"><b>Fabric</b><span>'+esc(item.fabric||'')+'</span></div>'+
+        '<div class="st-row"><b>Fabric Qty.</b><span><strong>'+docsNum(item.fabricQty)+' Mtr</strong></span></div>'+
+        '<div class="st-row"><b>Total Pcs.</b><span><strong>'+docsNum(item.totalPcs)+'</strong></span></div>'+
+        '<div class="st-row"><b>Vendor Name</b><span>'+esc(item.vendor||'')+'</span></div>'+
+        '</div><div class="sizes">'+sizes.map(x=>'<div class="size-row"><b>'+esc(x.size)+'</b><span>'+docsNum(x.qty)+'</span></div>').join('')+'</div></div>'+
+        '<div class="st-notes"><b>Notes</b><br>'+esc(item.notes||'')+'</div></div>'
+    }).join('');
+    pages.push('<div class="stickers'+(p+4<items.length?' page-break':'')+'">'+stickers+'</div>')
+  }
+  return docsPrintBase(doc.DOC_NO,pages.join(''))
 }
 function printDocsDocument(doc,win=null){
   const w=win||window.open('','_blank');
