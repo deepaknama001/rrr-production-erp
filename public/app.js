@@ -1,4 +1,4 @@
-const APP_BUILD='0.18';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.19';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -26,6 +26,7 @@ async function renderDashboard(force=false){const s=$('#stage');s.innerHTML=`<se
 
 const prefMem=new Map(),prefTimers=new Map();
 function prefLocalKey(page){return 'rrr_prod_pref_'+String(state.user?.userId||'anon')+'_'+page}
+
 function defaultGridPrefs(columns){return{search:'',filters:{},visibleColumns:columns.filter(x=>x!=='__ACTION'),pageSize:25,page:1,sortKey:'',sortDir:'asc'}}
 async function loadGridPrefs(page,columns){
   const base=defaultGridPrefs(columns);let local={};
@@ -34,7 +35,11 @@ async function loadGridPrefs(page,columns){
   if(prefMem.has(page))return{...merged,...prefMem.get(page),filters:{...merged.filters,...(prefMem.get(page).filters||{})}};
   try{
     const r=await fetch('/api/preferences?page='+encodeURIComponent(page),{headers:{authorization:'Bearer '+state.token}});
-    if(r.ok){const d=await r.json(),server=d.prefs||{};const p={...merged,...server,filters:{...merged.filters,...(server.filters||{})}};prefMem.set(page,p);localStorage.setItem(prefLocalKey(page),JSON.stringify(p));return p}
+    if(r.ok){
+      const d=await r.json(),server=d.prefs||{};
+      const p={...merged,...server,filters:{...merged.filters,...(server.filters||{})}};
+      prefMem.set(page,p);localStorage.setItem(prefLocalKey(page),JSON.stringify(p));return p
+    }
   }catch{}
   prefMem.set(page,merged);return merged
 }
@@ -50,8 +55,36 @@ function gridCell(k,v){
   return displayCell(k,v)
 }
 function uniqueFilterValues(items,key){
-  const m=new Map();for(const r of items||[]){const raw=r?.[key];if(raw===undefined||raw===null||raw==='')continue;const label=gridCell(key,raw);m.set(String(raw),label)}
-  return [...m.entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1])))
+  const m=new Map();
+  for(const r of items||[]){
+    const raw=r?.[key];if(raw===undefined||raw===null||raw==='')continue;
+    const label=String(gridCell(key,raw)).replace(/<[^>]+>/g,'');
+    m.set(String(raw),label)
+  }
+  return [...m.entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1]),undefined,{numeric:true,sensitivity:'base'}))
+}
+function isDateColumn(k,items=[]){
+  if(/(?:DATE|TIMESTAMP|_AT|CREATED|UPDATED|LAST_LOGIN)/i.test(String(k)))return true;
+  const sample=(items||[]).map(r=>r?.[k]).find(v=>v!==null&&v!==undefined&&v!=='');
+  return typeof sample==='string'&&/^\d{4}-\d{2}-\d{2}(?:T|\s|$)/.test(sample)
+}
+function dateYmd(v){
+  if(v===null||v===undefined||v==='')return'';
+  const s=String(v);const m=s.match(/^(\d{4}-\d{2}-\d{2})/);if(m)return m[1];
+  const d=new Date(v);return Number.isNaN(d.getTime())?'':d.toISOString().slice(0,10)
+}
+function normalizeFilterState(v,isDate=false){
+  if(isDate){
+    if(v&&typeof v==='object'&&!Array.isArray(v))return{type:'date',from:String(v.from||''),to:String(v.to||'')};
+    return{type:'date',from:'',to:''}
+  }
+  if(Array.isArray(v))return v.map(String);
+  if(v===null||v===undefined||v==='')return[];
+  return[String(v)]
+}
+function filterIsActive(v,isDate=false){
+  const n=normalizeFilterState(v,isDate);
+  return isDate?!!(n.from||n.to):n.length>0
 }
 function sortableValue(v){
   if(v===null||v===undefined)return'';
@@ -60,10 +93,19 @@ function sortableValue(v){
   const d=Date.parse(s);if(/\d{4}-\d{2}-\d{2}/.test(s)&&!Number.isNaN(d))return d;
   return s.toLowerCase()
 }
-function applyGridData(items,prefs,filters){
+function applyGridData(items,prefs,columns){
   let out=[...(items||[])],q=String(prefs.search||'').trim().toLowerCase();
   if(q)out=out.filter(r=>JSON.stringify(r).toLowerCase().includes(q));
-  for(const key of filters||[]){const val=String(prefs.filters?.[key]??'');if(val!=='')out=out.filter(r=>String(r?.[key]??'')===val)}
+  for(const key of columns||[]){
+    if(key==='__ACTION')continue;
+    const dateCol=isDateColumn(key,items),f=normalizeFilterState(prefs.filters?.[key],dateCol);
+    if(dateCol){
+      if(f.from)out=out.filter(r=>{const d=dateYmd(r?.[key]);return d&&d>=f.from});
+      if(f.to)out=out.filter(r=>{const d=dateYmd(r?.[key]);return d&&d<=f.to})
+    }else if(f.length){
+      const set=new Set(f.map(String));out=out.filter(r=>set.has(String(r?.[key]??'')))
+    }
+  }
   if(prefs.sortKey){
     const key=prefs.sortKey,dir=prefs.sortDir==='desc'?-1:1;
     out.sort((a,b)=>{const av=sortableValue(a?.[key]),bv=sortableValue(b?.[key]);if(av<bv)return-dir;if(av>bv)return dir;return 0})
@@ -74,8 +116,34 @@ function gridPageNumbers(current,total){
   const set=new Set([1,total,current,current-1,current+1]);if(total>5){set.add(2);set.add(total-1)}
   return [...set].filter(x=>x>=1&&x<=total).sort((a,b)=>a-b)
 }
+function buildHeaderFilterPopup(k,items,prefs){
+  const dateCol=isDateColumn(k,items),current=normalizeFilterState(prefs.filters?.[k],dateCol);
+  if(dateCol)return `
+    <div class="th-filter-menu hidden" data-filter-pop="${esc(k)}">
+      <div class="th-filter-title">Filter ${gridLabel(k)}</div>
+      <div class="date-range-grid">
+        <label><span>From</span><input type="date" data-date-from="${esc(k)}" value="${esc(current.from)}"></label>
+        <label><span>To</span><input type="date" data-date-to="${esc(k)}" value="${esc(current.to)}"></label>
+      </div>
+      <div class="th-filter-actions">
+        <button type="button" data-date-clear="${esc(k)}">Clear</button>
+        <button type="button" class="apply" data-date-apply="${esc(k)}">Apply</button>
+      </div>
+    </div>`;
+  const vals=uniqueFilterValues(items,k),selected=new Set(current.map(String));
+  return `
+    <div class="th-filter-menu hidden" data-filter-pop="${esc(k)}">
+      <div class="th-filter-title">Filter ${gridLabel(k)}</div>
+      <input class="th-filter-search" data-filter-search="${esc(k)}" placeholder="Search values...">
+      <div class="th-filter-shortcuts"><button type="button" data-select-all="${esc(k)}">Select all</button><button type="button" data-clear-all="${esc(k)}">Clear</button></div>
+      <div class="th-filter-values" data-filter-values="${esc(k)}">
+        ${vals.length?vals.map(([v,l])=>`<label data-value-label="${esc(String(l).toLowerCase())}"><input type="checkbox" data-filter-check="${esc(k)}" value="${esc(v)}" ${selected.has(String(v))?'checked':''}> <span>${esc(l)}</span></label>`).join(''):'<div class="filter-empty">No values</div>'}
+      </div>
+      <div class="th-filter-actions"><button type="button" data-popup-cancel="${esc(k)}">Cancel</button><button type="button" class="apply" data-multi-apply="${esc(k)}">Apply</button></div>
+    </div>`
+}
 async function mountDataGrid(container,opt){
-  const key=opt.key,columns=opt.columns||[],filterable=new Set(opt.filters||[]),items=(opt.items||[]).map((r,i)=>({...r,__gridIndex:i}));
+  const key=opt.key,columns=opt.columns||[],items=(opt.items||[]).map((r,i)=>({...r,__gridIndex:i}));
   let prefs=await loadGridPrefs(key,columns);
   prefs.visibleColumns=(prefs.visibleColumns||columns.filter(x=>x!=='__ACTION')).filter(x=>columns.includes(x)&&x!=='__ACTION');
   if(!prefs.visibleColumns.length)prefs.visibleColumns=columns.filter(x=>x!=='__ACTION');
@@ -86,26 +154,33 @@ async function mountDataGrid(container,opt){
 
   function headerCell(k){
     const sorted=prefs.sortKey===k,arrow=sorted?(prefs.sortDir==='asc'?'▲':'▼'):'↕';
-    const filterOn=String(prefs.filters?.[k]??'')!=='';
-    return `<th><div class="th-main"><button class="th-sort" data-sort="${esc(k)}"><span>${gridLabel(k)}</span><i>${arrow}</i></button>${filterable.has(k)?`<button class="th-filter-btn ${filterOn?'active':''}" data-filter-menu="${esc(k)}" title="Filter ${gridLabel(k)}">▾</button>`:''}</div>${filterable.has(k)?`<div class="th-filter-menu hidden" data-filter-pop="${esc(k)}"><div class="th-filter-title">Filter ${gridLabel(k)}</div><select data-filter-select="${esc(k)}"><option value="">All</option>${uniqueFilterValues(items,k).map(([v,l])=>`<option value="${esc(v)}" ${String(prefs.filters?.[k]??'')===String(v)?'selected':''}>${esc(l)}</option>`).join('')}</select></div>`:''}</th>`
+    const dateCol=isDateColumn(k,items),filterOn=filterIsActive(prefs.filters?.[k],dateCol);
+    return `<th>
+      <div class="th-main">
+        <button class="th-sort" data-sort="${esc(k)}"><span>${gridLabel(k)}</span><i>${arrow}</i></button>
+        <button class="th-filter-btn ${filterOn?'active':''}" data-filter-menu="${esc(k)}" title="Filter ${gridLabel(k)}">⏷</button>
+      </div>
+      ${buildHeaderFilterPopup(k,items,prefs)}
+    </th>`
   }
 
   function render(){
-    const filtered=applyGridData(items,prefs,[...filterable]);rt.filtered=filtered;
+    const filtered=applyGridData(items,prefs,columns);rt.filtered=filtered;
     const pages=Math.max(1,Math.ceil(filtered.length/prefs.pageSize));prefs.page=Math.min(Math.max(1,Number(prefs.page)||1),pages);
     const start=(prefs.page-1)*prefs.pageSize,end=Math.min(start+prefs.pageSize,filtered.length),pageRows=filtered.slice(start,end);rt.pageRows=pageRows;
     const visible=prefs.visibleColumns;
     const nums=gridPageNumbers(prefs.page,pages),buttons=[];let last=0;
     for(const n of nums){if(last&&n-last>1)buttons.push('<span class="page-gap">…</span>');buttons.push(`<button class="page-btn ${n===prefs.page?'active':''}" data-page="${n}">${n}</button>`);last=n}
     const head=visible.map(headerCell).join('')+(columns.includes('__ACTION')?'<th><div class="th-main"><span class="th-static">Action</span></div></th>':'');
-    const body=pageRows.length?pageRows.map((r,pi)=>'<tr>'+visible.map(k=>k==='STATUS'? `<td>${badge(r[k])}</td>`:`<td>${gridCell(k,r[k])}</td>`).join('')+(columns.includes('__ACTION')?`<td>${opt.actionRenderer?opt.actionRenderer(r,pi):'—'}</td>`:'')+'</tr>').join(''):`<tr><td colspan="${visible.length+(columns.includes('__ACTION')?1:0)}">No matching records.</td></tr>`;
+    const body=pageRows.length?pageRows.map((r,pi)=>'<tr>'+visible.map(k=>k==='STATUS'?`<td>${badge(r[k])}</td>`:`<td>${gridCell(k,r[k])}</td>`).join('')+(columns.includes('__ACTION')?`<td>${opt.actionRenderer?opt.actionRenderer(r,pi):'—'}</td>`:'')+'</tr>').join(''):`<tr><td colspan="${visible.length+(columns.includes('__ACTION')?1:0)}">No matching records.</td></tr>`;
 
+    const activeFilters=visible.filter(k=>filterIsActive(prefs.filters?.[k],isDateColumn(k,items))).length;
     container.innerHTML=`
       <div class="smart-grid-toolbar">
         <div class="grid-search-wrap"><span>⌕</span><input class="grid-search" placeholder="Search..." value="${esc(prefs.search||'')}"></div>
         <div class="grid-tool-wrap"><button class="grid-tool-btn column-btn">Columns ▾</button><div class="column-menu hidden">${columns.filter(k=>k!=='__ACTION').map(k=>`<label><input type="checkbox" data-col="${esc(k)}" ${visible.includes(k)?'checked':''}> ${gridLabel(k)}</label>`).join('')}</div></div>
       </div>
-      <div class="grid-active-meta"><span>Showing ${filtered.length?`${start+1}–${end}`:'0'} of ${filtered.length} filtered · ${items.length} total${prefs.sortKey?` · Sorted by ${gridLabel(prefs.sortKey)} ${prefs.sortDir==='asc'?'↑':'↓'}`:''}</span><button class="clear-grid-filters ${(!prefs.search&&!Object.values(prefs.filters||{}).some(Boolean)&&!prefs.sortKey)?'hidden':''}">Reset view</button></div>
+      <div class="grid-active-meta"><span>Showing ${filtered.length?`${start+1}–${end}`:'0'} of ${filtered.length} filtered · ${items.length} total${activeFilters?` · ${activeFilters} filter${activeFilters>1?'s':''}`:''}${prefs.sortKey?` · Sorted by ${gridLabel(prefs.sortKey)} ${prefs.sortDir==='asc'?'↑':'↓'}`:''}</span><button class="clear-grid-filters ${(!prefs.search&&!activeFilters&&!prefs.sortKey)?'hidden':''}">Reset view</button></div>
       <div class="table-wrap"><table class="data"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
       <div class="grid-footer">
         <div class="rows-control"><span>Rows per page</span><select class="page-size">${[10,25,50,100].map(n=>`<option value="${n}" ${n===prefs.pageSize?'selected':''}>${n}</option>`).join('')}</select></div>
@@ -127,8 +202,31 @@ async function mountDataGrid(container,opt){
       e.stopPropagation();const k=btn.dataset.filterMenu,pop=container.querySelector('[data-filter-pop="'+CSS.escape(k)+'"]');
       container.querySelectorAll('.th-filter-menu').forEach(x=>{if(x!==pop)x.classList.add('hidden')});pop?.classList.toggle('hidden')
     });
-    container.querySelectorAll('[data-filter-select]').forEach(sel=>sel.onchange=()=>{
-      prefs.filters[sel.dataset.filterSelect]=sel.value;prefs.page=1;saveGridPrefs(key,prefs);render()
+    container.querySelectorAll('.th-filter-menu').forEach(pop=>pop.onclick=e=>e.stopPropagation());
+
+    container.querySelectorAll('[data-filter-search]').forEach(inp=>inp.oninput=()=>{
+      const k=inp.dataset.filterSearch,q=inp.value.trim().toLowerCase(),box=container.querySelector('[data-filter-values="'+CSS.escape(k)+'"]');
+      box?.querySelectorAll('[data-value-label]').forEach(l=>l.classList.toggle('hidden',q&&!String(l.dataset.valueLabel||'').includes(q)))
+    });
+    container.querySelectorAll('[data-select-all]').forEach(btn=>btn.onclick=()=>{
+      const k=btn.dataset.selectAll;container.querySelectorAll('[data-filter-check="'+CSS.escape(k)+'"]').forEach(cb=>{if(!cb.closest('label')?.classList.contains('hidden'))cb.checked=true})
+    });
+    container.querySelectorAll('[data-clear-all]').forEach(btn=>btn.onclick=()=>{
+      const k=btn.dataset.clearAll;container.querySelectorAll('[data-filter-check="'+CSS.escape(k)+'"]').forEach(cb=>cb.checked=false)
+    });
+    container.querySelectorAll('[data-multi-apply]').forEach(btn=>btn.onclick=()=>{
+      const k=btn.dataset.multiApply;prefs.filters[k]=[...container.querySelectorAll('[data-filter-check="'+CSS.escape(k)+'"]:checked')].map(cb=>cb.value);
+      prefs.page=1;saveGridPrefs(key,prefs);render()
+    });
+    container.querySelectorAll('[data-popup-cancel]').forEach(btn=>btn.onclick=()=>btn.closest('.th-filter-menu')?.classList.add('hidden'));
+
+    container.querySelectorAll('[data-date-apply]').forEach(btn=>btn.onclick=()=>{
+      const k=btn.dataset.dateApply,from=container.querySelector('[data-date-from="'+CSS.escape(k)+'"]')?.value||'',to=container.querySelector('[data-date-to="'+CSS.escape(k)+'"]')?.value||'';
+      if(from&&to&&from>to){toast('From date cannot be after To date.','bad',3000);return}
+      prefs.filters[k]={type:'date',from,to};prefs.page=1;saveGridPrefs(key,prefs);render()
+    });
+    container.querySelectorAll('[data-date-clear]').forEach(btn=>btn.onclick=()=>{
+      const k=btn.dataset.dateClear;prefs.filters[k]={type:'date',from:'',to:''};prefs.page=1;saveGridPrefs(key,prefs);render()
     });
 
     const colBtn=container.querySelector('.column-btn'),colMenu=container.querySelector('.column-menu');
@@ -148,7 +246,11 @@ async function mountDataGrid(container,opt){
   }
   rt.render=render;render();return rt
 }
-document.addEventListener('click',e=>{if(!e.target.closest('.grid-tool-wrap'))document.querySelectorAll('.column-menu').forEach(x=>x.classList.add('hidden'));if(!e.target.closest('th'))document.querySelectorAll('.th-filter-menu').forEach(x=>x.classList.add('hidden'));if(!e.target.closest('.export-menu-wrap'))$('#exportMenu')?.classList.add('hidden')});
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.grid-tool-wrap'))document.querySelectorAll('.column-menu').forEach(x=>x.classList.add('hidden'));
+  if(!e.target.closest('th'))document.querySelectorAll('.th-filter-menu').forEach(x=>x.classList.add('hidden'));
+  if(!e.target.closest('.export-menu-wrap'))$('#exportMenu')?.classList.add('hidden')
+});
 const configs={
 raw:{title:'Raw Fabric',columns:['ROLL_ID','INWARD_DATE','SUPPLIER','VENDOR_ROLL_NO','FABRIC','INWARD_MTR','ISSUED_MTR','BALANCE_MTR','STATUS','__ACTION'],filters:['SUPPLIER','FABRIC','STATUS'],action:'New Inward',fields:['INWARD_DATE','SUPPLIER_ID','VENDOR_ROLL_NO','FABRIC_ID','INWARD_MTR','INVOICE_CHALLAN','LOT_REF','NOTES']},
 dye:{title:'Dyeing',columns:['DYE_PLAN_ID','DYE_BATCH_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR','ROLL_COUNT','ISSUE_MTR','RECEIVED_MTR','VARIANCE_MTR','USABLE_MTR','PLAN_VARIANCE_MTR','STATUS','__ACTION'],filters:['DYE_VENDOR','FABRIC','COLOR','STATUS'],action:'New Dye Plan',fields:['ISSUE_DATE','DYE_VENDOR_ID','ROLL_ID','COLOR_ID','ISSUE_MTR','NOTES']},
