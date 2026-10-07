@@ -1,7 +1,7 @@
-const APP_BUILD='0.13';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.14';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
-const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0};
+const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{}};
 function setStatus(text,kind='ok'){const el=$('#syncStatus');if(!el)return;el.textContent=text;el.className='status '+kind}
 function newRequestId(){return (crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math.random().toString(36).slice(2))}
 function cacheKey(m){return 'rrr_prod_cache_'+m}
@@ -23,9 +23,113 @@ function showApp(){$('#loginView').classList.add('hidden');$('#appView').classLi
 function renderNav(){$('#nav').innerHTML=NAV.filter(x=>allowed(x[0])).map(([m,i,l])=>`<button data-m="${m}">${i} &nbsp; ${l}</button>`).join('');$('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>go(b.dataset.m))}
 async function go(m,force=false){if(!allowed(m))return;setStatus('↻ Opening '+(NAV.find(x=>x[0]===m)?.[2]||m)+'…','busy');state.current=m;sessionStorage.setItem('rrr_prod_page',m);document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.m===m));$('#pageTitle').textContent=NAV.find(x=>x[0]===m)?.[2]||m;if(m==='dashboard')return renderDashboard(force);if(m==='reports')return renderReports(force);if(m==='masters')return renderMasters(force);if(m==='users')return renderUsers(force);return renderModule(m,force)}
 async function renderDashboard(force=false){const s=$('#stage');s.innerHTML=`<section class="hero"><div><h2>Production Control</h2><p>Raw fabric to warehouse handover — one traceable workflow.</p></div><div>${new Date().toLocaleDateString()}</div></section><section class="kpis">${['Raw Available','At Dye','Dyed Available','Cut Pending','At Stitching','Ready Warehouse'].map(x=>`<div class="kpi"><span>${x}</span><strong>—</strong></div>`).join('')}</section><section class="grid2"><div class="panel"><div class="panel-head"><h3>Quick Actions</h3></div><div class="quick">${[['raw','New Fabric Inward'],['dye','Issue to Dye'],['production','Plan Production'],['stitching','Create Stitch Challan'],['qc','QC Entry'],['handover','Warehouse Handover']].filter(x=>allowed(x[0])).map(x=>`<button onclick="window.ERP.quick('${x[0]}')"><b>${x[1]}</b><small>Open module</small></button>`).join('')}</div></div><div class="panel"><div class="panel-head"><h3>System</h3></div><p>Cloudflare D1 primary database</p><p>Cloudflare secure frontend & API</p><p>User-wise permissions & audit trail</p></div></section>`;try{const d=await getCachedModule('dashboard',force);state.user=d.user||d.actor||state.user;const v=d.kpis||{};[v.rawAvailable,v.atDye,v.dyedAvailable,v.cutPending,v.atStitching,v.readyWarehouse].forEach((x,i)=>document.querySelectorAll('.kpi strong')[i].textContent=x??0)}catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}}
-const configs={raw:{title:'Raw Fabric',columns:['ROLL_ID','INWARD_DATE','SUPPLIER','VENDOR_ROLL_NO','FABRIC','INWARD_MTR','STATUS'],action:'New Inward',fields:['INWARD_DATE','SUPPLIER_ID','VENDOR_ROLL_NO','FABRIC_ID','INWARD_MTR','INVOICE_CHALLAN','LOT_REF','NOTES']},dye:{title:'Dyeing',columns:['DYE_PLAN_ID','DYE_BATCH_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR','ROLL_COUNT','ISSUE_MTR','RECEIVED_MTR','VARIANCE_MTR','USABLE_MTR','PLAN_VARIANCE_MTR','STATUS','__ACTION'],action:'New Dye Plan',fields:['ISSUE_DATE','DYE_VENDOR_ID','ROLL_ID','COLOR_ID','ISSUE_MTR','NOTES']},production:{title:'Production / Cutting',columns:['PRODUCTION_BATCH_ID','PLAN_DATE','STYLE','DYE_BATCH_ID','PLANNED_QTY','ALLOCATED_MTR','TOTAL_CUT','STATUS'],action:'New Production Batch',fields:['PLAN_DATE','DYE_BATCH_ID','STYLE_ID','PLANNED_QTY','ALLOCATED_MTR','NOTES']},stitching:{title:'Stitching',columns:['CHALLAN_ID','ISSUE_DATE','STITCHING_VENDOR','PRODUCTION_BATCH_ID','TOTAL_ISSUED','TOTAL_RECEIVED','PENDING_QTY','STATUS'],action:'New Challan',fields:['ISSUE_DATE','STITCHING_VENDOR_ID','PRODUCTION_BATCH_ID','M_ISSUED','L_ISSUED','XL_ISSUED','2XL_ISSUED','3XL_ISSUED','OTHER_ISSUED','NOTES']},qc:{title:'QC & Rework',columns:['QC_ID','QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','STATUS'],action:'New QC Entry',fields:['QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','DEFECT_REASON','NOTES']},handover:{title:'Warehouse Handover',columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','PENDING_QTY','STATUS'],action:'New Handover',fields:['HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE_ID','COLOR_ID','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','WAREHOUSE_REF','NOTES']}};
-async function renderModule(m,force=false){const c=configs[m],s=$('#stage');s.innerHTML=`<section class="panel"><div class="panel-head"><h3>${c.title}</h3><button class="btn teal" id="newBtn">+ ${c.action}</button></div><div class="toolbar"><input class="search" id="searchBox" placeholder="Search..."></div><div class="table-wrap"><table class="data"><thead><tr>${c.columns.map(x=>'<th>'+x.replaceAll('_',' ')+'</th>').join('')}</tr></thead><tbody id="rows"><tr><td colspan="${c.columns.length}">Loading…</td></tr></tbody></table></div></section>`;$('#newBtn').onclick=()=>openActionForm(m);try{const d=await getCachedModule(m,force);drawRows(c,d.items||[]);$('#searchBox').oninput=e=>drawRows(c,(d.items||[]).filter(r=>JSON.stringify(r).toLowerCase().includes(e.target.value.toLowerCase())))}catch(e){drawRows(c,[]);toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}}
-function drawRows(c,items){$('#rows').innerHTML=items.length?items.map((r,i)=>'<tr>'+c.columns.map(k=>{if(k==='STATUS')return `<td>${badge(r[k])}</td>`;if(k==='__ACTION')return `<td>${c===configs.dye?'<div class="row-actions">'+(!/^RECEIVED/.test(String(r.STATUS))?'<button class="btn ghost dye-receive-btn" data-i="'+i+'">Receive</button>':'')+'<button class="btn ghost dye-manage-btn" data-i="'+i+'">Manage</button></div>':'—'}</td>`;return `<td>${displayCell(k,r[k])}</td>`}).join('')+'</tr>').join(''):`<tr><td colspan="${c.columns.length}">No records yet.</td></tr>`;if(c===configs.dye){document.querySelectorAll('.dye-receive-btn').forEach(b=>b.onclick=()=>openDyeReceive(items[Number(b.dataset.i)]));document.querySelectorAll('.dye-manage-btn').forEach(b=>b.onclick=()=>openDyeManage(items[Number(b.dataset.i)]))}}
+
+const prefMem=new Map(),prefTimers=new Map();
+function prefLocalKey(page){return 'rrr_prod_pref_'+String(state.user?.userId||'anon')+'_'+page}
+function defaultGridPrefs(columns){return{search:'',filters:{},visibleColumns:columns.filter(x=>x!=='__ACTION'),pageSize:25,page:1}}
+async function loadGridPrefs(page,columns){
+  const base=defaultGridPrefs(columns);let local={};
+  try{local=JSON.parse(localStorage.getItem(prefLocalKey(page))||'{}')}catch{}
+  const merged={...base,...local,filters:{...(base.filters||{}),...(local.filters||{})}};
+  if(prefMem.has(page))return{...merged,...prefMem.get(page),filters:{...merged.filters,...(prefMem.get(page).filters||{})}};
+  try{
+    const r=await fetch('/api/preferences?page='+encodeURIComponent(page),{headers:{authorization:'Bearer '+state.token}});
+    if(r.ok){const d=await r.json(),server=d.prefs||{};const p={...merged,...server,filters:{...merged.filters,...(server.filters||{})}};prefMem.set(page,p);localStorage.setItem(prefLocalKey(page),JSON.stringify(p));return p}
+  }catch{}
+  prefMem.set(page,merged);return merged
+}
+function saveGridPrefs(page,prefs){
+  prefMem.set(page,prefs);try{localStorage.setItem(prefLocalKey(page),JSON.stringify(prefs))}catch{}
+  clearTimeout(prefTimers.get(page));prefTimers.set(page,setTimeout(async()=>{
+    try{await fetch('/api/preferences',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+state.token},body:JSON.stringify({page,prefs})})}catch{}
+  },350))
+}
+function gridLabel(k){return String(k||'').replace(/^__/,'').replaceAll('_',' ').replace(/\b\w/g,x=>x.toUpperCase())}
+function gridCell(k,v){
+  if(['ACTIVE','FABRIC_SUPPLIER','DYE_VENDOR','STITCHING_VENDOR','CUTTING_VENDOR','admin','active'].includes(k))return boolText(v);
+  return displayCell(k,v)
+}
+function uniqueFilterValues(items,key){
+  const m=new Map();for(const r of items||[]){const raw=r?.[key];if(raw===undefined||raw===null||raw==='')continue;const label=gridCell(key,raw);m.set(String(raw),label)}
+  return [...m.entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1])))
+}
+function applyGridData(items,prefs,filters){
+  let out=[...(items||[])],q=String(prefs.search||'').trim().toLowerCase();
+  if(q)out=out.filter(r=>JSON.stringify(r).toLowerCase().includes(q));
+  for(const key of filters||[]){const val=String(prefs.filters?.[key]??'');if(val!=='')out=out.filter(r=>String(r?.[key]??'')===val)}
+  return out
+}
+function gridPageNumbers(current,total){
+  const set=new Set([1,total,current,current-1,current+1]);if(total>5){set.add(2);set.add(total-1)}
+  return [...set].filter(x=>x>=1&&x<=total).sort((a,b)=>a-b)
+}
+async function mountDataGrid(container,opt){
+  const key=opt.key,columns=opt.columns||[],filters=opt.filters||[],items=(opt.items||[]).map((r,i)=>({...r,__gridIndex:i}));
+  let prefs=await loadGridPrefs(key,columns);
+  prefs.visibleColumns=(prefs.visibleColumns||columns.filter(x=>x!=='__ACTION')).filter(x=>columns.includes(x)&&x!=='__ACTION');
+  if(!prefs.visibleColumns.length)prefs.visibleColumns=columns.filter(x=>x!=='__ACTION');
+  prefs.pageSize=[10,25,50,100].includes(Number(prefs.pageSize))?Number(prefs.pageSize):25;
+  const rt={key,opt,items,prefs,filtered:[],pageRows:[]};state.grids[key]=rt;
+
+  function render(){
+    const filtered=applyGridData(items,prefs,filters);rt.filtered=filtered;
+    const pages=Math.max(1,Math.ceil(filtered.length/prefs.pageSize));prefs.page=Math.min(Math.max(1,Number(prefs.page)||1),pages);
+    const start=(prefs.page-1)*prefs.pageSize,end=Math.min(start+prefs.pageSize,filtered.length),pageRows=filtered.slice(start,end);rt.pageRows=pageRows;
+    const visible=prefs.visibleColumns;
+    const filterHtml=filters.map(k=>`<label class="grid-filter"><span>${gridLabel(k)}</span><select data-filter="${esc(k)}"><option value="">All</option>${uniqueFilterValues(items,k).map(([v,l])=>`<option value="${esc(v)}" ${String(prefs.filters?.[k]??'')===String(v)?'selected':''}>${esc(l)}</option>`).join('')}</select></label>`).join('');
+    const nums=gridPageNumbers(prefs.page,pages),buttons=[];let last=0;for(const n of nums){if(last&&n-last>1)buttons.push('<span class="page-gap">…</span>');buttons.push(`<button class="page-btn ${n===prefs.page?'active':''}" data-page="${n}">${n}</button>`);last=n}
+    const head=visible.map(k=>`<th>${gridLabel(k)}</th>`).join('')+(columns.includes('__ACTION')?'<th>ACTION</th>':'');
+    const body=pageRows.length?pageRows.map((r,pi)=>'<tr>'+visible.map(k=>k==='STATUS'?`<td>${badge(r[k])}</td>`:`<td>${gridCell(k,r[k])}</td>`).join('')+(columns.includes('__ACTION')?`<td>${opt.actionRenderer?opt.actionRenderer(r,pi):'—'}</td>`:'')+'</tr>').join(''):`<tr><td colspan="${visible.length+(columns.includes('__ACTION')?1:0)}">No matching records.</td></tr>`;
+    container.innerHTML=`
+      <div class="smart-grid-toolbar">
+        <div class="grid-search-wrap"><span>⌕</span><input class="grid-search" placeholder="Search..." value="${esc(prefs.search||'')}"></div>
+        <div class="grid-filters">${filterHtml}</div>
+        <div class="grid-tool-wrap"><button class="grid-tool-btn column-btn">Columns ▾</button><div class="column-menu hidden">${columns.filter(k=>k!=='__ACTION').map(k=>`<label><input type="checkbox" data-col="${esc(k)}" ${visible.includes(k)?'checked':''}> ${gridLabel(k)}</label>`).join('')}</div></div>
+      </div>
+      <div class="grid-active-meta"><span>Showing ${filtered.length?`${start+1}–${end}`:'0'} of ${filtered.length} filtered · ${items.length} total</span><button class="clear-grid-filters ${(!prefs.search&&!Object.values(prefs.filters||{}).some(Boolean))?'hidden':''}">Clear filters</button></div>
+      <div class="table-wrap"><table class="data"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
+      <div class="grid-footer">
+        <div class="rows-control"><span>Rows per page</span><select class="page-size">${[10,25,50,100].map(n=>`<option value="${n}" ${n===prefs.pageSize?'selected':''}>${n}</option>`).join('')}</select></div>
+        <div class="pagination"><button class="page-btn prev" ${prefs.page<=1?'disabled':''}>‹</button>${buttons.join('')}<button class="page-btn next" ${prefs.page>=pages?'disabled':''}>›</button></div>
+        <div class="page-count">Page ${prefs.page} of ${pages}</div>
+      </div>`;
+
+    const search=container.querySelector('.grid-search');search.oninput=()=>{prefs.search=search.value;prefs.page=1;saveGridPrefs(key,prefs);render()};
+    container.querySelectorAll('[data-filter]').forEach(sel=>sel.onchange=()=>{prefs.filters[sel.dataset.filter]=sel.value;prefs.page=1;saveGridPrefs(key,prefs);render()});
+    const colBtn=container.querySelector('.column-btn'),colMenu=container.querySelector('.column-menu');colBtn.onclick=e=>{e.stopPropagation();colMenu.classList.toggle('hidden')};
+    colMenu.onclick=e=>e.stopPropagation();
+    colMenu.querySelectorAll('[data-col]').forEach(cb=>cb.onchange=()=>{const col=cb.dataset.col;if(cb.checked&&!prefs.visibleColumns.includes(col))prefs.visibleColumns.push(col);if(!cb.checked)prefs.visibleColumns=prefs.visibleColumns.filter(x=>x!==col);if(!prefs.visibleColumns.length){cb.checked=true;prefs.visibleColumns=[col]}saveGridPrefs(key,prefs);render()});
+    container.querySelector('.page-size').onchange=e=>{prefs.pageSize=Number(e.target.value);prefs.page=1;saveGridPrefs(key,prefs);render()};
+    container.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>{prefs.page=Number(b.dataset.page);saveGridPrefs(key,prefs);render()});
+    container.querySelector('.prev').onclick=()=>{if(prefs.page>1){prefs.page--;saveGridPrefs(key,prefs);render()}};
+    container.querySelector('.next').onclick=()=>{if(prefs.page<pages){prefs.page++;saveGridPrefs(key,prefs);render()}};
+    container.querySelector('.clear-grid-filters')?.addEventListener('click',()=>{prefs.search='';prefs.filters={};prefs.page=1;saveGridPrefs(key,prefs);render()});
+    if(opt.bindActions)opt.bindActions(pageRows,container);
+  }
+  rt.render=render;render();return rt
+}
+document.addEventListener('click',e=>{if(!e.target.closest('.grid-tool-wrap'))document.querySelectorAll('.column-menu').forEach(x=>x.classList.add('hidden'));if(!e.target.closest('.export-menu-wrap'))$('#exportMenu')?.classList.add('hidden')});
+const configs={
+raw:{title:'Raw Fabric',columns:['ROLL_ID','INWARD_DATE','SUPPLIER','VENDOR_ROLL_NO','FABRIC','INWARD_MTR','STATUS'],filters:['SUPPLIER','FABRIC','STATUS'],action:'New Inward',fields:['INWARD_DATE','SUPPLIER_ID','VENDOR_ROLL_NO','FABRIC_ID','INWARD_MTR','INVOICE_CHALLAN','LOT_REF','NOTES']},
+dye:{title:'Dyeing',columns:['DYE_PLAN_ID','DYE_BATCH_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR','ROLL_COUNT','ISSUE_MTR','RECEIVED_MTR','VARIANCE_MTR','USABLE_MTR','PLAN_VARIANCE_MTR','STATUS','__ACTION'],filters:['DYE_VENDOR','FABRIC','COLOR','STATUS'],action:'New Dye Plan',fields:['ISSUE_DATE','DYE_VENDOR_ID','ROLL_ID','COLOR_ID','ISSUE_MTR','NOTES']},
+production:{title:'Production / Cutting',columns:['PRODUCTION_BATCH_ID','PLAN_DATE','STYLE','DYE_BATCH_ID','PLANNED_QTY','ALLOCATED_MTR','TOTAL_CUT','STATUS'],filters:['STYLE','DYE_BATCH_ID','STATUS'],action:'New Production Batch',fields:['PLAN_DATE','DYE_BATCH_ID','STYLE_ID','PLANNED_QTY','ALLOCATED_MTR','NOTES']},
+stitching:{title:'Stitching',columns:['CHALLAN_ID','ISSUE_DATE','STITCHING_VENDOR','PRODUCTION_BATCH_ID','TOTAL_ISSUED','TOTAL_RECEIVED','PENDING_QTY','STATUS'],filters:['STITCHING_VENDOR','PRODUCTION_BATCH_ID','STATUS'],action:'New Challan',fields:['ISSUE_DATE','STITCHING_VENDOR_ID','PRODUCTION_BATCH_ID','M_ISSUED','L_ISSUED','XL_ISSUED','2XL_ISSUED','3XL_ISSUED','OTHER_ISSUED','NOTES']},
+qc:{title:'QC & Rework',columns:['QC_ID','QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','STATUS'],filters:['SIZE','CHALLAN_ID','STATUS'],action:'New QC Entry',fields:['QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','DEFECT_REASON','NOTES']},
+handover:{title:'Warehouse Handover',columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','PENDING_QTY','STATUS'],filters:['STYLE','COLOR','SIZE','STATUS'],action:'New Handover',fields:['HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE_ID','COLOR_ID','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','WAREHOUSE_REF','NOTES']}
+};
+async function renderModule(m,force=false){
+  const cfg=configs[m],s=$('#stage');
+  s.innerHTML=`<section class="panel"><div class="panel-head"><h3>${cfg.title}</h3><button class="btn teal" id="newBtn">+ ${cfg.action}</button></div><div id="gridHost">Loading…</div></section>`;
+  $('#newBtn').onclick=()=>openActionForm(m);
+  try{
+    const d=await getCachedModule(m,force),items=d.items||[];
+    await mountDataGrid($('#gridHost'),{
+      key:'module:'+m,items,columns:cfg.columns,filters:cfg.filters||[],
+      actionRenderer:m==='dye'?(r=>'<div class="row-actions">'+(!/^RECEIVED/.test(String(r.STATUS))?'<button class="btn ghost dye-receive-btn" data-idx="'+r.__gridIndex+'">Receive</button>':'')+'<button class="btn ghost dye-manage-btn" data-idx="'+r.__gridIndex+'">Manage</button></div>'):null,
+      bindActions:m==='dye'?((pageRows,host)=>{host.querySelectorAll('.dye-receive-btn').forEach(b=>b.onclick=()=>openDyeReceive(items[Number(b.dataset.idx)]));host.querySelectorAll('.dye-manage-btn').forEach(b=>b.onclick=()=>openDyeManage(items[Number(b.dataset.idx)]))}):null
+    });
+  }catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}
+}
 function badge(v){const s=String(v||''),cl=/reject|defect|negative/i.test(s)?'danger':/pending|partial|rework|vendor/i.test(s)?'warn':'ok';return `<span class="badge ${cl}">${esc(s)}</span>`}
 async function openActionForm(m){
   if(m==='raw')return openRawInward();
