@@ -143,10 +143,10 @@ function badge(v){
   const s=String(v||'').trim(),x=s.toUpperCase();let cl='neutral';
   if(/CANCEL|REJECT|DEFECT|FAILED|ERROR|SHORT|NEGATIVE|BLOCK/.test(x))cl='danger';
   else if(/REWORK|HOLD|PARTIAL|PENDING|WAIT|DUE|OPEN/.test(x))cl='warn';
+  else if(/FULLY ISSUED|DISABLED|INACTIVE/.test(x))cl='muted';
   else if(/AT DYE|AT STITCH|IN PROCESS|PROCESSING|ISSUED|PLANNED|ALLOCATED|CUTTING/.test(x))cl='info';
   else if(/EXCESS|EXTRA|OVER/.test(x))cl='purple';
   else if(/AVAILABLE|ACTIVE|RECEIVED EXACT|RECEIVED$|CLOSED|COMPLETE|COMPLETED|PASSED|PASS|READY|DONE|SUCCESS/.test(x))cl='ok';
-  else if(/FULLY ISSUED|DISABLED|INACTIVE/.test(x))cl='muted';
   return `<span class="badge ${cl}">${esc(s)}</span>`
 }
 async function openActionForm(m){
