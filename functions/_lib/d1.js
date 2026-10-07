@@ -288,7 +288,7 @@ async function dyeBatchSummary(db,batch){
   if(!r?.DYE_BATCH_ID)return null;const variance=truth(r.CLOSED)?n(r.RECEIVED_MTR)-n(r.ISSUE_MTR):0;return{...r,VARIANCE_MTR:variance,PENDING_MTR:truth(r.CLOSED)?0:Math.max(0,n(r.ISSUE_MTR)-n(r.RECEIVED_MTR)),CLOSED:truth(r.CLOSED),STATUS:truth(r.CLOSED)?(variance>0.0001?'RECEIVED EXCESS':variance<-0.0001?'RECEIVED SHORT':'RECEIVED EXACT'):(n(r.RECEIVED_MTR)>0?'PARTIAL RECEIVED':'AT DYE VENDOR')}
 }
 async function dyePlanSummary(db,plan){
-  const bs=await rows(db,'SELECT DISTINCT DYE_BATCH_ID FROM dye_jobs WHERE DYE_PLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",plan),sums=[];for(const b of bs){const s=await dyeBatchSummary(db,b.DYE_BATCH_ID);if(s)sums.push(s)}
+  const bs=await rows(db,"SELECT DISTINCT DYE_BATCH_ID FROM dye_jobs WHERE DYE_PLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",plan),sums=[];for(const b of bs){const s=await dyeBatchSummary(db,b.DYE_BATCH_ID);if(s)sums.push(s)}
   const issued=sums.reduce((s,x)=>s+n(x.ISSUE_MTR),0),received=sums.reduce((s,x)=>s+n(x.RECEIVED_MTR),0),usable=sums.reduce((s,x)=>s+n(x.USABLE_MTR),0),defect=sums.reduce((s,x)=>s+n(x.DEFECT_MTR),0),closed=sums.filter(x=>x.CLOSED).length;
   return{DYE_PLAN_ID:plan,ISSUE_MTR:issued,RECEIVED_MTR:received,USABLE_MTR:usable,DEFECT_MTR:defect,VARIANCE_MTR:received-issued,BATCH_COUNT:sums.length,CLOSED_BATCHES:closed,ALL_CLOSED:!!sums.length&&closed===sums.length}
 }
@@ -899,7 +899,7 @@ async function getDyeBatchDetail(db,batch){
       SELECT ROLL_ID,SUM(ISSUE_MTR) other_issued FROM dye_jobs WHERE DYE_BATCH_ID<>? GROUP BY ROLL_ID
     ) x ON x.ROLL_ID=j.ROLL_ID
     WHERE j.DYE_BATCH_ID=? AND COALESCE(j.STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY j.ROW_ID`,batch,batch);
-  const receipts=await rows(db,'SELECT * FROM dye_receipts WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY CREATED_AT,RECEIPT_ID',batch);
+  const receipts=await rows(db,"SELECT * FROM dye_receipts WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY CREATED_AT,RECEIPT_ID",batch);
   return{...head,lines,receipts,downstreamCount:await dyeDownstreamCount(db,batch)}
 }
 async function editDyeBatch(db,r,a){
