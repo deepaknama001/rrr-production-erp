@@ -784,6 +784,220 @@ async function openTxnManage(module,row){
   if(module==='handover')return openHandoverManage(row)
 }
 
+
+function sizeLineFields(sizes,values={},cls='size-qty',maxMap={}){
+  return (sizes||[]).map(s=>{
+    const val=Number(values[s.SIZE_ID]??0),mx=maxMap[s.SIZE_ID];
+    return `<div class="field size-field"><label>${esc(s.SIZE_NAME)}${mx!==undefined?' · '+Number(mx).toLocaleString('en-IN')+' available':''}</label><input class="${cls}" data-size-id="${esc(s.SIZE_ID)}" type="number" min="0" step="1" ${mx!==undefined?`max="${mx}"`:''} value="${val}"></div>`
+  }).join('')
+}
+function collectSizeLines(root,selector='.size-qty'){
+  return [...root.querySelectorAll(selector)].map(x=>({SIZE_ID:x.dataset.sizeId,QTY:Number(x.value||0)})).filter(x=>x.QTY>0)
+}
+async function cancelRecord(module,record,label,goModule){
+  const reason=prompt('Reason for cancelling '+label+':','Mistaken entry');if(reason===null)return;
+  try{
+    await api('/api/data',{method:'POST',activity:'Cancelling '+label+'…',success:label+' cancelled',body:JSON.stringify({module,record:{...record,REASON:reason||'Mistaken entry'},requestId:newRequestId()})});
+    dropCaches();closeModal();go(goModule,true)
+  }catch(e){toast(e.message,'bad',5000)}
+}
+async function fetchDetail(module,id){
+  const d=await api('/api/data?module='+encodeURIComponent(module+'_detail')+'&id='+encodeURIComponent(id),{activity:'Loading details…'});return d.detail
+}
+async function openProductionManage(row){
+  const id=String(row.PRODUCTION_BATCH_ID||'');let d;
+  try{d=await fetchDetail('production',id)}catch(e){return toast(e.message,'bad',4500)}
+  const cut=d.cut,lines=d.cutLines||[];
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>Manage Production</h3><small>${esc(id)} · ${esc(d.STYLE||'')} · ${esc(d.COLOR||'')}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <div class="manage-kpis">
+      <div><span>Allocated</span><b>${moneyless(d.ALLOCATED_MTR)} m</b></div>
+      <div><span>Consumed</span><b>${moneyless(cut?.CONSUMED_MTR||0)} m</b></div>
+      <div><span>Cut Pieces</span><b>${lines.reduce((s,x)=>s+Number(x.QTY||0),0)}</b></div>
+      <div><span>Downstream Challans</span><b>${Number(d.downstreamCount||0)}</b></div>
+    </div>
+    <div class="manage-actions">
+      ${canAction('production','edit')?'<button class="btn ghost" id="editProd">Edit Plan</button>':''}
+      ${canAction('production','edit')?'<button class="btn teal" id="cutProd">'+(cut?'Edit Cutting':'Complete Cutting')+'</button>':''}
+      ${canAction('production','cancel')?'<button class="btn danger" id="cancelProd">Cancel Batch</button>':''}
+    </div>
+    ${lines.length?`<div class="subsection"><h4>Size-wise Cut</h4><div class="mini-pills">${lines.map(x=>`<span>${esc(x.SIZE_NAME||x.SIZE_ID)} <b>${x.QTY}</b></span>`).join('')}</div></div>`:''}
+    ${d.downstreamCount?'<div class="smart-note"><b>Dependency lock:</b> Production plan/cutting changes that affect issued stock may be blocked until downstream stitching is reversed.</div>':''}
+  `;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;
+  $('#editProd')?.addEventListener('click',()=>{closeModal();openProductionEdit(d)});
+  $('#cutProd')?.addEventListener('click',()=>{closeModal();openCuttingActual(d)});
+  $('#cancelProd')?.addEventListener('click',()=>cancelRecord('production_cancel',{PRODUCTION_BATCH_ID:id},'production batch','production'))
+}
+async function openProductionEdit(d){
+  let l;try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
+  const batches=l.dyeBatches||[],styles=l.styles||[],id=d.PRODUCTION_BATCH_ID;
+  const allBatch=[...batches];if(!allBatch.some(x=>String(x.DYE_BATCH_ID)===String(d.DYE_BATCH_ID)))allBatch.unshift({DYE_BATCH_ID:d.DYE_BATCH_ID,FABRIC_NAME:d.FABRIC_ID,COLOR_NAME:d.COLOR||d.COLOR_ID,BALANCE_MTR:d.ALLOCATED_MTR});
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>Edit Production Plan</h3><small>${esc(id)}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="prodEditForm"><div class="form-grid">
+      <div class="field"><label>Plan Date</label><input name="PLAN_DATE" type="date" value="${esc(String(d.PLAN_DATE||'').slice(0,10))}" required></div>
+      <div class="field"><label>Dyed Batch</label><select name="DYE_BATCH_ID" required>${allBatch.map(x=>`<option value="${esc(x.DYE_BATCH_ID)}" ${String(x.DYE_BATCH_ID)===String(d.DYE_BATCH_ID)?'selected':''}>${esc(x.DYE_BATCH_ID)} · ${esc(x.FABRIC_NAME||'')} · ${esc(x.COLOR_NAME||'')}</option>`).join('')}</select></div>
+      <div class="field"><label>Style</label><select name="STYLE_ID" required>${styles.map(x=>`<option value="${esc(x.STYLE_ID)}" ${String(x.STYLE_ID)===String(d.STYLE_ID)?'selected':''}>${esc(x.STYLE_NAME)}</option>`).join('')}</select></div>
+      <div class="field"><label>Planned Qty</label><input name="PLANNED_QTY" type="number" min="0" step="1" value="${Number(d.PLANNED_QTY||0)}"></div>
+      <div class="field"><label>Allocated Meter</label><input name="ALLOCATED_MTR" type="number" min="0.01" step="0.01" value="${Number(d.ALLOCATED_MTR||0)}" required></div>
+      <div class="field wide"><label>Notes</label><input name="NOTES" value="${esc(d.NOTES||'')}"></div>
+    </div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary">Save Correction</button></div></form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  $('#prodEditForm').onsubmit=async e=>{e.preventDefault();const rec={...Object.fromEntries(new FormData(e.target).entries()),PRODUCTION_BATCH_ID:id};try{await api('/api/data',{method:'POST',activity:'Updating production plan…',success:'Production plan updated',body:JSON.stringify({module:'production_edit',record:rec,requestId:newRequestId()})});dropCaches();closeModal();go('production',true)}catch(err){toast(err.message,'bad',5000)}}
+}
+async function openCuttingActual(d){
+  let l;try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
+  const sizes=(l.sizes||[]).filter(x=>isTrue(x.ACTIVE)),old=Object.fromEntries((d.cutLines||[]).map(x=>[x.SIZE_ID,Number(x.QTY||0)])),cut=d.cut||{};
+  if(!sizes.length)return toast('Create active sizes in Masters → Sizes first.','bad',4000);
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>${d.cut?'Edit':'Complete'} Cutting</h3><small>${esc(d.PRODUCTION_BATCH_ID)} · allocated ${moneyless(d.ALLOCATED_MTR)} m</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="cutForm"><div class="form-grid">
+      <div class="field"><label>Cut Date</label><input name="CUT_DATE" type="date" required value="${esc(String(cut.CUT_DATE||todayLocal()).slice(0,10))}"></div>
+      <div class="field"><label>Allocated Meter</label><input value="${moneyless(d.ALLOCATED_MTR)} m" disabled></div>
+      <div class="field"><label>Consumed Meter</label><input class="meter-recon" name="CONSUMED_MTR" type="number" min="0" step="0.01" value="${Number(cut.CONSUMED_MTR||0)}"></div>
+      <div class="field"><label>Cutting Waste Meter</label><input class="meter-recon" name="WASTE_MTR" type="number" min="0" step="0.01" value="${Number(cut.WASTE_MTR||0)}"></div>
+      <div class="field"><label>Defect/Hold Meter</label><input class="meter-recon" name="DEFECT_MTR" type="number" min="0" step="0.01" value="${Number(cut.DEFECT_MTR||0)}"></div>
+      <div class="field"><label>Unused Return Meter</label><input class="meter-recon" name="UNUSED_RETURN_MTR" type="number" min="0" step="0.01" value="${Number(cut.UNUSED_RETURN_MTR||0)}"></div>
+      <div class="field wide"><label>Notes</label><input name="NOTES" value="${esc(cut.NOTES||'')}"></div>
+    </div>
+    <div class="recon-strip"><span>Accounted <b id="accountedMtr">0.00 m</b></span><span>Difference <b id="reconDiff">0.00 m</b></span></div>
+    <div class="subsection"><h4>Size-wise Cut Pieces</h4><div class="dynamic-size-grid">${sizeLineFields(sizes,old)}</div><div class="size-total">Total Cut <b id="cutPieceTotal">0</b> pcs</div></div>
+    <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary">Save Cutting</button></div></form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  const form=$('#cutForm'),allocated=Number(d.ALLOCATED_MTR||0);
+  function calc(){const accounted=[...form.querySelectorAll('.meter-recon')].reduce((s,x)=>s+(Number(x.value)||0),0),diff=allocated-accounted,total=[...form.querySelectorAll('.size-qty')].reduce((s,x)=>s+(Number(x.value)||0),0);$('#accountedMtr').textContent=moneyless(accounted)+' m';$('#reconDiff').textContent=(diff>=0?'+':'')+moneyless(diff)+' m';$('#reconDiff').classList.toggle('bad',Math.abs(diff)>.011);$('#cutPieceTotal').textContent=total}
+  form.addEventListener('input',calc);calc();
+  form.onsubmit=async e=>{e.preventDefault();const rec={...Object.fromEntries(new FormData(form).entries()),PRODUCTION_BATCH_ID:d.PRODUCTION_BATCH_ID,items:collectSizeLines(form)};try{await api('/api/data',{method:'POST',activity:'Saving cutting actual…',success:'Cutting saved',body:JSON.stringify({module:'cutting_complete',record:rec,requestId:newRequestId()})});dropCaches();closeModal();go('production',true)}catch(err){toast(err.message,'bad',5000)}}
+}
+async function openStitchingManage(row){
+  const id=String(row.CHALLAN_ID||'');let d;
+  try{d=await fetchDetail('stitching',id)}catch(e){return toast(e.message,'bad',4500)}
+  const pending=(d.pendingLines||[]).reduce((s,x)=>s+Number(x.PENDING_QTY||0),0);
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>Manage Stitching</h3><small>${esc(id)} · ${esc(d.STITCHING_VENDOR||'')}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <div class="manage-kpis"><div><span>Issued</span><b>${(d.issueLines||[]).reduce((s,x)=>s+x.QTY,0)}</b></div><div><span>Received</span><b>${(d.receivedLines||[]).reduce((s,x)=>s+x.QTY,0)}</b></div><div><span>Pending Vendor</span><b>${pending}</b></div><div><span>Receipts</span><b>${(d.receipts||[]).length}</b></div></div>
+    <div class="manage-actions">
+      ${canAction('stitching','edit')?'<button class="btn ghost" id="editStitch">Edit Issue</button>':''}
+      ${pending>0&&canAction('stitching','create')?'<button class="btn teal" id="receiveStitch">Receive Garments</button>':''}
+      ${canAction('stitching','cancel')?'<button class="btn danger" id="cancelStitch">Cancel Challan</button>':''}
+    </div>
+    <div class="subsection"><h4>Size Balance</h4><div class="mini-pills">${(d.pendingLines||[]).map(x=>`<span>${esc(x.SIZE_NAME)} · Issued <b>${x.QTY}</b> · Rec. <b>${x.RECEIVED_QTY}</b> · Pending <b>${x.PENDING_QTY}</b></span>`).join('')||'—'}</div></div>
+    ${(d.receipts||[]).length?`<div class="subsection"><h4>Receipt History</h4><div class="history-list">${d.receipts.map(x=>`<div><b>${esc(x.RECEIPT_ID)}</b><span>${fmtDate(x.RECEIPT_DATE)}</span>${d.qcCount===0&&canAction('stitching','cancel')?`<button class="link-danger cancel-stitch-receipt" data-id="${esc(x.RECEIPT_ID)}">Cancel</button>`:''}</div>`).join('')}</div></div>`:''}
+  `;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;
+  $('#editStitch')?.addEventListener('click',()=>{closeModal();openStitchingEdit(d)});
+  $('#receiveStitch')?.addEventListener('click',()=>{closeModal();openStitchingReceipt(d)});
+  $('#cancelStitch')?.addEventListener('click',()=>cancelRecord('stitching_cancel',{CHALLAN_ID:id},'stitching challan','stitching'));
+  document.querySelectorAll('.cancel-stitch-receipt').forEach(b=>b.onclick=()=>cancelRecord('stitching_receipt_cancel',{RECEIPT_ID:b.dataset.id},'stitching receipt','stitching'))
+}
+async function openStitchingEdit(d){
+  let l;try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
+  const vendors=(l.vendors||[]).filter(v=>isTrue(v.ACTIVE)&&isTrue(v.STITCHING_VENDOR)),sizes=(l.sizes||[]).filter(x=>isTrue(x.ACTIVE));
+  const vals=Object.fromEntries((d.issueLines||[]).map(x=>[x.SIZE_ID,x.QTY])),mx=Object.fromEntries((d.sizeBalances||[]).map(x=>[x.SIZE_ID,Number(x.BALANCE_QTY||0)+(vals[x.SIZE_ID]||0)]));
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>Edit Stitching Issue</h3><small>${esc(d.CHALLAN_ID)}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="stitchEditForm"><div class="form-grid">
+      <div class="field"><label>Issue Date</label><input name="ISSUE_DATE" type="date" value="${esc(String(d.ISSUE_DATE||'').slice(0,10))}" required></div>
+      <div class="field"><label>Vendor</label><select name="STITCHING_VENDOR_ID" required>${vendors.map(v=>`<option value="${esc(v.VENDOR_ID)}" ${String(v.VENDOR_ID)===String(d.STITCHING_VENDOR_ID)?'selected':''}>${esc(v.VENDOR_NAME)}</option>`).join('')}</select></div>
+      <div class="field wide"><label>Notes</label><input name="NOTES" value="${esc(d.NOTES||'')}"></div>
+    </div><div class="subsection"><h4>Size-wise Issue</h4><div class="dynamic-size-grid">${sizeLineFields(sizes,vals,'size-qty',mx)}</div></div>
+    <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary">Save Correction</button></div></form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  $('#stitchEditForm').onsubmit=async e=>{e.preventDefault();const rec={...Object.fromEntries(new FormData(e.target).entries()),CHALLAN_ID:d.CHALLAN_ID,items:collectSizeLines(e.target)};try{await api('/api/data',{method:'POST',activity:'Updating stitching issue…',success:'Stitching issue updated',body:JSON.stringify({module:'stitching_edit',record:rec,requestId:newRequestId()})});dropCaches();closeModal();go('stitching',true)}catch(err){toast(err.message,'bad',5000)}}
+}
+async function openStitchingReceipt(d){
+  const pending=(d.pendingLines||[]).filter(x=>Number(x.PENDING_QTY)>0);
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>Receive from Stitching</h3><small>${esc(d.CHALLAN_ID)} · partial receipts allowed</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="stitchReceiptForm"><div class="form-grid"><div class="field"><label>Receipt Date</label><input name="RECEIPT_DATE" type="date" required value="${todayLocal()}"></div><div class="field wide"><label>Notes</label><input name="NOTES"></div></div>
+    <div class="subsection"><h4>Size-wise Receipt</h4><div class="dynamic-size-grid">${pending.map(x=>`<div class="field"><label>${esc(x.SIZE_NAME)} · ${x.PENDING_QTY} pending</label><input class="receipt-size" data-size-id="${esc(x.SIZE_ID)}" type="number" min="0" max="${x.PENDING_QTY}" step="1" value="0"></div>`).join('')}</div></div>
+    <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary">Save Receipt</button></div></form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  $('#stitchReceiptForm').onsubmit=async e=>{e.preventDefault();const rec={...Object.fromEntries(new FormData(e.target).entries()),CHALLAN_ID:d.CHALLAN_ID,items:collectSizeLines(e.target,'.receipt-size')};try{await api('/api/data',{method:'POST',activity:'Saving stitching receipt…',success:'Garments received',body:JSON.stringify({module:'stitching_receive',record:rec,requestId:newRequestId()})});dropCaches();closeModal();go('stitching',true)}catch(err){toast(err.message,'bad',5000)}}
+}
+async function openQcManage(row){
+  const id=String(row.QC_ID||'');let d,l;
+  try{[d,l]=await Promise.all([fetchDetail('qc',id),getLookups(false)])}catch(e){return toast(e.message,'bad',4500)}
+  const issued=(d.reworks||[]).reduce((s,x)=>s+Number(x.ISSUE_QTY||0),0),reworkAvail=Math.max(0,Number(d.REWORK_QTY||0)-issued);
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>Manage QC</h3><small>${esc(id)} · ${esc(d.SIZE_NAME||d.SIZE||'')}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <div class="manage-kpis"><div><span>QC Qty</span><b>${d.QC_QTY}</b></div><div><span>Pass</span><b>${d.PASS_QTY}</b></div><div><span>Rework</span><b>${d.REWORK_QTY}</b></div><div><span>Reject</span><b>${d.REJECT_QTY}</b></div></div>
+    <div class="manage-actions">
+      ${canAction('qc','edit')?'<button class="btn ghost" id="editQc">Edit QC</button>':''}
+      ${reworkAvail>0&&canAction('qc','create')?'<button class="btn teal" id="issueRework">Send Rework</button>':''}
+      ${canAction('qc','cancel')?'<button class="btn danger" id="cancelQc">Cancel QC</button>':''}
+    </div>
+    ${(d.reworks||[]).length?`<div class="subsection"><h4>Rework Jobs</h4><div class="history-list">${d.reworks.map(x=>{const p=Math.max(0,Number(x.ISSUE_QTY)-Number(x.RETURNED_QTY));return`<div><b>${esc(x.REWORK_ID)}</b><span>${esc(x.STATUS)} · ${p} pending</span>${p>0&&canAction('qc','edit')?`<button class="link-action receive-rework" data-id="${esc(x.REWORK_ID)}" data-pending="${p}">Receive</button>`:''}${Number(x.RETURNED_QTY||0)===0&&canAction('qc','cancel')?`<button class="link-danger cancel-rework" data-id="${esc(x.REWORK_ID)}">Cancel</button>`:''}</div>`}).join('')}</div></div>`:''}
+  `;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;
+  $('#editQc')?.addEventListener('click',()=>{closeModal();openQcEdit(d,l)});
+  $('#issueRework')?.addEventListener('click',()=>{closeModal();openReworkIssue(d,l,reworkAvail)});
+  $('#cancelQc')?.addEventListener('click',()=>cancelRecord('qc_cancel',{QC_ID:id},'QC entry','qc'));
+  document.querySelectorAll('.receive-rework').forEach(b=>b.onclick=()=>{closeModal();openReworkReceive({REWORK_ID:b.dataset.id,PENDING:Number(b.dataset.pending)},l)});
+  document.querySelectorAll('.cancel-rework').forEach(b=>b.onclick=()=>cancelRecord('rework_cancel',{REWORK_ID:b.dataset.id},'rework job','qc'))
+}
+function openQcEdit(d,l){
+  const defects=l.defects||[];
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>Edit QC</h3><small>${esc(d.QC_ID)}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="qcEditForm"><div class="form-grid">
+      <div class="field"><label>QC Date</label><input name="QC_DATE" type="date" value="${esc(String(d.QC_DATE||'').slice(0,10))}" required></div>
+      <div class="field"><label>QC Qty</label><input name="QC_QTY" type="number" min="1" step="1" value="${d.QC_QTY}" required></div>
+      <div class="field"><label>Pass</label><input name="PASS_QTY" type="number" min="0" step="1" value="${d.PASS_QTY}"></div>
+      <div class="field"><label>Rework</label><input name="REWORK_QTY" type="number" min="0" step="1" value="${d.REWORK_QTY}"></div>
+      <div class="field"><label>Reject</label><input name="REJECT_QTY" type="number" min="0" step="1" value="${d.REJECT_QTY}"></div>
+      <div class="field"><label>Defect Reason</label><select name="DEFECT_REASON"><option value="">Select</option>${defects.map(x=>`<option value="${esc(x.DEFECT_NAME)}" ${String(x.DEFECT_NAME)===String(d.DEFECT_REASON||'')?'selected':''}>${esc(x.DEFECT_NAME)}</option>`).join('')}</select></div>
+      <div class="field wide"><label>Notes</label><input name="NOTES" value="${esc(d.NOTES||'')}"></div>
+    </div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary">Save Correction</button></div></form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  $('#qcEditForm').onsubmit=async e=>{e.preventDefault();const rec={...Object.fromEntries(new FormData(e.target).entries()),QC_ID:d.QC_ID,SIZE:d.SIZE};try{await api('/api/data',{method:'POST',activity:'Updating QC…',success:'QC updated',body:JSON.stringify({module:'qc_edit',record:rec,requestId:newRequestId()})});dropCaches();closeModal();go('qc',true)}catch(err){toast(err.message,'bad',5000)}}
+}
+function openReworkIssue(d,l,available){
+  const vendors=(l.vendors||[]).filter(v=>isTrue(v.ACTIVE)&&(isTrue(v.STITCHING_VENDOR)||isTrue(v.CUTTING_VENDOR)));
+  $('#modalBody').innerHTML=`<div class="panel-head"><div><h3>Send for Rework</h3><small>${available} pcs available from QC ${esc(d.QC_ID)}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="rwIssueForm"><div class="form-grid"><div class="field"><label>Issue Date</label><input name="ISSUE_DATE" type="date" value="${todayLocal()}" required></div><div class="field"><label>Vendor</label><select name="VENDOR_ID" required>${vendors.map(v=>`<option value="${esc(v.VENDOR_ID)}" ${String(v.VENDOR_ID)===String(d.VENDOR_ID)?'selected':''}>${esc(v.VENDOR_NAME)}</option>`).join('')}</select></div><div class="field"><label>Qty</label><input name="ISSUE_QTY" type="number" min="1" max="${available}" step="1" value="${available}" required></div><div class="field wide"><label>Notes</label><input name="NOTES"></div></div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary">Create Rework</button></div></form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  $('#rwIssueForm').onsubmit=async e=>{e.preventDefault();const rec={...Object.fromEntries(new FormData(e.target).entries()),QC_ID:d.QC_ID};try{await api('/api/data',{method:'POST',activity:'Issuing rework…',success:'Rework issued',body:JSON.stringify({module:'rework_issue',record:rec,requestId:newRequestId()})});dropCaches();closeModal();go('qc',true)}catch(err){toast(err.message,'bad',5000)}}
+}
+function openReworkReceive(rw,l){
+  const defects=l.defects||[];
+  $('#modalBody').innerHTML=`<div class="panel-head"><div><h3>Receive Rework</h3><small>${esc(rw.REWORK_ID)} · ${rw.PENDING} pending</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="rwReceiveForm"><div class="form-grid"><div class="field"><label>Receipt / Re-QC Date</label><input name="RECEIPT_DATE" type="date" value="${todayLocal()}" required></div><div class="field"><label>Returned Qty</label><input name="RETURNED_QTY" type="number" min="1" max="${rw.PENDING}" step="1" value="${rw.PENDING}" required></div><div class="field"><label>Pass after Rework</label><input name="PASS_QTY" type="number" min="0" step="1" value="${rw.PENDING}"></div><div class="field"><label>Reject after Rework</label><input name="REJECT_QTY" type="number" min="0" step="1" value="0"></div><div class="field"><label>Defect Reason</label><select name="DEFECT_REASON"><option value="">Select</option>${defects.map(x=>`<option value="${esc(x.DEFECT_NAME)}">${esc(x.DEFECT_NAME)}</option>`).join('')}</select></div><div class="field wide"><label>Notes</label><input name="NOTES"></div></div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary">Save Rework Return</button></div></form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  $('#rwReceiveForm').onsubmit=async e=>{e.preventDefault();const rec={...Object.fromEntries(new FormData(e.target).entries()),REWORK_ID:rw.REWORK_ID};try{await api('/api/data',{method:'POST',activity:'Receiving rework…',success:'Rework return saved',body:JSON.stringify({module:'rework_receive',record:rec,requestId:newRequestId()})});dropCaches();closeModal();go('qc',true)}catch(err){toast(err.message,'bad',5000)}}
+}
+async function openHandoverManage(row){
+  const id=String(row.HANDOVER_ID||'');let d;
+  try{d=await fetchDetail('handover',id)}catch(e){return toast(e.message,'bad',4500)}
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>Manage Warehouse Handover</h3><small>${esc(id)}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <div class="manage-kpis"><div><span>Handover</span><b>${d.ACCEPTED_QTY}</b></div><div><span>Total Received</span><b>${d.TOTAL_RECEIVED}</b></div><div><span>Pending</span><b>${d.PENDING_QTY}</b></div><div><span>Additional Receipts</span><b>${(d.receipts||[]).length}</b></div></div>
+    <div class="manage-actions">
+      ${canAction('handover','edit')?'<button class="btn ghost" id="editWh">Edit Handover</button>':''}
+      ${d.PENDING_QTY>0&&canAction('handover','create')?'<button class="btn teal" id="receiveWh">Receive Pending</button>':''}
+      ${canAction('handover','cancel')?'<button class="btn danger" id="cancelWh">Cancel Handover</button>':''}
+    </div>
+    ${(d.receipts||[]).length?`<div class="subsection"><h4>Receipt History</h4><div class="history-list">${d.receipts.map(x=>`<div><b>${esc(x.RECEIPT_ID)}</b><span>${fmtDate(x.RECEIPT_DATE)} · ${x.RECEIVED_QTY} pcs</span>${canAction('handover','cancel')?`<button class="link-danger cancel-wh-receipt" data-id="${esc(x.RECEIPT_ID)}">Cancel</button>`:''}</div>`).join('')}</div></div>`:''}
+  `;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;
+  $('#editWh')?.addEventListener('click',()=>{closeModal();openHandoverEdit(d)});
+  $('#receiveWh')?.addEventListener('click',()=>{closeModal();openWarehouseReceipt(d)});
+  $('#cancelWh')?.addEventListener('click',()=>cancelRecord('handover_cancel',{HANDOVER_ID:id},'warehouse handover','handover'));
+  document.querySelectorAll('.cancel-wh-receipt').forEach(b=>b.onclick=()=>cancelRecord('warehouse_receipt_cancel',{RECEIPT_ID:b.dataset.id},'warehouse receipt','handover'))
+}
+function openHandoverEdit(d){
+  $('#modalBody').innerHTML=`<div class="panel-head"><div><h3>Edit Warehouse Handover</h3><small>${esc(d.HANDOVER_ID)}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="whEditForm"><div class="form-grid"><div class="field"><label>Handover Date</label><input name="HANDOVER_DATE" type="date" value="${esc(String(d.HANDOVER_DATE||'').slice(0,10))}" required></div><div class="field"><label>Handover Qty</label><input name="ACCEPTED_QTY" type="number" min="1" step="1" value="${d.ACCEPTED_QTY}" required></div><div class="field"><label>Initially Received Qty</label><input name="WAREHOUSE_RECEIVED_QTY" type="number" min="0" step="1" value="${d.WAREHOUSE_RECEIVED_QTY||0}"></div><div class="field"><label>Warehouse Ref</label><input name="WAREHOUSE_REF" value="${esc(d.WAREHOUSE_REF||'')}"></div><div class="field wide"><label>Notes</label><input name="NOTES" value="${esc(d.NOTES||'')}"></div></div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary">Save Correction</button></div></form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  $('#whEditForm').onsubmit=async e=>{e.preventDefault();const rec={...Object.fromEntries(new FormData(e.target).entries()),HANDOVER_ID:d.HANDOVER_ID};try{await api('/api/data',{method:'POST',activity:'Updating handover…',success:'Handover updated',body:JSON.stringify({module:'handover_edit',record:rec,requestId:newRequestId()})});dropCaches();closeModal();go('handover',true)}catch(err){toast(err.message,'bad',5000)}}
+}
+function openWarehouseReceipt(d){
+  $('#modalBody').innerHTML=`<div class="panel-head"><div><h3>Receive Pending Warehouse Qty</h3><small>${esc(d.HANDOVER_ID)} · ${d.PENDING_QTY} pending</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="whReceiptForm"><div class="form-grid"><div class="field"><label>Receipt Date</label><input name="RECEIPT_DATE" type="date" value="${todayLocal()}" required></div><div class="field"><label>Received Qty</label><input name="RECEIVED_QTY" type="number" min="1" max="${d.PENDING_QTY}" step="1" value="${d.PENDING_QTY}" required></div><div class="field"><label>Warehouse Reference</label><input name="WAREHOUSE_REF"></div><div class="field wide"><label>Notes</label><input name="NOTES"></div></div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary">Save Receipt</button></div></form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  $('#whReceiptForm').onsubmit=async e=>{e.preventDefault();const rec={...Object.fromEntries(new FormData(e.target).entries()),HANDOVER_ID:d.HANDOVER_ID};try{await api('/api/data',{method:'POST',activity:'Saving warehouse receipt…',success:'Warehouse receipt saved',body:JSON.stringify({module:'warehouse_receive',record:rec,requestId:newRequestId()})});dropCaches();closeModal();go('handover',true)}catch(err){toast(err.message,'bad',5000)}}
+}
 async function openDyeIssue(){
   const requestId=newRequestId();let l;
   try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
