@@ -750,7 +750,7 @@ async function traceRecord(db,type,id){
 }
 export async function getDataD1(env,{module,actorUserId,id='',type=''}){
   await ensureSchema(env);const db=env.DB,m=String(module||'dashboard'),trailPerm=m==='trail'?({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[String(type||'').toLowerCase()]||null):null,perm=trailPerm||({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc',reports:'reports'}[m]||null),a=await actor(db,actorUserId,perm,false);
-  if(m==='dashboard'){a.actions=await actionPerms(db,a.userId);return{user:a,kpis:await kpisD1(db)}};if(m==='trail')return{trail:await traceRecord(db,type,id)};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db)};if(m==='audit'){await actor(db,actorUserId,'reports',false);return{items:await rows(db,'SELECT AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON FROM audit_log ORDER BY TIMESTAMP DESC LIMIT 2000')}};if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
+  if(m==='dashboard'){a.actions=await actionPerms(db,a.userId);return{user:a,kpis:await kpisD1(db)}};if(m==='trail'){await requireAction(db,a,trailPerm,'view');return{trail:await traceRecord(db,type,id)}};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='production_detail')return{detail:await getProductionDetail(db,String(id||''))};if(m==='stitching_detail')return{detail:await getStitchingDetail(db,String(id||''))};if(m==='qc_detail')return{detail:await getQcDetail(db,String(id||''))};if(m==='handover_detail')return{detail:await getHandoverDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db)};if(m==='audit'){await requireAction(db,a,'reports','audit');return{items:await rows(db,'SELECT AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON FROM audit_log ORDER BY TIMESTAMP DESC LIMIT 2000')}};if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
 }
 
 async function saveMaster(db,r,a){
@@ -1230,6 +1230,63 @@ async function completeRequest(db,id,result){if(id)await db.prepare('UPDATE requ
 async function failRequest(db,id){if(id)await db.prepare("DELETE FROM request_log WHERE request_id=? AND result_json='__PENDING__'").bind(id).run()}
 
 export async function saveRecordD1(env,p){
-  await ensureSchema(env);const db=env.DB,m=String(p.module||''),perm={raw:'raw',raw_bulk:'raw',raw_edit:'raw',raw_cancel:'raw',dye:'dye',dye_bulk:'dye',dye_plan:'dye',dye_receive:'dye',dye_edit_batch:'dye',dye_edit_receipt:'dye',dye_cancel_batch:'dye',production:'production',production_cancel:'production',stitching:'stitching',stitching_cancel:'stitching',qc:'qc',qc_cancel:'qc',handover:'qc',handover_cancel:'qc'}[m]||null,a=await actor(db,p.actorUserId,perm,false),req=String(p.requestId||''),reservation=await reserveRequest(db,req,m);if(!reservation.owner)return reservation.result;
-  try{let record;if(m==='raw_bulk')record=await saveRawBulk(db,p.record||{},a);else if(m==='raw_edit')record=await editRaw(db,p.record||{},a);else if(m==='raw_cancel')record=await cancelRaw(db,p.record||{},a);else if(m==='dye')record=await saveDyeSingle(db,p.record||{},a);else if(m==='dye_bulk')record=await saveDyeBulk(db,p.record||{},a);else if(m==='dye_plan')record=await saveDyePlan(db,p.record||{},a);else if(m==='dye_receive')record=await saveDyeReceive(db,p.record||{},a);else if(m==='dye_edit_batch')record=await editDyeBatch(db,p.record||{},a);else if(m==='dye_edit_receipt')record=await editDyeReceipt(db,p.record||{},a);else if(m==='dye_cancel_batch')record=await cancelDyeBatch(db,p.record||{},a);else if(m==='production')record=await saveProduction(db,p.record||{},a);else if(m==='production_cancel')record=await cancelProduction(db,p.record||{},a);else if(m==='stitching')record=await saveStitching(db,p.record||{},a);else if(m==='stitching_cancel')record=await cancelStitching(db,p.record||{},a);else if(m==='qc')record=await saveQc(db,p.record||{},a);else if(m==='qc_cancel')record=await cancelQc(db,p.record||{},a);else if(m==='handover')record=await saveHandover(db,p.record||{},a);else if(m==='handover_cancel')record=await cancelHandover(db,p.record||{},a);else if(m==='master'){await actor(db,p.actorUserId,null,true);record=await saveMaster(db,p.record||{},a)}else if(m==='raw'){record=await saveRawBulk(db,{...p.record,items:[{FABRIC_ID:p.record?.FABRIC_ID,VENDOR_ROLL_NO:p.record?.VENDOR_ROLL_NO,INWARD_MTR:p.record?.INWARD_MTR,NOTES:p.record?.NOTES}]},a)}else throw err('This legacy transaction type is not available in D1 mode.',404);const result={saved:true,record};await completeRequest(db,req,result);return result}catch(e){await failRequest(db,req);throw e}
+  await ensureSchema(env);
+  const db=env.DB,m=String(p.module||''),moduleMap={
+    raw:'raw',raw_bulk:'raw',raw_edit:'raw',raw_cancel:'raw',
+    dye:'dye',dye_bulk:'dye',dye_plan:'dye',dye_receive:'dye',dye_edit_batch:'dye',dye_edit_receipt:'dye',dye_cancel_batch:'dye',
+    production:'production',production_edit:'production',cutting_complete:'production',production_cancel:'production',
+    stitching:'stitching',stitching_edit:'stitching',stitching_receive:'stitching',stitching_receipt_cancel:'stitching',stitching_cancel:'stitching',
+    qc:'qc',qc_edit:'qc',rework_issue:'qc',rework_receive:'qc',rework_cancel:'qc',qc_cancel:'qc',
+    handover:'qc',handover_edit:'qc',warehouse_receive:'qc',warehouse_receipt_cancel:'qc',handover_cancel:'qc'
+  },perm=moduleMap[m]||null,a=await actor(db,p.actorUserId,perm,false),req=String(p.requestId||'');
+  const actionMap={
+    raw:'create',raw_bulk:'create',raw_edit:'edit',raw_cancel:'cancel',
+    dye:'create',dye_bulk:'create',dye_plan:'create',dye_receive:'create',dye_edit_batch:'edit',dye_edit_receipt:'edit',dye_cancel_batch:'cancel',
+    production:'create',production_edit:'edit',cutting_complete:'edit',production_cancel:'cancel',
+    stitching:'create',stitching_edit:'edit',stitching_receive:'create',stitching_receipt_cancel:'cancel',stitching_cancel:'cancel',
+    qc:'create',qc_edit:'edit',rework_issue:'create',rework_receive:'edit',rework_cancel:'cancel',qc_cancel:'cancel',
+    handover:'create',handover_edit:'edit',warehouse_receive:'create',warehouse_receipt_cancel:'cancel',handover_cancel:'cancel'
+  };
+  if(perm)await requireAction(db,a,perm,actionMap[m]||'create');
+  if(m==='master')await actor(db,p.actorUserId,null,true);
+  const reservation=await reserveRequest(db,req,m);if(!reservation.owner)return reservation.result;
+  try{
+    let record;
+    if(m==='raw_bulk')record=await saveRawBulk(db,p.record||{},a);
+    else if(m==='raw_edit')record=await editRaw(db,p.record||{},a);
+    else if(m==='raw_cancel')record=await cancelRaw(db,p.record||{},a);
+    else if(m==='dye')record=await saveDyeSingle(db,p.record||{},a);
+    else if(m==='dye_bulk')record=await saveDyeBulk(db,p.record||{},a);
+    else if(m==='dye_plan')record=await saveDyePlan(db,p.record||{},a);
+    else if(m==='dye_receive')record=await saveDyeReceive(db,p.record||{},a);
+    else if(m==='dye_edit_batch')record=await editDyeBatch(db,p.record||{},a);
+    else if(m==='dye_edit_receipt')record=await editDyeReceipt(db,p.record||{},a);
+    else if(m==='dye_cancel_batch')record=await cancelDyeBatch(db,p.record||{},a);
+    else if(m==='production')record=await saveProduction(db,p.record||{},a,req);
+    else if(m==='production_edit')record=await editProduction(db,p.record||{},a,req);
+    else if(m==='cutting_complete')record=await saveCuttingActual(db,p.record||{},a,req);
+    else if(m==='production_cancel')record=await cancelProduction(db,p.record||{},a);
+    else if(m==='stitching')record=await saveStitching(db,p.record||{},a,req);
+    else if(m==='stitching_edit')record=await editStitching(db,p.record||{},a,req);
+    else if(m==='stitching_receive')record=await saveStitchingReceipt(db,p.record||{},a,req);
+    else if(m==='stitching_receipt_cancel')record=await cancelStitchingReceipt(db,p.record||{},a);
+    else if(m==='stitching_cancel')record=await cancelStitching(db,p.record||{},a);
+    else if(m==='qc')record=await saveQc(db,p.record||{},a,req);
+    else if(m==='qc_edit')record=await editQc(db,p.record||{},a);
+    else if(m==='rework_issue')record=await saveReworkIssue(db,p.record||{},a,req);
+    else if(m==='rework_receive')record=await saveReworkReceive(db,p.record||{},a,req);
+    else if(m==='rework_cancel')record=await cancelRework(db,p.record||{},a);
+    else if(m==='qc_cancel')record=await cancelQc(db,p.record||{},a);
+    else if(m==='handover')record=await saveHandover(db,p.record||{},a,req);
+    else if(m==='handover_edit')record=await editHandover(db,p.record||{},a);
+    else if(m==='warehouse_receive')record=await saveWarehouseReceipt(db,p.record||{},a,req);
+    else if(m==='warehouse_receipt_cancel')record=await cancelWarehouseReceipt(db,p.record||{},a);
+    else if(m==='handover_cancel')record=await cancelHandover(db,p.record||{},a);
+    else if(m==='master')record=await saveMaster(db,p.record||{},a);
+    else if(m==='raw')record=await saveRawBulk(db,{...p.record,items:[{FABRIC_ID:p.record?.FABRIC_ID,VENDOR_ROLL_NO:p.record?.VENDOR_ROLL_NO,INWARD_MTR:p.record?.INWARD_MTR,NOTES:p.record?.NOTES}]},a);
+    else throw err('This transaction type is not available.',404);
+    const result={saved:true,record};await completeRequest(db,req,result);return result
+  }catch(e){
+    await failRequest(db,req);await logError(db,a?.userId,m,e,{record:p.record||{}});throw e
+  }
 }
