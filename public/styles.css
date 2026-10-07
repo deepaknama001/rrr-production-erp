@@ -83,3 +83,91 @@ button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justif
   .grid-footer{grid-template-columns:1fr;justify-items:center}.rows-control,.page-count{justify-self:center}.page-count{text-align:center}
 }
 @media(max-width:640px){.export-menu{right:-42px}.column-menu{right:auto;left:0}.grid-filter{min-width:calc(50% - 4px)}}
+
+/* v0.17 Global ERP table + status visual system */
+.table-wrap{
+  border:1px solid #d9dee8;
+  border-radius:12px;
+  overflow:auto;
+  background:#fff;
+  box-shadow:0 1px 2px rgba(23,32,51,.03);
+}
+.data{
+  width:100%;
+  border-collapse:separate;
+  border-spacing:0;
+  min-width:900px;
+  background:#fff;
+}
+.data th{
+  background:#f3f5f8;
+  color:#5d687a;
+  font-size:8px;
+  font-weight:900;
+  letter-spacing:.065em;
+  text-transform:uppercase;
+  text-align:left;
+  padding:10px 11px;
+  position:sticky;
+  top:0;
+  z-index:2;
+  border-bottom:1px solid #cfd6e1;
+  border-right:1px solid #dfe4ec;
+  white-space:nowrap;
+}
+.data th:last-child{border-right:0}
+.data td{
+  padding:10px 11px;
+  border-bottom:1px solid #e2e6ed;
+  border-right:1px solid #e6eaf0;
+  font-size:10px;
+  color:#253044;
+  vertical-align:middle;
+  background:#fff;
+}
+.data td:last-child{border-right:0}
+.data tbody tr:nth-child(even) td{background:#fbfcfd}
+.data tbody tr:hover td{background:#f5f8fb}
+.data tbody tr:last-child td{border-bottom:0}
+.data tbody tr{transition:background .12s ease}
+.data td .btn{white-space:nowrap}
+.roll-table .data td,.roll-table .data th{border-color:#dfe4ec}
+
+.badge{
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  border-radius:999px;
+  padding:4px 8px;
+  font-size:7px;
+  font-weight:900;
+  letter-spacing:.02em;
+  line-height:1.15;
+  border:1px solid transparent;
+  white-space:nowrap;
+}
+.badge.ok{background:#e9f8f0;color:#147a4e;border-color:#ccebdc}
+.badge.warn{background:#fff6df;color:#a46500;border-color:#f2dfaa}
+.badge.danger{background:#fdebed;color:#b83245;border-color:#f2cbd1}
+.badge.info{background:#eaf2ff;color:#2f63b5;border-color:#cfdef8}
+.badge.purple{background:#f3ecff;color:#7250b5;border-color:#dfd0f7}
+.badge.muted{background:#eef1f5;color:#667085;border-color:#dde2e8}
+.badge.neutral{background:#f4f6f8;color:#596579;border-color:#e1e5ea}
+
+.smart-grid-toolbar{
+  padding:9px;
+  border:1px solid #e0e5ec;
+  border-radius:11px;
+  background:#fafbfc;
+}
+.grid-active-meta{
+  padding:0 2px 7px;
+  border-bottom:1px solid #edf0f4;
+  margin-bottom:0;
+}
+.grid-footer{
+  padding-top:10px;
+  border-top:1px solid #e4e8ee;
+}
+.master-tabs{padding-bottom:3px;border-bottom:1px solid #e7ebf0}
+.panel{border-color:#dce2ea}
