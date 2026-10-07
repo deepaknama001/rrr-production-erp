@@ -1,4 +1,4 @@
-const APP_BUILD='0.33';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.34';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -29,8 +29,8 @@ async function getCachedModule(module,force=false){
   const p=api('/api/data?module='+module).then(d=>writeCache(module,d)).finally(()=>moduleInflight.delete(module));
   moduleInflight.set(module,p);return p
 }
-const NAV=[['dashboard','⌂','Dashboard'],['raw','▣','Raw Fabric'],['dye','◉','Dyeing'],['production','✂','Production'],['stitching','⇄','Stitching'],['qc','✓','QC & Rework'],['handover','⇥','Warehouse Handover'],['reports','▤','Reports'],['masters','◆','Masters'],['users','⚙','Users']];
-function allowed(m){if(!state.user)return false;if(m==='dashboard')return true;if(m==='users'||m==='masters')return !!state.user.admin;if(m==='handover')return state.user.admin||state.user.permissions?.qc;return state.user.admin||!!state.user.permissions?.[m]}
+const NAV=[['dashboard','⌂','Dashboard'],['raw','▣','Raw Fabric'],['dye','◉','Dyeing'],['production','✂','Production'],['stitching','⇄','Stitching'],['qc','✓','QC & Rework'],['handover','⇥','Warehouse Handover'],['docs','▤','Docs Maker'],['reports','▤','Reports'],['masters','◆','Masters'],['users','⚙','Users']];
+function allowed(m){if(!state.user)return false;if(m==='dashboard')return true;if(m==='users'||m==='masters')return !!state.user.admin;if(m==='docs')return state.user.admin||!!state.user.permissions?.dye||!!state.user.permissions?.stitching;if(m==='handover')return state.user.admin||state.user.permissions?.qc;return state.user.admin||!!state.user.permissions?.[m]}
 function actionModule(m){return m==='handover'?'qc':m}
 function canAction(m,action='view'){
   if(!state.user)return false;if(state.user.admin)return true;
@@ -57,7 +57,102 @@ function startNotificationPolling(){clearInterval(notificationTimer);setTimeout(
 function showApp(){$('#loginView').classList.add('hidden');$('#appView').classList.remove('hidden');$('#sideName').textContent=state.user.name;$('#sideRole').textContent=state.user.role;syncShell();renderNav();startNotificationPolling();go(allowed(state.current)?state.current:'dashboard')}
 function setMobileNav(open){document.body.classList.toggle('nav-open',!!open);$('#navOverlay')?.classList.toggle('hidden',!open)}
 function renderNav(){$('#nav').innerHTML=NAV.filter(x=>allowed(x[0])).map(([m,i,l])=>`<button data-m="${m}">${i} &nbsp; ${l}</button>`).join('');$('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>{setMobileNav(false);go(b.dataset.m)})}
-async function go(m,force=false){if(!allowed(m))return;state.activeGridKey='';setStatus('↻ Opening '+(NAV.find(x=>x[0]===m)?.[2]||m)+'…','busy');state.current=m;sessionStorage.setItem('rrr_prod_page',m);syncShell();setMobileNav(false);document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.m===m));$('#pageTitle').textContent=NAV.find(x=>x[0]===m)?.[2]||m;if(m==='dashboard')return renderDashboard(force);if(m==='reports')return renderReports(force);if(m==='masters')return renderMasters(force);if(m==='users')return renderUsers(force);return renderModule(m,force)}
+async function go(m,force=false){if(!allowed(m))return;state.activeGridKey='';setStatus('↻ Opening '+(NAV.find(x=>x[0]===m)?.[2]||m)+'…','busy');state.current=m;sessionStorage.setItem('rrr_prod_page',m);syncShell();setMobileNav(false);document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.m===m));$('#pageTitle').textContent=NAV.find(x=>x[0]===m)?.[2]||m;if(m==='dashboard')return renderDashboard(force);if(m==='docs')return renderDocsMaker(force);if(m==='reports')return renderReports(force);if(m==='masters')return renderMasters(force);if(m==='users')return renderUsers(force);return renderModule(m,force)}
+
+function docsTypeLabel(t){return t==='DYE_CHALLAN'?'Dye Challan':t==='STITCHING_CHALLAN'?'Stitching Challan':'Sticker Sheet'}
+function docsNum(v){const n=Number(v||0);return Number.isFinite(n)?n.toLocaleString('en-IN',{maximumFractionDigits:2}):'0'}
+function docsPrintBase(title,body){
+  return '<!doctype html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+
+  '@page{size:A4;margin:9mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#111;margin:0;font-size:11px}.doc{width:100%}.doc-head{display:flex;justify-content:space-between;gap:20px;border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:10px}.brand{font-size:18px;font-weight:800}.doc-title{text-align:right;font-size:17px;font-weight:800}.meta{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:10px 0}.meta div{border:1px solid #222;padding:6px}.meta b{display:inline-block;min-width:90px}table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border:1px solid #222;padding:6px;text-align:left}th{background:#f2f2f2}.tot{text-align:right;font-weight:800}.sign{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:34px}.sign div{border-top:1px solid #222;padding-top:5px}.stickers{display:grid;grid-template-columns:1fr 1fr;gap:10mm 4mm}.sticker{height:125mm;border:2px solid #111;break-inside:avoid;display:grid;grid-template-rows:auto 1fr auto}.st-title{text-align:center;font-size:16px;font-weight:800;padding:8px;border-bottom:2px solid #111}.st-main{display:grid;grid-template-columns:1fr 82px}.st-info{display:grid}.st-row{display:grid;grid-template-columns:105px 1fr;border-bottom:1px solid #222}.st-row b,.st-row span{padding:6px}.st-row b{border-right:1px solid #222}.sizes{border-left:1px solid #222}.size-row{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #222}.size-row b,.size-row span{padding:6px;text-align:center}.st-notes{min-height:24mm;border-top:1px solid #222;padding:6px}.page-break{break-after:page}.no-print{position:fixed;right:12px;top:12px}@media print{.no-print{display:none}}'+
+  '</style></head><body><button class="no-print" onclick="window.print()">Print</button>'+body+'<script>setTimeout(()=>window.print(),250)<\/script></body></html>'
+}
+function docsWritePrint(win,html,docId){
+  if(!win)return toast('Browser blocked the print window. Allow pop-ups for this site.','bad',4500);
+  win.document.open();win.document.write(html);win.document.close();
+  if(docId)fetch('/api/docs',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+state.token},body:JSON.stringify({action:'printed',docId})}).catch(()=>{})
+}
+function dyePrintHtml(doc){
+  const p=doc.payload||{},lines=p.lines||[];
+  const rows=lines.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(x.rollId||'')+'</td><td>'+esc(x.vendorRollNo||'')+'</td><td>'+esc(x.fabric||'')+'</td><td>'+esc(x.color||'')+'</td><td>'+esc(x.batchId||'')+'</td><td style="text-align:right">'+docsNum(x.mtr)+'</td></tr>').join('');
+  const body='<div class="doc"><div class="doc-head"><div><div class="brand">RRR Production</div><small>Vendor Movement Document</small></div><div class="doc-title">DYE PROCESS CHALLAN</div></div>'+
+  '<div class="meta"><div><b>Challan No.</b>'+esc(doc.DOC_NO)+'</div><div><b>Date</b>'+esc(fmtDate(doc.DOC_DATE))+'</div><div><b>Dye Vendor</b>'+esc(p.vendor||'')+'</div><div><b>Dye Plan</b>'+esc(p.sourceId||'')+'</div></div>'+
+  '<table><thead><tr><th>#</th><th>Roll ID</th><th>Vendor Roll</th><th>Fabric</th><th>Colour</th><th>Batch</th><th>Mtr</th></tr></thead><tbody>'+rows+'<tr><td colspan="6" class="tot">Total Meter</td><td class="tot">'+docsNum(p.totalMtr)+'</td></tr></tbody></table>'+
+  '<p><b>Notes:</b> '+esc(p.notes||'')+'</p><div class="sign"><div>Issued By</div><div>Received By / Vendor Sign</div></div></div>';
+  return docsPrintBase(doc.DOC_NO,body)
+}
+function stitchPrintHtml(doc){
+  const p=doc.payload||{},sizes=p.sizes||[];
+  const body='<div class="doc"><div class="doc-head"><div><div class="brand">RRR Production</div><small>Vendor Movement Document</small></div><div class="doc-title">STITCHING ISSUE CHALLAN</div></div>'+
+  '<div class="meta"><div><b>Challan No.</b>'+esc(doc.DOC_NO)+'</div><div><b>Date</b>'+esc(fmtDate(doc.DOC_DATE))+'</div><div><b>Vendor</b>'+esc(p.vendor||'')+'</div><div><b>Source</b>'+esc(p.sourceId||'')+'</div><div><b>Item / Style</b>'+esc(p.style||'')+'</div><div><b>Colour</b>'+esc(p.color||'')+'</div><div><b>Fabric</b>'+esc(p.fabric||'')+'</div><div><b>Fabric Qty.</b>'+docsNum(p.fabricQty)+' Mtr</div></div>'+
+  '<table><thead><tr><th>Size</th><th style="text-align:right">Pieces</th></tr></thead><tbody>'+sizes.map(x=>'<tr><td>'+esc(x.size)+'</td><td style="text-align:right">'+docsNum(x.qty)+'</td></tr>').join('')+'<tr><td class="tot">Total Pieces</td><td class="tot">'+docsNum(p.totalPcs)+'</td></tr></tbody></table>'+
+  '<p><b>Notes:</b> '+esc(p.notes||'')+'</p><div class="sign"><div>Issued By</div><div>Received By / Vendor Sign</div></div></div>';
+  return docsPrintBase(doc.DOC_NO,body)
+}
+function stickerPrintHtml(doc){
+  const items=doc.payload?.items||[];
+  const stickers=items.map((p,i)=>{
+    const preferred=['M','L','XL','2XL','3XL'],map=new Map((p.sizes||[]).map(x=>[String(x.size).toUpperCase(),x.qty]));
+    const extras=(p.sizes||[]).filter(x=>!preferred.includes(String(x.size).toUpperCase()));
+    const sizes=[...preferred.map(s=>({size:s,qty:Number(map.get(s)||0)})),...extras];
+    return '<div class="sticker"><div class="st-title">'+esc(p.style||'Production Item')+'</div><div class="st-main"><div class="st-info">'+
+      '<div class="st-row"><b>Date</b><span>'+esc(fmtDate(p.date))+'</span></div>'+
+      '<div class="st-row"><b>Challan No.</b><span>'+esc(p.sourceId||'')+'</span></div>'+
+      '<div class="st-row"><b>Colour</b><span>'+esc(p.color||'')+'</span></div>'+
+      '<div class="st-row"><b>Fabric</b><span>'+esc(p.fabric||'')+'</span></div>'+
+      '<div class="st-row"><b>Fabric Qty.</b><span><strong>'+docsNum(p.fabricQty)+' Mtr</strong></span></div>'+
+      '<div class="st-row"><b>Total Pcs.</b><span><strong>'+docsNum(p.totalPcs)+'</strong></span></div>'+
+      '<div class="st-row"><b>Vendor Name</b><span>'+esc(p.vendor||'')+'</span></div>'+
+      '</div><div class="sizes">'+sizes.map(x=>'<div class="size-row"><b>'+esc(x.size)+'</b><span>'+docsNum(x.qty)+'</span></div>').join('')+'</div></div>'+
+      '<div class="st-notes"><b>Notes</b><br>'+esc(p.notes||'')+'</div></div>'+(((i+1)%4===0&&i<items.length-1)?'<div class="page-break"></div>':'')
+  }).join('');
+  return docsPrintBase(doc.DOC_NO,'<div class="stickers">'+stickers+'</div>')
+}
+function printDocsDocument(doc,win=null){
+  const w=win||window.open('','_blank');
+  const html=doc.DOC_TYPE==='DYE_CHALLAN'?dyePrintHtml(doc):doc.DOC_TYPE==='STITCHING_CHALLAN'?stitchPrintHtml(doc):stickerPrintHtml(doc);
+  docsWritePrint(w,html,doc.DOC_ID)
+}
+async function generateDocAndPrint(docType,sourceIds,extra={}){
+  const w=window.open('','_blank');
+  if(!w)return toast('Allow pop-ups for this ERP to print documents.','bad',4500);
+  w.document.write('<p style="font-family:Arial;padding:30px">Preparing document…</p>');
+  try{
+    const d=await api('/api/docs',{method:'POST',body:JSON.stringify({action:'generate',docType,sourceIds,docDate:extra.docDate||todayLocal(),notes:extra.notes||'',overrides:extra.overrides||{}}),activity:'Creating document…'});
+    printDocsDocument(d.document,w);dropCaches();return d.document
+  }catch(e){w.close();toast(e.message,'bad',4500)}
+}
+async function renderDocsMaker(force=false){
+  const s=$('#stage');
+  s.innerHTML='<section class="panel docs-maker"><div class="panel-head"><div><h3>Docs Maker</h3><small>Vendor challans and production fabric stickers from existing ERP records</small></div></div><div class="master-tabs" id="docsTabs"><button data-doc-tab="dye">Dye Challan</button><button data-doc-tab="stitch">Stitching Challan</button><button data-doc-tab="stickers">Sticker Sheet</button><button data-doc-tab="history">History</button></div><div id="docsBody"><div class="trail-loading">Loading document sources…</div></div></section>';
+  try{
+    const d=await api('/api/docs',{activity:'Loading Docs Maker…'}),body=$('#docsBody');
+    let tab='dye';try{tab=localStorage.getItem(prefLocalKey('docs:tab'))||'dye'}catch{}
+    const render=()=>{
+      document.querySelectorAll('#docsTabs button').forEach(b=>b.classList.toggle('active',b.dataset.docTab===tab));
+      if(tab==='dye'){
+        const rows=d.sources?.dye||[];
+        body.innerHTML='<div class="docs-form"><div class="field"><label>Dye Plan</label><select id="docDyeSource"><option value="">Select dye plan…</option>'+rows.map(x=>'<option value="'+esc(x.DYE_PLAN_ID)+'">'+esc(x.DYE_PLAN_ID)+' · '+esc(x.VENDOR||'')+' · '+docsNum(x.TOTAL_MTR)+' m</option>').join('')+'</select></div><div class="field"><label>Document Date</label><input id="docDate" type="date" value="'+todayLocal()+'"></div><div class="field wide"><label>Notes</label><input id="docNotes" placeholder="Optional vendor instruction"></div><div class="form-actions"><button class="btn teal" id="makeDyeDoc">Generate & Print Dye Challan</button></div></div>';
+        $('#makeDyeDoc').onclick=()=>{const id=$('#docDyeSource').value;if(!id)return toast('Select a dye plan.','bad');generateDocAndPrint('DYE_CHALLAN',[id],{docDate:$('#docDate').value,notes:$('#docNotes').value})}
+      }else if(tab==='stitch'){
+        const rows=d.sources?.stitching||[];
+        body.innerHTML='<div class="docs-form"><div class="field"><label>Stitching Challan</label><select id="docStitchSource"><option value="">Select challan…</option>'+rows.map(x=>'<option value="'+esc(x.CHALLAN_ID)+'">'+esc(x.CHALLAN_ID)+' · '+esc(x.STYLE||'')+' · '+esc(x.VENDOR||'')+'</option>').join('')+'</select></div><div class="field"><label>Document Date</label><input id="docDate" type="date" value="'+todayLocal()+'"></div><div class="field"><label>Fabric Qty Override (Mtr)</label><input id="docFabricQty" type="number" min="0" step="0.01" placeholder="Auto from production"></div><div class="field wide"><label>Notes</label><input id="docNotes" placeholder="Optional vendor instruction"></div><div class="form-actions"><button class="btn teal" id="makeStitchDoc">Generate & Print Stitching Challan</button></div></div>';
+        $('#makeStitchDoc').onclick=()=>{const id=$('#docStitchSource').value;if(!id)return toast('Select a stitching challan.','bad');const fq=$('#docFabricQty').value;generateDocAndPrint('STITCHING_CHALLAN',[id],{docDate:$('#docDate').value,notes:$('#docNotes').value,overrides:fq?{fabricQty:Number(fq)}:{}})}
+      }else if(tab==='stickers'){
+        const rows=d.sources?.stitching||[];
+        body.innerHTML='<div class="docs-sticker-tools"><div><h4>Select Stitching Challans</h4><small>4 stickers will print per A4 page.</small></div><input id="stickerSearch" placeholder="Search challan / style / vendor"></div><div class="docs-select-list" id="stickerList">'+rows.map((x,i)=>'<label data-text="'+esc((x.CHALLAN_ID+' '+x.STYLE+' '+x.COLOR+' '+x.VENDOR).toLowerCase())+'"><input type="checkbox" value="'+esc(x.CHALLAN_ID)+'"> <span><b>'+esc(x.STYLE||'')+'</b><small>'+esc(x.CHALLAN_ID)+' · '+esc(x.COLOR||'')+' · '+esc(x.FABRIC||'')+' · '+esc(x.VENDOR||'')+'</small></span><em>'+docsNum(x.TOTAL_PCS)+' pcs</em></label>').join('')+'</div><div class="form-actions"><button class="btn teal" id="makeStickers">Generate & Print Selected Stickers</button></div>';
+        $('#stickerSearch').oninput=e=>{const q=e.target.value.trim().toLowerCase();document.querySelectorAll('#stickerList label').forEach(x=>x.classList.toggle('hidden',q&&!x.dataset.text.includes(q)))};
+        $('#makeStickers').onclick=()=>{const ids=[...document.querySelectorAll('#stickerList input:checked')].map(x=>x.value);if(!ids.length)return toast('Select at least one challan.','bad');generateDocAndPrint('STICKER_SHEET',ids)}
+      }else{
+        const rows=d.history||[];
+        body.innerHTML=rows.length?'<div class="table-wrap"><table class="data"><thead><tr><th>Doc No.</th><th>Type</th><th>Date</th><th>Source</th><th>Status</th><th>Prints</th><th>Action</th></tr></thead><tbody>'+rows.map((x,i)=>'<tr><td>'+esc(x.DOC_NO)+'</td><td>'+esc(docsTypeLabel(x.DOC_TYPE))+'</td><td>'+esc(fmtDate(x.DOC_DATE))+'</td><td>'+esc((()=>{try{return JSON.parse(x.SOURCE_IDS||'[]').join(', ')}catch{return''}})())+'</td><td>'+badge(x.STATUS)+'</td><td>'+Number(x.PRINT_COUNT||0)+'</td><td><button class="btn ghost docs-reprint" data-id="'+esc(x.DOC_ID)+'">Reprint</button></td></tr>').join('')+'</tbody></table></div>':'<div class="smart-empty"><b>No documents generated yet</b><span>Generated challans and sticker sheets will appear here.</span></div>';
+        document.querySelectorAll('.docs-reprint').forEach(b=>b.onclick=async()=>{const w=window.open('','_blank');if(!w)return toast('Allow pop-ups to reprint.','bad');try{const x=await api('/api/docs?action=document&id='+encodeURIComponent(b.dataset.id),{activity:'Loading document…'});printDocsDocument(x.document,w)}catch(e){w.close();toast(e.message,'bad')}})
+      }
+    };
+    document.querySelectorAll('#docsTabs button').forEach(b=>b.onclick=()=>{tab=b.dataset.docTab;try{localStorage.setItem(prefLocalKey('docs:tab'),tab)}catch{}render()});
+    if(!['dye','stitch','stickers','history'].includes(tab))tab='dye';render()
+  }catch(e){toast(e.message,'bad',4500);$('#docsBody').innerHTML='<div class="smart-empty"><b>Docs Maker could not load</b><span>'+esc(e.message)+'</span></div>'}finally{setStatus('● Ready','ok')}
+}
+
 async function renderDashboard(force=false){
   const s=$('#stage');
   s.innerHTML=`<section class="hero"><div><h2>Production Control</h2><p>Raw fabric to warehouse handover — one traceable workflow.</p></div><div>${fmtDate(todayLocal())}</div></section>
