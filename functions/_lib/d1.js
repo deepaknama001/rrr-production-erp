@@ -803,29 +803,46 @@ async function cancelRaw(db,r,a){
 }
 async function cancelProduction(db,r,a){
   const id=String(r.PRODUCTION_BATCH_ID||''),old=await row(db,'SELECT * FROM production_batches WHERE PRODUCTION_BATCH_ID=?',id);if(!old)throw err('Production batch not found.',404);
-  const downstream=n((await row(db,'SELECT COUNT(*) c FROM stitching_jobs WHERE PRODUCTION_BATCH_ID=?',id))?.c);
-  if(downstream)throw err('Production batch already has stitching challans. Reverse/cancel them first.',409);
-  await db.prepare('DELETE FROM production_batches WHERE PRODUCTION_BATCH_ID=?').bind(id).run();
-  await audit(db,a,'CANCEL_PRODUCTION','PRODUCTION',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason:String(r.REASON||'Mistaken entry')}));return{PRODUCTION_BATCH_ID:id,cancelled:true}
+  const downstream=n((await row(db,"SELECT COUNT(*) c FROM stitching_jobs WHERE PRODUCTION_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
+  if(downstream)throw err('Production batch already has active stitching challans. Reverse/cancel them first.',409);
+  const reason=String(r.REASON||'Mistaken entry'),t=now();
+  await db.batch([
+    db.prepare("UPDATE production_batches SET STATUS='CANCELLED',NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE PRODUCTION_BATCH_ID=?").bind(String(old.NOTES||'')+(old.NOTES?' | ':'')+'Cancelled: '+reason,a.userId,t,id),
+    db.prepare("UPDATE production_cut_actuals SET STATUS='CANCELLED',UPDATED_BY=?,UPDATED_AT=? WHERE PRODUCTION_BATCH_ID=?").bind(a.userId,t,id),
+    auditStmt(db,a,'CANCEL_PRODUCTION','PRODUCTION',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason}))
+  ]);return{PRODUCTION_BATCH_ID:id,cancelled:true}
 }
 async function cancelStitching(db,r,a){
   const id=String(r.CHALLAN_ID||''),old=await row(db,'SELECT * FROM stitching_jobs WHERE CHALLAN_ID=?',id);if(!old)throw err('Stitching challan not found.',404);
-  const downstream=n((await row(db,'SELECT COUNT(*) c FROM qc_events WHERE CHALLAN_ID=?',id))?.c);
-  if(downstream)throw err('This challan already has QC entries. Reverse/cancel QC first.',409);
-  await db.prepare('DELETE FROM stitching_jobs WHERE CHALLAN_ID=?').bind(id).run();
-  await audit(db,a,'CANCEL_STITCHING','STITCHING',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason:String(r.REASON||'Mistaken entry')}));return{CHALLAN_ID:id,cancelled:true}
+  const qc=n((await row(db,"SELECT COUNT(*) c FROM qc_events WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
+  const rec=n((await row(db,"SELECT COUNT(*) c FROM stitching_receipts WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
+  if(qc||rec)throw err('This challan has active receipts/QC. Reverse/cancel downstream records first.',409);
+  const reason=String(r.REASON||'Mistaken entry'),t=now();
+  await db.batch([
+    db.prepare("UPDATE stitching_jobs SET STATUS='CANCELLED',NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE CHALLAN_ID=?").bind(String(old.NOTES||'')+(old.NOTES?' | ':'')+'Cancelled: '+reason,a.userId,t,id),
+    auditStmt(db,a,'CANCEL_STITCHING','STITCHING',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason}))
+  ]);return{CHALLAN_ID:id,cancelled:true}
 }
 async function cancelQc(db,r,a){
   const id=String(r.QC_ID||''),old=await row(db,'SELECT * FROM qc_events WHERE QC_ID=?',id);if(!old)throw err('QC entry not found.',404);
-  const downstream=n((await row(db,`SELECT COUNT(*) c FROM warehouse_handover WHERE PRODUCTION_BATCH_ID=? AND STYLE_ID=? AND COLOR_ID=? AND SIZE=?`,old.PRODUCTION_BATCH_ID,old.STYLE_ID,old.COLOR_ID,old.SIZE))?.c);
-  if(downstream)throw err('This QC result has downstream warehouse handover. Reverse/cancel handover first.',409);
-  await db.prepare('DELETE FROM qc_events WHERE QC_ID=?').bind(id).run();
-  await audit(db,a,'CANCEL_QC','QC',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason:String(r.REASON||'Mistaken entry')}));return{QC_ID:id,cancelled:true}
+  const rework=n((await row(db,"SELECT COUNT(*) c FROM rework_jobs WHERE QC_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
+  const downstream=n((await row(db,"SELECT COUNT(*) c FROM warehouse_handover WHERE PRODUCTION_BATCH_ID=? AND STYLE_ID=? AND COLOR_ID=? AND SIZE=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",old.PRODUCTION_BATCH_ID,old.STYLE_ID,old.COLOR_ID,old.SIZE))?.c);
+  if(rework||downstream)throw err('This QC result has active rework/warehouse downstream. Reverse/cancel downstream first.',409);
+  const reason=String(r.REASON||'Mistaken entry'),t=now();
+  await db.batch([
+    db.prepare("UPDATE qc_events SET STATUS='CANCELLED',NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE QC_ID=?").bind(String(old.NOTES||'')+(old.NOTES?' | ':'')+'Cancelled: '+reason,a.userId,t,id),
+    auditStmt(db,a,'CANCEL_QC','QC',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason}))
+  ]);return{QC_ID:id,cancelled:true}
 }
 async function cancelHandover(db,r,a){
   const id=String(r.HANDOVER_ID||''),old=await row(db,'SELECT * FROM warehouse_handover WHERE HANDOVER_ID=?',id);if(!old)throw err('Handover entry not found.',404);
-  await db.prepare('DELETE FROM warehouse_handover WHERE HANDOVER_ID=?').bind(id).run();
-  await audit(db,a,'CANCEL_HANDOVER','HANDOVER',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason:String(r.REASON||'Mistaken entry')}));return{HANDOVER_ID:id,cancelled:true}
+  const receipts=n((await row(db,"SELECT COUNT(*) c FROM warehouse_receipts WHERE HANDOVER_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
+  if(receipts)throw err('This handover has warehouse receipt entries. Cancel those receipts first.',409);
+  const reason=String(r.REASON||'Mistaken entry'),t=now();
+  await db.batch([
+    db.prepare("UPDATE warehouse_handover SET STATUS='CANCELLED',NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE HANDOVER_ID=?").bind(String(old.NOTES||'')+(old.NOTES?' | ':'')+'Cancelled: '+reason,a.userId,t,id),
+    auditStmt(db,a,'CANCEL_HANDOVER','HANDOVER',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason}))
+  ]);return{HANDOVER_ID:id,cancelled:true}
 }
 async function saveDyeSingle(db,r,a){
   const roll=String(r.ROLL_ID||''),issue=n(r.ISSUE_MTR);requirePos(issue,'Issue meter');
@@ -943,12 +960,12 @@ async function editDyeReceipt(db,r,a){
 async function cancelDyeBatch(db,r,a){
   const batch=String(r.DYE_BATCH_ID||'');if(!batch)throw err('Dye batch is required.',400);
   if(await dyeDownstreamCount(db,batch)>0)throw err('This dye batch is already used in Production and cannot be cancelled directly.',409);
-  const old=await getDyeBatchDetail(db,batch);
+  const old=await getDyeBatchDetail(db,batch),reason=String(r.REASON||'Mistaken entry'),t=now();
   await db.batch([
-    db.prepare('DELETE FROM dye_receipts WHERE DYE_BATCH_ID=?').bind(batch),
-    db.prepare('DELETE FROM dye_jobs WHERE DYE_BATCH_ID=?').bind(batch)
+    db.prepare("UPDATE dye_jobs SET STATUS='CANCELLED',NOTES=COALESCE(NOTES,'')||?,UPDATED_BY=?,UPDATED_AT=? WHERE DYE_BATCH_ID=?").bind(' | Cancelled: '+reason,a.userId,t,batch),
+    db.prepare("UPDATE dye_receipts SET STATUS='CANCELLED',NOTES=COALESCE(NOTES,'')||?,UPDATED_BY=?,UPDATED_AT=? WHERE DYE_BATCH_ID=?").bind(' | Cancelled: '+reason,a.userId,t,batch),
+    auditStmt(db,a,'CANCEL_DYE_BATCH','DYE',batch,JSON.stringify(old),JSON.stringify({cancelled:true,reason}))
   ]);
-  await audit(db,a,'CANCEL_DYE_BATCH','DYE',batch,JSON.stringify(old),JSON.stringify({cancelled:true,reason:String(r.REASON||'Mistaken entry')}));
   return{DYE_BATCH_ID:batch,cancelled:true}
 }
 
@@ -1151,6 +1168,41 @@ async function editHandover(db,r,a){
       .bind(dateOnly(r.HANDOVER_DATE||old.HANDOVER_DATE),accepted,initial,pending,String(r.WAREHOUSE_REF??old.WAREHOUSE_REF??''),pending?'PARTIAL':'RECEIVED',String(r.NOTES??old.NOTES??''),a.userId,t,id),
     auditStmt(db,a,'EDIT_HANDOVER','HANDOVER',id,JSON.stringify(old),JSON.stringify(r))
   ]);return getHandoverDetail(db,id)
+}
+
+async function cancelStitchingReceipt(db,r,a){
+  const id=String(r.RECEIPT_ID||''),old=await row(db,'SELECT * FROM stitching_receipts WHERE RECEIPT_ID=?',id);if(!old)throw err('Stitching receipt not found.',404);
+  const qc=n((await row(db,"SELECT COUNT(*) c FROM qc_events WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",old.CHALLAN_ID))?.c);
+  if(qc)throw err('QC exists on this challan. Reverse/cancel QC before cancelling a receipt.',409);
+  const t=now(),reason=String(r.REASON||'Mistaken entry');
+  await db.batch([
+    db.prepare("UPDATE stitching_receipts SET STATUS='CANCELLED',NOTES=COALESCE(NOTES,'')||?,UPDATED_BY=?,UPDATED_AT=? WHERE RECEIPT_ID=?").bind(' | Cancelled: '+reason,a.userId,t,id),
+    auditStmt(db,a,'CANCEL_STITCHING_RECEIPT','STITCHING',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason}))
+  ]);
+  const detail=await getStitchingDetail(db,old.CHALLAN_ID),received=detail.receivedLines.reduce((s,x)=>s+x.QTY,0),issued=detail.issueLines.reduce((s,x)=>s+x.QTY,0),pending=Math.max(0,issued-received);
+  await db.prepare('UPDATE stitching_jobs SET TOTAL_RECEIVED=?,PENDING_QTY=?,STATUS=?,UPDATED_BY=?,UPDATED_AT=? WHERE CHALLAN_ID=?').bind(received,pending,pending?'PARTIAL RECEIVED':'RECEIVED COMPLETE',a.userId,t,old.CHALLAN_ID).run();
+  return{RECEIPT_ID:id,cancelled:true}
+}
+async function cancelRework(db,r,a){
+  const id=String(r.REWORK_ID||''),old=await row(db,'SELECT * FROM rework_jobs WHERE REWORK_ID=?',id);if(!old)throw err('Rework job not found.',404);
+  const reQc=n((await row(db,"SELECT COUNT(*) c FROM qc_events WHERE REWORK_CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
+  if(reQc)throw err('Rework return/re-QC exists. Cancel that QC result first.',409);
+  const t=now(),reason=String(r.REASON||'Mistaken entry');
+  await db.batch([
+    db.prepare("UPDATE rework_jobs SET STATUS='CANCELLED',NOTES=COALESCE(NOTES,'')||?,UPDATED_BY=?,UPDATED_AT=? WHERE REWORK_ID=?").bind(' | Cancelled: '+reason,a.userId,t,id),
+    auditStmt(db,a,'CANCEL_REWORK','QC',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason}))
+  ]);return{REWORK_ID:id,cancelled:true}
+}
+async function cancelWarehouseReceipt(db,r,a){
+  const id=String(r.RECEIPT_ID||''),old=await row(db,'SELECT * FROM warehouse_receipts WHERE RECEIPT_ID=?',id);if(!old)throw err('Warehouse receipt not found.',404);
+  const t=now(),reason=String(r.REASON||'Mistaken entry');
+  await db.batch([
+    db.prepare("UPDATE warehouse_receipts SET STATUS='CANCELLED',NOTES=COALESCE(NOTES,'')||?,UPDATED_BY=?,UPDATED_AT=? WHERE RECEIPT_ID=?").bind(' | Cancelled: '+reason,a.userId,t,id),
+    auditStmt(db,a,'CANCEL_WAREHOUSE_RECEIPT','HANDOVER',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason}))
+  ]);
+  const h=await getHandoverDetail(db,old.HANDOVER_ID);
+  await db.prepare('UPDATE warehouse_handover SET PENDING_QTY=?,STATUS=?,UPDATED_BY=?,UPDATED_AT=? WHERE HANDOVER_ID=?').bind(h.PENDING_QTY,h.PENDING_QTY?'PARTIAL':'RECEIVED',a.userId,t,old.HANDOVER_ID).run();
+  return{RECEIPT_ID:id,cancelled:true}
 }
 async function saveProduction(db,r,a){
   const batch=String(r.DYE_BATCH_ID||''),style=String(r.STYLE_ID||''),alloc=n(r.ALLOCATED_MTR);requirePos(alloc,'Allocated meter');const st=await row(db,'SELECT * FROM styles WHERE STYLE_ID=? AND ACTIVE=1',style);if(!st)throw err('Select a valid active style.',400);const dj=await row(db,'SELECT FABRIC_ID,COLOR_ID FROM dye_jobs WHERE DYE_BATCH_ID=? LIMIT 1',batch);if(!dj)throw err('Select a valid dye batch.',400);if(st.DEFAULT_FABRIC_ID&&String(st.DEFAULT_FABRIC_ID)!==String(dj.FABRIC_ID))throw err('Selected style is mapped to a different fabric type.',409);if(await dyeBalance(db,batch)+0.0001<alloc)throw err('Allocated meter exceeds dyed usable balance.',409);
