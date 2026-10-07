@@ -341,3 +341,26 @@ button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justif
   .trail-head{display:grid}.trail-id-strip{justify-content:flex-start}
   .trail-stage{padding:9px}
 }
+
+/* v0.25 Compact global row actions */
+.compact-action-wrap{position:relative;display:inline-flex;justify-content:center}
+.compact-action-btn{
+  width:34px;height:30px;border:1.5px solid #cbd3dd;border-radius:8px;
+  background:#f7f9fb;color:#344054;font-size:17px;font-weight:900;
+  line-height:1;cursor:pointer;display:grid;place-items:center;padding:0
+}
+.compact-action-btn:hover{background:#eef2f6;border-color:#aeb8c5}
+.compact-action-menu{
+  min-width:160px;background:#fff;border:1.5px solid #cbd3dd;border-radius:10px;
+  padding:5px;box-shadow:0 16px 36px rgba(15,23,42,.18);overflow:hidden
+}
+.compact-action-menu button{
+  width:100%;border:0;background:#fff;color:#344054;text-align:left;
+  padding:9px 10px;border-radius:7px;font-size:10px;font-weight:800;cursor:pointer
+}
+.compact-action-menu button:hover{background:#f1f5f9}
+.data th:last-child,.data td:last-child{
+  width:56px;min-width:56px;max-width:70px;text-align:center;white-space:nowrap
+}
+.data th:last-child .th-main{justify-content:center}
+.row-actions{flex-wrap:nowrap}
