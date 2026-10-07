@@ -1,4 +1,4 @@
-const APP_BUILD='0.22';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.23';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -286,25 +286,152 @@ stitching:{title:'Stitching',columns:['CHALLAN_ID','ISSUE_DATE','STITCHING_VENDO
 qc:{title:'QC & Rework',columns:['QC_ID','QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','STATUS','__ACTION'],filters:['SIZE','CHALLAN_ID','STATUS'],action:'New QC Entry',fields:['QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','DEFECT_REASON','NOTES']},
 handover:{title:'Warehouse Handover',columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','PENDING_QTY','STATUS','__ACTION'],filters:['STYLE','COLOR','SIZE','STATUS'],action:'New Handover',fields:['HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE_ID','COLOR_ID','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','WAREHOUSE_REF','NOTES']}
 };
+
+function moduleRecordIdentity(m,r){
+  const map={
+    raw:['raw','ROLL_ID'],production:['production','PRODUCTION_BATCH_ID'],
+    stitching:['stitching','CHALLAN_ID'],qc:['qc','QC_ID'],handover:['handover','HANDOVER_ID']
+  },x=map[m];return x?{type:x[0],id:String(r?.[x[1]]||''),label:String(r?.[x[1]]||'')}:{type:m,id:'',label:''}
+}
+function summaryForModule(m,items){
+  const groups=new Map(),add=(key,seed,r)=>{let g=groups.get(key);if(!g){g={...seed,__items:[]};groups.set(key,g)}g.__items.push(r);return g};
+  if(m==='raw'){
+    for(const r of items){
+      const key=String(r.INWARD_ID||r.ROLL_ID),g=add(key,{INWARD_ID:key,INWARD_DATE:r.INWARD_DATE,SUPPLIER:r.SUPPLIER,FABRICS:new Set(),ROLL_COUNT:0,INWARD_MTR:0,ISSUED_MTR:0,BALANCE_MTR:0},r);
+      g.FABRICS.add(String(r.FABRIC||''));g.ROLL_COUNT++;g.INWARD_MTR+=Number(r.INWARD_MTR||0);g.ISSUED_MTR+=Number(r.ISSUED_MTR||0);g.BALANCE_MTR+=Number(r.BALANCE_MTR||0)
+    }
+    return [...groups.values()].map(g=>({...g,FABRIC:[...g.FABRICS].filter(Boolean).join(', '),STATUS:g.ISSUED_MTR<=.0001?'AVAILABLE':g.BALANCE_MTR<=.0001?'FULLY ISSUED':'PARTIAL'}))
+  }
+  if(m==='production'){
+    for(const r of items){
+      const key=[r.DYE_BATCH_ID||'',r.STYLE_ID||r.STYLE||''].join('|'),g=add(key,{SUMMARY_ID:key,PLAN_DATE:r.PLAN_DATE,DYE_BATCH_ID:r.DYE_BATCH_ID,STYLE:r.STYLE,BATCH_COUNT:0,PLANNED_QTY:0,ALLOCATED_MTR:0,TOTAL_CUT:0},r);
+      g.BATCH_COUNT++;g.PLANNED_QTY+=Number(r.PLANNED_QTY||0);g.ALLOCATED_MTR+=Number(r.ALLOCATED_MTR||0);g.TOTAL_CUT+=Number(r.TOTAL_CUT||0)
+    }
+    return [...groups.values()].map(g=>({...g,STATUS:g.__items.every(x=>/complete|closed|done/i.test(String(x.STATUS||'')))?'COMPLETE':'IN PROCESS'}))
+  }
+  if(m==='stitching'){
+    for(const r of items){
+      const key=String(r.PRODUCTION_BATCH_ID||r.CHALLAN_ID),g=add(key,{PRODUCTION_BATCH_ID:key,ISSUE_DATE:r.ISSUE_DATE,VENDORS:new Set(),CHALLAN_COUNT:0,TOTAL_ISSUED:0,TOTAL_RECEIVED:0,PENDING_QTY:0},r);
+      g.VENDORS.add(String(r.STITCHING_VENDOR||''));g.CHALLAN_COUNT++;g.TOTAL_ISSUED+=Number(r.TOTAL_ISSUED||0);g.TOTAL_RECEIVED+=Number(r.TOTAL_RECEIVED||0);g.PENDING_QTY+=Number(r.PENDING_QTY||0)
+    }
+    return [...groups.values()].map(g=>({...g,STITCHING_VENDOR:[...g.VENDORS].filter(Boolean).join(', '),STATUS:g.PENDING_QTY<=.0001?'COMPLETE':'AT STITCHING'}))
+  }
+  if(m==='qc'){
+    for(const r of items){
+      const key=String(r.CHALLAN_ID||r.QC_ID),g=add(key,{CHALLAN_ID:key,QC_DATE:r.QC_DATE,QC_ENTRY_COUNT:0,QC_QTY:0,PASS_QTY:0,REWORK_QTY:0,REJECT_QTY:0,FINAL_ACCEPTED_QTY:0},r);
+      g.QC_ENTRY_COUNT++;g.QC_QTY+=Number(r.QC_QTY||0);g.PASS_QTY+=Number(r.PASS_QTY||0);g.REWORK_QTY+=Number(r.REWORK_QTY||0);g.REJECT_QTY+=Number(r.REJECT_QTY||0);g.FINAL_ACCEPTED_QTY+=Number(r.FINAL_ACCEPTED_QTY||0)
+    }
+    return [...groups.values()].map(g=>({...g,STATUS:g.REWORK_QTY>0?'REWORK':g.REJECT_QTY>0?'QC COMPLETE WITH REJECT':'QC COMPLETE'}))
+  }
+  if(m==='handover'){
+    for(const r of items){
+      const key=String(r.PRODUCTION_BATCH_ID||r.HANDOVER_ID),g=add(key,{PRODUCTION_BATCH_ID:key,HANDOVER_DATE:r.HANDOVER_DATE,STYLES:new Set(),COLORS:new Set(),HANDOVER_COUNT:0,ACCEPTED_QTY:0,WAREHOUSE_RECEIVED_QTY:0,PENDING_QTY:0},r);
+      g.STYLES.add(String(r.STYLE||''));g.COLORS.add(String(r.COLOR||''));g.HANDOVER_COUNT++;g.ACCEPTED_QTY+=Number(r.ACCEPTED_QTY||0);g.WAREHOUSE_RECEIVED_QTY+=Number(r.WAREHOUSE_RECEIVED_QTY||0);g.PENDING_QTY+=Number(r.PENDING_QTY||0)
+    }
+    return [...groups.values()].map(g=>({...g,STYLE:[...g.STYLES].filter(Boolean).join(', '),COLOR:[...g.COLORS].filter(Boolean).join(', '),STATUS:g.PENDING_QTY<=.0001?'COMPLETE':'PENDING'}))
+  }
+  return items
+}
+function summaryColumns(m){
+  return {
+    raw:['INWARD_ID','INWARD_DATE','SUPPLIER','FABRIC','ROLL_COUNT','INWARD_MTR','ISSUED_MTR','BALANCE_MTR','STATUS','__ACTION'],
+    production:['PLAN_DATE','DYE_BATCH_ID','STYLE','BATCH_COUNT','PLANNED_QTY','ALLOCATED_MTR','TOTAL_CUT','STATUS','__ACTION'],
+    stitching:['PRODUCTION_BATCH_ID','ISSUE_DATE','STITCHING_VENDOR','CHALLAN_COUNT','TOTAL_ISSUED','TOTAL_RECEIVED','PENDING_QTY','STATUS','__ACTION'],
+    qc:['CHALLAN_ID','QC_DATE','QC_ENTRY_COUNT','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','FINAL_ACCEPTED_QTY','STATUS','__ACTION'],
+    handover:['PRODUCTION_BATCH_ID','HANDOVER_DATE','STYLE','COLOR','HANDOVER_COUNT','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','PENDING_QTY','STATUS','__ACTION']
+  }[m]||[]
+}
+function firstTrailIdentity(m,summary){
+  const r=summary.__items?.[0]||summary;return moduleRecordIdentity(m,r)
+}
+function openSummaryDetails(m,summary,onTrail){
+  const rows=summary.__items||[],cfg=configs[m],cols=cfg.columns.filter(x=>x!=='__ACTION');
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>${cfg.title} Details</h3><small>${rows.length} linked record${rows.length===1?'':'s'}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <div class="table-wrap"><table class="data"><thead><tr>${cols.map(k=>`<th>${gridLabel(k)}</th>`).join('')}<th>Trail</th></tr></thead>
+    <tbody>${rows.map((r,i)=>`<tr>${cols.map(k=>k==='STATUS'?`<td>${badge(r[k])}</td>`:`<td>${gridCell(k,r[k])}</td>`).join('')}<td><button class="btn ghost summary-trail" data-i="${i}">Trail</button></td></tr>`).join('')}</tbody></table></div>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;
+  document.querySelectorAll('.summary-trail').forEach(b=>b.onclick=()=>{const r=rows[Number(b.dataset.i)];closeModal();onTrail(moduleRecordIdentity(m,r))})
+}
+function trailStageColumns(key,items){
+  const presets={
+    raw:['ROLL_ID','INWARD_ID','INWARD_DATE','SUPPLIER','VENDOR_ROLL_NO','FABRIC','INWARD_MTR'],
+    dye:['DYE_PLAN_ID','DYE_BATCH_ID','ISSUE_DATE','DYE_VENDOR','ROLL_ID','FABRIC','COLOR','ISSUE_MTR'],
+    dye_receipt:['RECEIPT_ID','DYE_BATCH_ID','RECEIPT_DATE','RECEIVED_MTR','DEFECT_MTR','USABLE_MTR','VARIANCE_MTR','STATUS'],
+    production:['PRODUCTION_BATCH_ID','PLAN_DATE','STYLE','COLOR','PLANNED_QTY','ALLOCATED_MTR','TOTAL_CUT','STATUS'],
+    stitching:['CHALLAN_ID','ISSUE_DATE','STITCHING_VENDOR','STYLE','COLOR','TOTAL_ISSUED','TOTAL_RECEIVED','PENDING_QTY','STATUS'],
+    qc:['QC_ID','QC_DATE','CHALLAN_ID','STYLE','COLOR','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','FINAL_ACCEPTED_QTY','STATUS'],
+    handover:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE','WAREHOUSE_RECEIVED_QTY','PENDING_QTY','STATUS']
+  };
+  return (presets[key]||Object.keys(items?.[0]||{}).slice(0,10)).filter(k=>items?.some(r=>r[k]!==undefined))
+}
+async function renderTrailView(host,identity){
+  if(!identity?.id){host.innerHTML='<div class="trail-empty">Select any record from Detail View and click <b>Trail</b> to see its complete production genealogy.</div>';return}
+  host.innerHTML='<div class="trail-loading">Loading complete production trail…</div>';
+  try{
+    const d=await api('/api/data?module=trail&type='+encodeURIComponent(identity.type)+'&id='+encodeURIComponent(identity.id),{activity:'Loading production trail…'});
+    const trail=d.trail,stages=trail?.stages||[];
+    host.innerHTML=`
+      <div class="trail-head"><div><h3>Complete Production Trail</h3><small>Selected: ${esc(identity.label||identity.id)}</small></div><div class="trail-id-strip">${Object.entries(trail.ids||{}).filter(([,v])=>Array.isArray(v)&&v.length).map(([k,v])=>`<span>${gridLabel(k)}: ${esc(v.join(', '))}</span>`).join('')}</div></div>
+      <div class="trail-flow">
+        ${stages.map((stage,si)=>{
+          const items=stage.items||[],cols=trailStageColumns(stage.key,items);
+          return `<section class="trail-stage ${items.length?'has-data':'empty'}">
+            <div class="trail-stage-title"><span class="trail-step">${si+1}</span><div><b>${esc(stage.label)}</b><small>${items.length} record${items.length===1?'':'s'}</small></div></div>
+            ${items.length?`<div class="table-wrap"><table class="data trail-table"><thead><tr>${cols.map(k=>`<th>${gridLabel(k)}</th>`).join('')}</tr></thead><tbody>${items.map(r=>`<tr>${cols.map(k=>k==='STATUS'?`<td>${badge(r[k])}</td>`:`<td>${gridCell(k,r[k])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`:'<div class="trail-none">No record at this stage yet.</div>'}
+          </section>`
+        }).join('<div class="trail-connector">↓</div>')}
+      </div>`
+  }catch(e){host.innerHTML='';toast(e.message,'bad',5000)}
+}
 async function renderModule(m,force=false){
   const cfg=configs[m],s=$('#stage');
   if(m==='dye')return renderDyeModule(force);
-  s.innerHTML=`<section class="panel"><div class="panel-head"><h3>${cfg.title}</h3><button class="btn teal" id="newBtn">+ ${cfg.action}</button></div><div id="gridHost">Loading…</div></section>`;
+  s.innerHTML=`<section class="panel">
+    <div class="panel-head"><div><h3>${cfg.title}</h3><small>Summary, transaction detail and full genealogy</small></div><button class="btn teal" id="newBtn">+ ${cfg.action}</button></div>
+    <div class="master-tabs module-view-tabs" id="moduleViewTabs">
+      <button data-view="summary">Summary View</button><button data-view="detail">Detail View</button><button data-view="trail">Trail View</button>
+    </div>
+    <div id="gridHost">Loading…</div>
+  </section>`;
   $('#newBtn').onclick=()=>openActionForm(m);
   try{
-    const d=await getCachedModule(m,force),items=d.items||[];
-    await mountDataGrid($('#gridHost'),{
-      key:'module:'+m,title:cfg.title,items,columns:cfg.columns,filters:cfg.filters||[],
-      actionRenderer:(r=>{
-        if(m==='raw')return '<button class="btn ghost raw-manage-btn" data-idx="'+r.__gridIndex+'">Manage</button>';
-        if(['production','stitching','qc','handover'].includes(m))return '<button class="btn ghost txn-cancel-btn" data-idx="'+r.__gridIndex+'">Manage</button>';
-        return '—'
-      }),
-      bindActions:(pageRows,host)=>{
-        if(m==='raw')host.querySelectorAll('.raw-manage-btn').forEach(b=>b.onclick=()=>openRawManage(items[Number(b.dataset.idx)]));
-        if(['production','stitching','qc','handover'].includes(m))host.querySelectorAll('.txn-cancel-btn').forEach(b=>b.onclick=()=>openTxnManage(m,items[Number(b.dataset.idx)]));
+    const d=await getCachedModule(m,force),items=d.items||[],summaries=summaryForModule(m,items);
+    let current='summary',selectedTrail=null;
+    try{const pr=await api('/api/preferences?page='+encodeURIComponent(m+':view'));current=['summary','detail','trail'].includes(pr?.prefs?.view)?pr.prefs.view:'summary'}catch{}
+    async function setView(view,trailIdentity=null){
+      current=view;if(trailIdentity)selectedTrail=trailIdentity;
+      document.querySelectorAll('#moduleViewTabs button').forEach(b=>b.classList.toggle('active',b.dataset.view===current));
+      fetch('/api/preferences',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+state.token},body:JSON.stringify({page:m+':view',prefs:{view:current}})}).catch(()=>{});
+      const host=$('#gridHost');
+      if(current==='trail')return renderTrailView(host,selectedTrail);
+      if(current==='summary'){
+        return mountDataGrid(host,{
+          key:'module:'+m+':summary',title:cfg.title+' - Summary',items:summaries,columns:summaryColumns(m),filters:[],
+          actionRenderer:r=>'<div class="row-actions"><button class="btn ghost summary-detail-btn" data-idx="'+r.__gridIndex+'">Details</button><button class="btn ghost summary-trail-btn" data-idx="'+r.__gridIndex+'">Trail</button></div>',
+          bindActions:(pageRows,h)=>{
+            h.querySelectorAll('.summary-detail-btn').forEach(b=>b.onclick=()=>openSummaryDetails(m,summaries[Number(b.dataset.idx)],id=>setView('trail',id)));
+            h.querySelectorAll('.summary-trail-btn').forEach(b=>b.onclick=()=>setView('trail',firstTrailIdentity(m,summaries[Number(b.dataset.idx)])))
+          }
+        })
       }
-    });
+      return mountDataGrid(host,{
+        key:'module:'+m+':detail',title:cfg.title+' - Detail',items,columns:cfg.columns,filters:cfg.filters||[],
+        actionRenderer:r=>{
+          const trail='<button class="btn ghost txn-trail-btn" data-idx="'+r.__gridIndex+'">Trail</button>';
+          if(m==='raw')return '<div class="row-actions"><button class="btn ghost raw-manage-btn" data-idx="'+r.__gridIndex+'">Manage</button>'+trail+'</div>';
+          if(['production','stitching','qc','handover'].includes(m))return '<div class="row-actions"><button class="btn ghost txn-cancel-btn" data-idx="'+r.__gridIndex+'">Manage</button>'+trail+'</div>';
+          return trail
+        },
+        bindActions:(pageRows,h)=>{
+          if(m==='raw')h.querySelectorAll('.raw-manage-btn').forEach(b=>b.onclick=()=>openRawManage(items[Number(b.dataset.idx)]));
+          if(['production','stitching','qc','handover'].includes(m))h.querySelectorAll('.txn-cancel-btn').forEach(b=>b.onclick=()=>openTxnManage(m,items[Number(b.dataset.idx)]));
+          h.querySelectorAll('.txn-trail-btn').forEach(b=>b.onclick=()=>setView('trail',moduleRecordIdentity(m,items[Number(b.dataset.idx)])))
+        }
+      })
+    }
+    document.querySelectorAll('#moduleViewTabs button').forEach(b=>b.onclick=()=>setView(b.dataset.view));
+    await setView(current)
   }catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}
 }
 
