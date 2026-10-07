@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const BUILD='0.32';
+const BUILD='0.33';
 const MOD_BY_TITLE={
   'Raw Fabric':'raw','Dyeing':'dye','Production':'production','Production / Cutting':'production',
   'Stitching':'stitching','QC & Rework':'qc','Warehouse Handover':'handover'
@@ -114,6 +114,31 @@ function auditSummary(x){
   return (reason?'Reason: '+reason+' · ':'')+(out.slice(0,5).join(' · ')||'Recorded action');
 }
 
+function organizePanelActions(head){
+  if(!head)return;
+  let actions=head.querySelector('.b2-head-actions');
+  if(!actions){
+    actions=document.createElement('div');actions.className='b2-head-actions';head.appendChild(actions)
+  }
+  const newBtn=head.querySelector(':scope > #newBtn');
+  const large=head.querySelector(':scope > .b2-large-mode');
+  if(newBtn)actions.appendChild(newBtn);
+  if(large)actions.appendChild(large)
+}
+
+function firstTrailAction(){
+  return document.querySelector(
+    '#gridHost .summary-trail-btn,#gridHost .txn-trail-btn,#gridHost .dye-plan-trail-btn,#gridHost .dye-trail-btn'
+  )
+}
+document.addEventListener('click',e=>{
+  const tab=e.target.closest('button[data-view="trail"]');
+  if(!tab)return;
+  const action=firstTrailAction();
+  if(!action)return;
+  e.preventDefault();e.stopImmediatePropagation();action.click()
+},true);
+
 function addLargeModeButton(){
   const module=currentModule();if(!module)return;
   const stage=document.getElementById('stage'),panel=stage?.querySelector(':scope > .panel');if(!panel)return;
@@ -121,10 +146,7 @@ function addLargeModeButton(){
   const b=document.createElement('button');b.type='button';b.className='btn ghost b2-large-mode';b.textContent='Large Data Mode';
   head.appendChild(b);
   b.onclick=()=>openServerMode(module,panel);
-  // Lightweight recommendation check: one-row request only.
-  api('/api/grid?module='+module+'&page=1&pageSize=10').then(d=>{
-    if(Number(d.total||0)>500){b.innerHTML='Large Data Mode <span class="b2-count">'+Number(d.total).toLocaleString('en-IN')+'</span>'}
-  }).catch(()=>{});
+  organizePanelActions(head);
 }
 
 function qs(state,facets=false,exportAll=false){
@@ -207,10 +229,18 @@ async function exportFiltered(st){
 function csvCell(v){const s=String(v??'');return /[",\r\n]/.test(s)?'"'+s.replaceAll('"','""')+'"':s}
 
 function scan(){
-  scanQueued=false;updateBuild();injectExpectedField();mountExpectationPanel();mountReworkDates();mountRecordAudit();addLargeModeButton()
+  scanQueued=false;updateBuild();injectExpectedField();mountExpectationPanel();mountReworkDates();mountRecordAudit();addLargeModeButton();
+  const head=document.querySelector('#stage > .panel > .panel-head');if(head)organizePanelActions(head)
 }
 function queueScan(){if(scanQueued)return;scanQueued=true;requestAnimationFrame(scan)}
-const obs=new MutationObserver(queueScan);
-document.addEventListener('DOMContentLoaded',()=>{obs.observe(document.body,{subtree:true,childList:true});scan()});
-if(document.readyState!=='loading'){obs.observe(document.body,{subtree:true,childList:true});scan()}
+function startObservers(){
+  const stage=document.getElementById('stage'),modalBody=document.getElementById('modalBody');
+  if(stage)new MutationObserver(queueScan).observe(stage,{childList:true});
+  if(modalBody)new MutationObserver(queueScan).observe(modalBody,{childList:true});
+  document.addEventListener('click',e=>{
+    if(e.target.closest('#nav button,#refreshBtn,#newBtn,.compact-action-menu button,.btn'))setTimeout(queueScan,0)
+  },{passive:true});
+  scan()
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',startObservers,{once:true});else startObservers()
 })();
