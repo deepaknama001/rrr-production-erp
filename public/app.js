@@ -45,17 +45,17 @@ async function renderDashboard(force=false){const s=$('#stage');s.innerHTML=`<se
 const prefMem=new Map(),prefTimers=new Map();
 function prefLocalKey(page){return 'rrr_prod_pref_'+String(state.user?.userId||'anon')+'_'+page}
 
-function defaultGridPrefs(columns){return{search:'',filters:{},visibleColumns:columns.filter(x=>x!=='__ACTION'),pageSize:25,page:1,sortKey:'',sortDir:'asc'}}
+function defaultGridPrefs(columns){const d=columns.filter(x=>x!=='__ACTION');return{search:'',filters:{},visibleColumns:[...d],columnOrder:[...d],columnWidths:{},pageSize:25,page:1,sortKey:'',sortDir:'asc',density:'comfortable',namedViews:{},exportScope:'filtered'}}
 async function loadGridPrefs(page,columns){
   const base=defaultGridPrefs(columns);let local={};
   try{local=JSON.parse(localStorage.getItem(prefLocalKey(page))||'{}')}catch{}
-  const merged={...base,...local,filters:{...(base.filters||{}),...(local.filters||{})}};
-  if(prefMem.has(page))return{...merged,...prefMem.get(page),filters:{...merged.filters,...(prefMem.get(page).filters||{})}};
+  const merged={...base,...local,filters:{...(base.filters||{}),...(local.filters||{})},columnWidths:{...(base.columnWidths||{}),...(local.columnWidths||{})},namedViews:{...(base.namedViews||{}),...(local.namedViews||{})}};
+  if(prefMem.has(page)){const x=prefMem.get(page);return{...merged,...x,filters:{...merged.filters,...(x.filters||{})},columnWidths:{...merged.columnWidths,...(x.columnWidths||{})},namedViews:{...merged.namedViews,...(x.namedViews||{})}}}
   try{
     const r=await fetch('/api/preferences?page='+encodeURIComponent(page),{headers:{authorization:'Bearer '+state.token}});
     if(r.ok){
       const d=await r.json(),server=d.prefs||{};
-      const p={...merged,...server,filters:{...merged.filters,...(server.filters||{})}};
+      const p={...merged,...server,filters:{...merged.filters,...(server.filters||{})},columnWidths:{...merged.columnWidths,...(server.columnWidths||{})},namedViews:{...merged.namedViews,...(server.namedViews||{})}};
       prefMem.set(page,p);localStorage.setItem(prefLocalKey(page),JSON.stringify(p));return p
     }
   }catch{}
