@@ -592,7 +592,27 @@ async function operationsAnalytics(db){
     }
   }
 }
-async function masterData(db){const [vendors,fabrics,colors,styles,sizes,defects]=await Promise.all([rows(db,'SELECT * FROM vendors'),rows(db,'SELECT * FROM fabrics'),rows(db,'SELECT * FROM colors'),rows(db,'SELECT * FROM styles'),rows(db,'SELECT * FROM sizes ORDER BY SORT_ORDER,SIZE_NAME'),rows(db,'SELECT * FROM defect_reasons')]);return{vendors,fabrics,colors,styles,sizes,defects}}
+async function masterData(db){
+  const [vendors,fabrics,colors,styles,sizes,defects]=await Promise.all([
+    rows(db,`SELECT v.*,
+      ((SELECT COUNT(*) FROM raw_inward r WHERE r.SUPPLIER_ID=v.VENDOR_ID)+(SELECT COUNT(*) FROM dye_jobs d WHERE d.DYE_VENDOR_ID=v.VENDOR_ID)+(SELECT COUNT(*) FROM stitching_jobs s WHERE s.STITCHING_VENDOR_ID=v.VENDOR_ID)+(SELECT COUNT(*) FROM qc_events q WHERE q.VENDOR_ID=v.VENDOR_ID)+(SELECT COUNT(*) FROM rework_jobs rw WHERE rw.VENDOR_ID=v.VENDOR_ID)) DEPENDENCY_COUNT
+      FROM vendors v`),
+    rows(db,`SELECT f.*,
+      ((SELECT COUNT(*) FROM raw_inward r WHERE r.FABRIC_ID=f.FABRIC_ID)+(SELECT COUNT(*) FROM dye_jobs d WHERE d.FABRIC_ID=f.FABRIC_ID)+(SELECT COUNT(*) FROM production_batches p WHERE p.FABRIC_ID=f.FABRIC_ID)+(SELECT COUNT(*) FROM styles s WHERE s.DEFAULT_FABRIC_ID=f.FABRIC_ID)) DEPENDENCY_COUNT
+      FROM fabrics f`),
+    rows(db,`SELECT c.*,
+      ((SELECT COUNT(*) FROM dye_jobs d WHERE d.COLOR_ID=c.COLOR_ID)+(SELECT COUNT(*) FROM production_batches p WHERE p.COLOR_ID=c.COLOR_ID)+(SELECT COUNT(*) FROM stitching_jobs s WHERE s.COLOR_ID=c.COLOR_ID)+(SELECT COUNT(*) FROM qc_events q WHERE q.COLOR_ID=c.COLOR_ID)+(SELECT COUNT(*) FROM warehouse_handover h WHERE h.COLOR_ID=c.COLOR_ID)) DEPENDENCY_COUNT
+      FROM colors c`),
+    rows(db,`SELECT s.*,
+      ((SELECT COUNT(*) FROM production_batches p WHERE p.STYLE_ID=s.STYLE_ID)+(SELECT COUNT(*) FROM stitching_jobs j WHERE j.STYLE_ID=s.STYLE_ID)+(SELECT COUNT(*) FROM qc_events q WHERE q.STYLE_ID=s.STYLE_ID)+(SELECT COUNT(*) FROM warehouse_handover h WHERE h.STYLE_ID=s.STYLE_ID)) DEPENDENCY_COUNT
+      FROM styles s`),
+    rows(db,`SELECT s.*,
+      ((SELECT COUNT(*) FROM production_cut_lines p WHERE p.SIZE_ID=s.SIZE_ID)+(SELECT COUNT(*) FROM stitching_issue_lines i WHERE i.SIZE_ID=s.SIZE_ID)+(SELECT COUNT(*) FROM stitching_receipt_lines r WHERE r.SIZE_ID=s.SIZE_ID)+(SELECT COUNT(*) FROM qc_events q WHERE q.SIZE=s.SIZE_ID)+(SELECT COUNT(*) FROM rework_jobs rw WHERE rw.SIZE_ID=s.SIZE_ID)+(SELECT COUNT(*) FROM warehouse_handover h WHERE h.SIZE=s.SIZE_ID)) DEPENDENCY_COUNT
+      FROM sizes s ORDER BY SORT_ORDER,SIZE_NAME`),
+    rows(db,`SELECT d.*,(SELECT COUNT(*) FROM qc_events q WHERE q.DEFECT_REASON=d.DEFECT_NAME) DEPENDENCY_COUNT FROM defect_reasons d`)
+  ]);
+  return{vendors,fabrics,colors,styles,sizes,defects}
+}
 async function lookupData(db){
   const m=await masterData(db),
         vendors=m.vendors.filter(x=>truth(x.ACTIVE)),
@@ -850,9 +870,29 @@ async function traceRecord(db,type,id){
     ]
   }
 }
-export async function getDataD1(env,{module,actorUserId,id='',type='',limit=100,offset=0}){
+export async function getDataD1(env,{module,actorUserId,id='',type='',limit=100,offset=0,search='',user='',action='',dateFrom='',dateTo=''}){
   await ensureSchema(env);const db=env.DB,m=String(module||'dashboard'),trailPerm=m==='trail'?({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[String(type||'').toLowerCase()]||null):null,perm=trailPerm||({raw:'raw',dye:'dye',dye_detail:'dye',production:'production',production_detail:'production',stitching:'stitching',stitching_detail:'stitching',qc:'qc',qc_detail:'qc',handover:'qc',handover_detail:'qc',reports:'reports'}[m]||null),a=await actor(db,actorUserId,perm,false);if(perm&&m!=='trail')await requireAction(db,a,perm,'view');
-  if(m==='dashboard'){a.actions=await actionPerms(db,a.userId);const canReports=a.admin||((a.permissions?.reports)&&a.actions?.reports?.view!==false),analytics=canReports?await operationsAnalytics(db):null;return{user:a,kpis:await kpisD1(db),alerts:analytics?{exceptionCount:analytics.exceptionCount,rates:analytics.rates,exceptions:analytics.exceptions.slice(0,8)}:{exceptionCount:0,rates:{},exceptions:[]}}};if(m==='trail'){await requireAction(db,a,trailPerm,'view');return{trail:await traceRecord(db,type,id)}};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='production_detail')return{detail:await getProductionDetail(db,String(id||''))};if(m==='stitching_detail')return{detail:await getStitchingDetail(db,String(id||''))};if(m==='qc_detail')return{detail:await getQcDetail(db,String(id||''))};if(m==='handover_detail')return{detail:await getHandoverDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db),analytics:await operationsAnalytics(db)};if(m==='audit'){await requireAction(db,a,'reports','audit');const lim=Math.min(250,Math.max(10,Number(limit)||100)),off=Math.max(0,Number(offset)||0),total=n((await row(db,'SELECT COUNT(*) c FROM audit_log'))?.c);return{items:await rows(db,'SELECT AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON,DEVICE_INFO,IP_HASH FROM audit_log ORDER BY TIMESTAMP DESC LIMIT ? OFFSET ?',lim,off),total,limit:lim,offset:off}};if(m==='errors'){await requireAction(db,a,'reports','audit');const lim=Math.min(250,Math.max(10,Number(limit)||100)),off=Math.max(0,Number(offset)||0),total=n((await row(db,'SELECT COUNT(*) c FROM app_errors'))?.c);return{items:await rows(db,'SELECT ERROR_ID,TIMESTAMP,USER_ID,MODULE,MESSAGE,CONTEXT_JSON FROM app_errors ORDER BY TIMESTAMP DESC LIMIT ? OFFSET ?',lim,off),total,limit:lim,offset:off}};if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
+  if(m==='dashboard'){a.actions=await actionPerms(db,a.userId);const canReports=a.admin||((a.permissions?.reports)&&a.actions?.reports?.view!==false),analytics=canReports?await operationsAnalytics(db):null;return{user:a,kpis:await kpisD1(db),alerts:analytics?{exceptionCount:analytics.exceptionCount,rates:analytics.rates,exceptions:analytics.exceptions.slice(0,8)}:{exceptionCount:0,rates:{},exceptions:[]}}};if(m==='trail'){await requireAction(db,a,trailPerm,'view');return{trail:await traceRecord(db,type,id)}};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='production_detail')return{detail:await getProductionDetail(db,String(id||''))};if(m==='stitching_detail')return{detail:await getStitchingDetail(db,String(id||''))};if(m==='qc_detail')return{detail:await getQcDetail(db,String(id||''))};if(m==='handover_detail')return{detail:await getHandoverDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db),analytics:await operationsAnalytics(db)};if(m==='audit'){
+    await requireAction(db,a,'reports','audit');
+    const lim=Math.min(250,Math.max(10,Number(limit)||100)),off=Math.max(0,Number(offset)||0),w=[],b=[];
+    if(search){w.push('(RECORD_ID LIKE ? OR MODULE LIKE ? OR ACTION LIKE ? OR USER_NAME LIKE ?)');const q='%'+String(search).slice(0,80)+'%';b.push(q,q,q,q)}
+    if(user){w.push('(USER_ID=? OR USER_NAME=?)');b.push(user,user)}
+    if(action){w.push('ACTION=?');b.push(action)}
+    if(dateFrom){w.push('substr(TIMESTAMP,1,10)>=?');b.push(dateFrom)}
+    if(dateTo){w.push('substr(TIMESTAMP,1,10)<=?');b.push(dateTo)}
+    const where=w.length?' WHERE '+w.join(' AND '):'',total=n((await row(db,'SELECT COUNT(*) c FROM audit_log'+where,...b))?.c);
+    return{items:await rows(db,'SELECT AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON,DEVICE_INFO,IP_HASH FROM audit_log'+where+' ORDER BY TIMESTAMP DESC LIMIT ? OFFSET ?',...b,lim,off),total,limit:lim,offset:off}
+  };if(m==='errors'){
+    await requireAction(db,a,'reports','audit');
+    const lim=Math.min(250,Math.max(10,Number(limit)||100)),off=Math.max(0,Number(offset)||0),w=[],b=[];
+    if(search){w.push('(MESSAGE LIKE ? OR MODULE LIKE ? OR USER_ID LIKE ?)');const q='%'+String(search).slice(0,80)+'%';b.push(q,q,q)}
+    if(user){w.push('USER_ID=?');b.push(user)}
+    if(dateFrom){w.push('substr(TIMESTAMP,1,10)>=?');b.push(dateFrom)}
+    if(dateTo){w.push('substr(TIMESTAMP,1,10)<=?');b.push(dateTo)}
+    const where=w.length?' WHERE '+w.join(' AND '):'',total=n((await row(db,'SELECT COUNT(*) c FROM app_errors'+where,...b))?.c);
+    const items=await rows(db,'SELECT ERROR_ID,TIMESTAMP,USER_ID,MODULE,MESSAGE,CONTEXT_JSON FROM app_errors'+where+' ORDER BY TIMESTAMP DESC LIMIT ? OFFSET ?',...b,lim,off);
+    return{items,total,limit:lim,offset:off,groups:await rows(db,`SELECT MODULE,MESSAGE,COUNT(*) OCCURRENCES,MAX(TIMESTAMP) LAST_SEEN FROM app_errors ${where} GROUP BY MODULE,MESSAGE ORDER BY OCCURRENCES DESC,LAST_SEEN DESC LIMIT 50`,...b)}
+  };if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
 }
 
 async function saveMaster(db,r,a){
