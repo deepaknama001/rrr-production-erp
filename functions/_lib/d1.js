@@ -26,7 +26,16 @@ function safeEq(a,b){a=String(a||'');b=String(b||'');if(a.length!==b.length)retu
 let schemaReadyPromise=null;
 async function ensureSchema(env){
   if(!env?.DB)return;
-  if(!schemaReadyPromise)schemaReadyPromise=env.DB.exec(D1_SCHEMA).catch(e=>{schemaReadyPromise=null;throw e});
+  if(!schemaReadyPromise)schemaReadyPromise=(async()=>{
+    await env.DB.exec(D1_SCHEMA);
+    try{
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM request_log WHERE created_at < datetime('now','-7 day')"),
+        env.DB.prepare("DELETE FROM resource_locks WHERE ACQUIRED_AT < datetime('now','-10 minute')"),
+        env.DB.prepare("DELETE FROM app_errors WHERE TIMESTAMP < datetime('now','-90 day')")
+      ])
+    }catch{}
+  })().catch(e=>{schemaReadyPromise=null;throw e});
   await schemaReadyPromise
 }
 function intQty(v,label='Quantity',allowZero=true){
@@ -158,7 +167,7 @@ async function nextSeq(db,prefix){
 }
 async function nextId(db,prefix){const x=await nextSeq(db,prefix);return prefix+'-'+kolkataStamp()+'-'+String(x).padStart(4,'0')}
 async function nextMasterId(db,prefix){const x=await nextSeq(db,prefix);return prefix+'-'+String(x).padStart(4,'0')}
-async function audit(db,u,action,module,id,oldV='',newV=''){await db.prepare('INSERT INTO audit_log(AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON,DEVICE_INFO,IP_HASH) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(uuid(),now(),u.userId,u.name,action,module,id,String(oldV||''),String(newV||''),'','').run()}
+async function audit(db,u,action,module,id,oldV='',newV=''){const m=u?.auditMeta||{};await db.prepare('INSERT INTO audit_log(AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON,DEVICE_INFO,IP_HASH) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(uuid(),now(),u.userId,u.name,action,module,id,String(oldV||''),String(newV||''),String(m.device||'').slice(0,300),String(m.ipHash||'').slice(0,100)).run()}
 
 
 export async function getUiPreferenceD1(env,actorUserId,page){
@@ -181,7 +190,7 @@ export async function listUsersD1(env,actorUserId){
   return{items}
 }
 export async function saveUserD1(env,p){
-  const db=env.DB,a=await actor(db,p.actorUserId,null,true),id=String(p.userId||'').trim().toUpperCase(),name=String(p.name||'').trim(),pin=String(p.pin||''),role=String(p.role||'EMPLOYEE').toUpperCase();
+  const db=env.DB,a=await actor(db,p.actorUserId,null,true);a.auditMeta=p.auditMeta||{};const id=String(p.userId||'').trim().toUpperCase(),name=String(p.name||'').trim(),pin=String(p.pin||''),role=String(p.role||'EMPLOYEE').toUpperCase();
   if(!id||!name)throw err('User ID and name required.',400);if(pin&&!/^\d{4,8}$/.test(pin))throw err('PIN must be 4–8 digits.',400);
   const old=await userRow(db,id);if(!old&&!pin)throw err('PIN required for new user.',400);
   const t=now(),hash=pin?await hashPin(db,id,pin):old.PIN_HASH;
@@ -507,6 +516,62 @@ async function kpisD1(db){
   return{rawAvailable:n(raw?.v),atDye:n(atDye?.v),dyedAvailable:n(dyed?.v),cutPending:n(cut?.v),atStitching:n(stitch?.v),readyWarehouse:n(wh?.v)}
 }
 
+
+async function operationsAnalytics(db){
+  const dyeVendors=await rows(db,`
+    WITH j AS (SELECT DYE_VENDOR_ID,COUNT(DISTINCT DYE_BATCH_ID) BATCHES,SUM(ISSUE_MTR) ISSUED_MTR,MIN(ISSUE_DATE) OLDEST_ISSUE
+      FROM dye_jobs WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY DYE_VENDOR_ID),
+    r AS (SELECT j.DYE_VENDOR_ID,SUM(d.RECEIVED_MTR) RECEIVED_MTR,SUM(d.DEFECT_MTR) DEFECT_MTR
+      FROM dye_jobs j JOIN dye_receipts d ON d.DYE_BATCH_ID=j.DYE_BATCH_ID AND COALESCE(d.STATUS,'') NOT LIKE 'CANCELLED%'
+      WHERE COALESCE(j.STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY j.DYE_VENDOR_ID)
+    SELECT COALESCE(v.VENDOR_NAME,j.DYE_VENDOR_ID) VENDOR,j.BATCHES,j.ISSUED_MTR,COALESCE(r.RECEIVED_MTR,0) RECEIVED_MTR,
+      COALESCE(r.DEFECT_MTR,0) DEFECT_MTR,MAX(0,j.ISSUED_MTR-COALESCE(r.RECEIVED_MTR,0)) PENDING_MTR,
+      CAST(julianday('now')-julianday(j.OLDEST_ISSUE) AS INTEGER) OLDEST_AGE_DAYS
+    FROM j LEFT JOIN r ON r.DYE_VENDOR_ID=j.DYE_VENDOR_ID LEFT JOIN vendors v ON v.VENDOR_ID=j.DYE_VENDOR_ID
+    ORDER BY PENDING_MTR DESC`);
+  const stitchVendors=await rows(db,`
+    SELECT COALESCE(v.VENDOR_NAME,s.STITCHING_VENDOR_ID) VENDOR,COUNT(*) CHALLANS,SUM(s.TOTAL_ISSUED) ISSUED_QTY,
+      SUM(s.TOTAL_RECEIVED) RECEIVED_QTY,SUM(MAX(0,s.PENDING_QTY)) PENDING_QTY,
+      MAX(CASE WHEN s.PENDING_QTY>0 THEN CAST(julianday('now')-julianday(s.ISSUE_DATE) AS INTEGER) ELSE 0 END) OLDEST_AGE_DAYS
+    FROM stitching_jobs s LEFT JOIN vendors v ON v.VENDOR_ID=s.STITCHING_VENDOR_ID
+    WHERE COALESCE(s.STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY s.STITCHING_VENDOR_ID ORDER BY PENDING_QTY DESC`);
+  const quality=await row(db,`
+    SELECT COALESCE(SUM(QC_QTY),0) QC_QTY,COALESCE(SUM(PASS_QTY),0) PASS_QTY,COALESCE(SUM(REWORK_QTY),0) REWORK_QTY,
+      COALESCE(SUM(REJECT_QTY),0) REJECT_QTY,COALESCE(SUM(FINAL_ACCEPTED_QTY),0) FINAL_ACCEPTED_QTY
+    FROM qc_events WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'`);
+  const dyeQuality=await row(db,`SELECT COALESCE(SUM(RECEIVED_MTR),0) RECEIVED_MTR,COALESCE(SUM(DEFECT_MTR),0) DEFECT_MTR
+    FROM dye_receipts WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'`);
+  const exceptions=[];
+  for(const x of await rows(db,`
+    SELECT 'DYE' TYPE,j.DYE_BATCH_ID RECORD_ID,COALESCE(v.VENDOR_NAME,j.DYE_VENDOR_ID) OWNER,
+      CAST(julianday('now')-julianday(MAX(j.ISSUE_DATE)) AS INTEGER) AGE_DAYS,
+      MAX(0,SUM(j.ISSUE_MTR)-COALESCE((SELECT SUM(r.RECEIVED_MTR) FROM dye_receipts r WHERE r.DYE_BATCH_ID=j.DYE_BATCH_ID AND COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%'),0)) PENDING,
+      'Dye batch pending' MESSAGE
+    FROM dye_jobs j LEFT JOIN vendors v ON v.VENDOR_ID=j.DYE_VENDOR_ID
+    WHERE COALESCE(j.STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY j.DYE_BATCH_ID
+    HAVING PENDING>0 AND AGE_DAYS>=3 ORDER BY AGE_DAYS DESC LIMIT 50`))exceptions.push(x);
+  for(const x of await rows(db,`
+    SELECT 'STITCHING' TYPE,s.CHALLAN_ID RECORD_ID,COALESCE(v.VENDOR_NAME,s.STITCHING_VENDOR_ID) OWNER,
+      CAST(julianday('now')-julianday(s.ISSUE_DATE) AS INTEGER) AGE_DAYS,s.PENDING_QTY PENDING,'Stitching return pending' MESSAGE
+    FROM stitching_jobs s LEFT JOIN vendors v ON v.VENDOR_ID=s.STITCHING_VENDOR_ID
+    WHERE COALESCE(s.STATUS,'') NOT LIKE 'CANCELLED%' AND s.PENDING_QTY>0 AND CAST(julianday('now')-julianday(s.ISSUE_DATE) AS INTEGER)>=3
+    ORDER BY AGE_DAYS DESC LIMIT 50`))exceptions.push(x);
+  for(const x of await rows(db,`
+    SELECT 'REWORK' TYPE,REWORK_ID RECORD_ID,VENDOR_ID OWNER,CAST(julianday('now')-julianday(ISSUE_DATE) AS INTEGER) AGE_DAYS,
+      MAX(0,ISSUE_QTY-RETURNED_QTY) PENDING,'Rework pending' MESSAGE FROM rework_jobs
+    WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' AND ISSUE_QTY>RETURNED_QTY ORDER BY AGE_DAYS DESC LIMIT 50`))exceptions.push(x);
+  return{
+    dyeVendors,stitchVendors,quality,dyeQuality,
+    exceptionCount:exceptions.length,
+    exceptions:exceptions.sort((a,b)=>Number(b.AGE_DAYS||0)-Number(a.AGE_DAYS||0)).slice(0,100),
+    rates:{
+      dyeDefectPct:n(dyeQuality?.RECEIVED_MTR)>0?n(dyeQuality.DEFECT_MTR)/n(dyeQuality.RECEIVED_MTR)*100:0,
+      qcRejectPct:n(quality?.QC_QTY)>0?n(quality.REJECT_QTY)/n(quality.QC_QTY)*100:0,
+      qcReworkPct:n(quality?.QC_QTY)>0?n(quality.REWORK_QTY)/n(quality.QC_QTY)*100:0,
+      qcPassPct:n(quality?.QC_QTY)>0?n(quality.FINAL_ACCEPTED_QTY)/n(quality.QC_QTY)*100:0
+    }
+  }
+}
 async function masterData(db){const [vendors,fabrics,colors,styles,sizes,defects]=await Promise.all([rows(db,'SELECT * FROM vendors'),rows(db,'SELECT * FROM fabrics'),rows(db,'SELECT * FROM colors'),rows(db,'SELECT * FROM styles'),rows(db,'SELECT * FROM sizes ORDER BY SORT_ORDER,SIZE_NAME'),rows(db,'SELECT * FROM defect_reasons')]);return{vendors,fabrics,colors,styles,sizes,defects}}
 async function lookupData(db){
   const m=await masterData(db),
@@ -767,12 +832,26 @@ async function traceRecord(db,type,id){
 }
 export async function getDataD1(env,{module,actorUserId,id='',type=''}){
   await ensureSchema(env);const db=env.DB,m=String(module||'dashboard'),trailPerm=m==='trail'?({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[String(type||'').toLowerCase()]||null):null,perm=trailPerm||({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc',reports:'reports'}[m]||null),a=await actor(db,actorUserId,perm,false);
-  if(m==='dashboard'){a.actions=await actionPerms(db,a.userId);return{user:a,kpis:await kpisD1(db)}};if(m==='trail'){await requireAction(db,a,trailPerm,'view');return{trail:await traceRecord(db,type,id)}};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='production_detail')return{detail:await getProductionDetail(db,String(id||''))};if(m==='stitching_detail')return{detail:await getStitchingDetail(db,String(id||''))};if(m==='qc_detail')return{detail:await getQcDetail(db,String(id||''))};if(m==='handover_detail')return{detail:await getHandoverDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db)};if(m==='audit'){await requireAction(db,a,'reports','audit');return{items:await rows(db,'SELECT AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON FROM audit_log ORDER BY TIMESTAMP DESC LIMIT 2000')}};if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
+  if(m==='dashboard'){a.actions=await actionPerms(db,a.userId);const analytics=await operationsAnalytics(db);return{user:a,kpis:await kpisD1(db),alerts:{exceptionCount:analytics.exceptionCount,rates:analytics.rates,exceptions:analytics.exceptions.slice(0,8)}}};if(m==='trail'){await requireAction(db,a,trailPerm,'view');return{trail:await traceRecord(db,type,id)}};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='production_detail')return{detail:await getProductionDetail(db,String(id||''))};if(m==='stitching_detail')return{detail:await getStitchingDetail(db,String(id||''))};if(m==='qc_detail')return{detail:await getQcDetail(db,String(id||''))};if(m==='handover_detail')return{detail:await getHandoverDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db),analytics:await operationsAnalytics(db)};if(m==='audit'){await requireAction(db,a,'reports','audit');return{items:await rows(db,'SELECT AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON FROM audit_log ORDER BY TIMESTAMP DESC LIMIT 2000')}};if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
 }
 
 async function saveMaster(db,r,a){
   const entity=String(r.entity||'').toLowerCase(),cfg={vendor:{table:'vendors',key:'VENDOR_ID',prefix:'VEN',fields:['VENDOR_ID','VENDOR_NAME','FABRIC_SUPPLIER','DYE_VENDOR','STITCHING_VENDOR','CUTTING_VENDOR','PHONE','GST_REF','ADDRESS','ACTIVE','CREATED_AT','UPDATED_AT']},fabric:{table:'fabrics',key:'FABRIC_ID',prefix:'FAB',fields:['FABRIC_ID','FABRIC_NAME','FABRIC_CODE','UOM','ACTIVE','NOTES','CREATED_AT','UPDATED_AT']},color:{table:'colors',key:'COLOR_ID',prefix:'CLR',fields:['COLOR_ID','COLOR_NAME','COLOR_CODE','ACTIVE','CREATED_AT','UPDATED_AT']},style:{table:'styles',key:'STYLE_ID',prefix:'STY',fields:['STYLE_ID','STYLE_NAME','CATEGORY','STYLE_CODE','DEFAULT_FABRIC_ID','ACTIVE','NOTES','CREATED_AT','UPDATED_AT']},size:{table:'sizes',key:'SIZE_ID',prefix:'SIZ',fields:['SIZE_ID','SIZE_NAME','SORT_ORDER','ACTIVE','CREATED_AT','UPDATED_AT']},defect:{table:'defect_reasons',key:'DEFECT_ID',prefix:'DEF',fields:['DEFECT_ID','DEFECT_NAME','STAGE','CATEGORY','ACTIVE','NOTES','CREATED_AT','UPDATED_AT']}}[entity];if(!cfg)throw err('Unknown master type.',400);
+  const dupRules={
+    vendor:[['VENDOR_NAME','Vendor name']],
+    fabric:[['FABRIC_NAME','Fabric name'],['FABRIC_CODE','Fabric code']],
+    color:[['COLOR_NAME','Color name'],['COLOR_CODE','Color code']],
+    style:[['STYLE_NAME','Style name'],['STYLE_CODE','Style code']],
+    size:[['SIZE_NAME','Size name']],
+    defect:[['DEFECT_NAME','Defect reason']]
+  }[entity]||[];
+
   const id=String(r[cfg.key]||'').trim()||await nextMasterId(db,cfg.prefix),old=await row(db,`SELECT * FROM ${cfg.table} WHERE "${cfg.key}"=?`,id),t=now(),obj=cleanRow({...r,[cfg.key]:id,ACTIVE:r.ACTIVE===false||String(r.ACTIVE).toLowerCase()==='false'?0:1,CREATED_AT:old?.CREATED_AT||t,UPDATED_AT:t});
+  for(const [field,label] of dupRules){
+    const value=String(obj[field]||'').trim();if(!value)continue;
+    const dupe=await row(db,`SELECT "${cfg.key}" id FROM ${cfg.table} WHERE UPPER(TRIM(COALESCE("${field}",'')))=UPPER(TRIM(?)) AND "${cfg.key}"<>? LIMIT 1`,value,id);
+    if(dupe)throw err(label+' already exists.',409)
+  }
   const vals=cfg.fields.map(k=>obj[k]??''),updates=cfg.fields.filter(k=>k!==cfg.key).map(k=>`"${k}"=excluded."${k}"`).join(',');
   await db.prepare(`INSERT INTO ${cfg.table}(${cfg.fields.map(quoteCol).join(',')}) VALUES(${cfg.fields.map(()=>'?').join(',')}) ON CONFLICT("${cfg.key}") DO UPDATE SET ${updates}`).bind(...vals).run();
   await audit(db,a,old?'UPDATE_MASTER':'CREATE_MASTER',entity.toUpperCase(),id,old?JSON.stringify(old):'',JSON.stringify(obj));return obj
@@ -988,7 +1067,7 @@ async function cancelDyeBatch(db,r,a){
 
 function auditStmt(db,u,action,module,id,oldV='',newV=''){
   return db.prepare('INSERT INTO audit_log(AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON,DEVICE_INFO,IP_HASH) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
-    .bind(uuid(),now(),u.userId,u.name,action,module,id,String(oldV||''),String(newV||''),'','')
+    .bind(uuid(),now(),u.userId,u.name,action,module,id,String(oldV||''),String(newV||''),String(u?.auditMeta?.device||'').slice(0,300),String(u?.auditMeta?.ipHash||'').slice(0,100))
 }
 async function getProductionDetail(db,id){
   const p=await row(db,`SELECT p.*,COALESCE(s.STYLE_NAME,p.STYLE_ID) STYLE,COALESCE(c.COLOR_NAME,p.COLOR_ID) COLOR
@@ -1326,7 +1405,7 @@ export async function saveRecordD1(env,p){
     stitching:'stitching',stitching_edit:'stitching',stitching_receive:'stitching',stitching_receipt_cancel:'stitching',stitching_cancel:'stitching',
     qc:'qc',qc_edit:'qc',rework_issue:'qc',rework_receive:'qc',rework_cancel:'qc',qc_cancel:'qc',
     handover:'qc',handover_edit:'qc',warehouse_receive:'qc',warehouse_receipt_cancel:'qc',handover_cancel:'qc'
-  },perm=moduleMap[m]||null,a=await actor(db,p.actorUserId,perm,false),req=String(p.requestId||'');
+  },perm=moduleMap[m]||null,a=await actor(db,p.actorUserId,perm,false),req=String(p.requestId||'');a.auditMeta=p.auditMeta||{};
   const actionMap={
     raw:'create',raw_bulk:'create',raw_edit:'edit',raw_cancel:'cancel',
     dye:'create',dye_bulk:'create',dye_plan:'create',dye_receive:'create',dye_edit_batch:'edit',dye_edit_receipt:'edit',dye_cancel_batch:'cancel',
