@@ -119,6 +119,20 @@ async function nextId(db,prefix){const x=await nextSeq(db,prefix);return prefix+
 async function nextMasterId(db,prefix){const x=await nextSeq(db,prefix);return prefix+'-'+String(x).padStart(4,'0')}
 async function audit(db,u,action,module,id,oldV='',newV=''){await db.prepare('INSERT INTO audit_log(AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON,DEVICE_INFO,IP_HASH) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(uuid(),now(),u.userId,u.name,action,module,id,String(oldV||''),String(newV||''),'','').run()}
 
+
+export async function getUiPreferenceD1(env,actorUserId,page){
+  const db=env.DB;await actor(db,actorUserId,null,false);
+  const key='UIPREF:'+String(actorUserId||'').toUpperCase()+':'+String(page||'');
+  const r=await row(db,'SELECT VALUE FROM settings WHERE KEY=?',key);
+  if(!r?.VALUE)return{page,prefs:{}};
+  try{return{page,prefs:JSON.parse(r.VALUE)}}catch{return{page,prefs:{}}}
+}
+export async function saveUiPreferenceD1(env,actorUserId,page,prefs){
+  const db=env.DB;await actor(db,actorUserId,null,false);
+  const key='UIPREF:'+String(actorUserId||'').toUpperCase()+':'+String(page||''),t=now(),value=JSON.stringify(prefs||{});
+  await db.prepare('INSERT INTO settings(KEY,VALUE,UPDATED_AT) VALUES(?,?,?) ON CONFLICT(KEY) DO UPDATE SET VALUE=excluded.VALUE,UPDATED_AT=excluded.UPDATED_AT').bind(key,value,t).run();
+  return{page,prefs:prefs||{}}
+}
 export async function listUsersD1(env,actorUserId){const db=env.DB;await actor(db,actorUserId,null,true);return{items:(await rows(db,'SELECT * FROM users ORDER BY NAME,USER_ID')).map(publicUser)}}
 export async function saveUserD1(env,p){
   const db=env.DB,a=await actor(db,p.actorUserId,null,true),id=String(p.userId||'').trim().toUpperCase(),name=String(p.name||'').trim(),pin=String(p.pin||''),role=String(p.role||'EMPLOYEE').toUpperCase();
