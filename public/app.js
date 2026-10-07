@@ -1,4 +1,4 @@
-const APP_BUILD='0.20';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.21';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -208,8 +208,26 @@ async function mountDataGrid(container,opt){
     });
 
     container.querySelectorAll('[data-filter-menu]').forEach(btn=>btn.onclick=e=>{
-      e.stopPropagation();const k=btn.dataset.filterMenu,pop=container.querySelector('[data-filter-pop="'+CSS.escape(k)+'"]');
-      container.querySelectorAll('.th-filter-menu').forEach(x=>{if(x!==pop)x.classList.add('hidden')});pop?.classList.toggle('hidden')
+      e.stopPropagation();
+      const k=btn.dataset.filterMenu,pop=container.querySelector('[data-filter-pop="'+CSS.escape(k)+'"]');
+      container.querySelectorAll('.th-filter-menu').forEach(x=>{if(x!==pop)x.classList.add('hidden')});
+      if(!pop)return;
+      const willOpen=pop.classList.contains('hidden');
+      pop.classList.toggle('hidden');
+      if(willOpen){
+        const r=btn.getBoundingClientRect(),w=Math.max(240,pop.offsetWidth||240),gap=6;
+        pop.style.position='fixed';
+        pop.style.zIndex='9999';
+        pop.style.width=w+'px';
+        pop.style.left=Math.min(Math.max(8,r.right-w),window.innerWidth-w-8)+'px';
+        pop.style.maxHeight=Math.min(420,window.innerHeight-24)+'px';
+        requestAnimationFrame(()=>{
+          const h=Math.min(pop.scrollHeight,Math.min(420,window.innerHeight-24));
+          const below=window.innerHeight-r.bottom-gap;
+          const top=below>=Math.min(h,260)?r.bottom+gap:Math.max(8,r.top-gap-h);
+          pop.style.top=top+'px';
+        });
+      }
     });
     container.querySelectorAll('.th-filter-menu').forEach(pop=>pop.onclick=e=>e.stopPropagation());
 
