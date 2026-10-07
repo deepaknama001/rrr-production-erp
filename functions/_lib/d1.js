@@ -1132,6 +1132,26 @@ async function getHandoverDetail(db,id){
   const extra=receipts.reduce((s,x)=>s+intQty(x.RECEIVED_QTY,'Received quantity'),0);
   return{...h,receipts,TOTAL_RECEIVED:intQty(h.WAREHOUSE_RECEIVED_QTY||0,'Received quantity')+extra,PENDING_QTY:Math.max(0,intQty(h.ACCEPTED_QTY,'Accepted quantity')-intQty(h.WAREHOUSE_RECEIVED_QTY||0,'Received quantity')-extra)}
 }
+async function saveProduction(db,r,a,req=''){
+  const dyeBatch=String(r.DYE_BATCH_ID||''),styleId=String(r.STYLE_ID||''),planned=intQty(r.PLANNED_QTY,'Planned garment quantity'),allocated=n(r.ALLOCATED_MTR);
+  if(!dyeBatch)throw err('Select a dye batch.',400);
+  if(!styleId)throw err('Select a style.',400);
+  requirePos(allocated,'Allocated meter');
+  const style=await row(db,'SELECT * FROM styles WHERE STYLE_ID=? AND ACTIVE=1',styleId);if(!style)throw err('Select a valid active style.',400);
+  const source=await row(db,"SELECT FABRIC_ID,COLOR_ID FROM dye_jobs WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' LIMIT 1",dyeBatch);if(!source)throw err('Selected dye batch was not found.',404);
+  if(style.DEFAULT_FABRIC_ID&&String(style.DEFAULT_FABRIC_ID)!==String(source.FABRIC_ID))throw err('Selected style is mapped to a different fabric.',409);
+  await acquireLock(db,'dye:'+dyeBatch,req);
+  try{
+    const available=await dyeBalance(db,dyeBatch);if(allocated>available+.0001)throw err('Allocated meter exceeds dyed usable balance. Available: '+available.toFixed(2)+' m.',409);
+    const id=await nextId(db,'PB'),t=now(),planDate=dateOnly(r.PLAN_DATE),notes=String(r.NOTES||'');
+    await db.batch([
+      db.prepare('INSERT INTO production_batches(ROW_ID,PRODUCTION_BATCH_ID,PLAN_DATE,DYE_BATCH_ID,STYLE_ID,FABRIC_ID,COLOR_ID,PLANNED_QTY,ALLOCATED_MTR,CUT_DATE,CONSUMED_MTR,CUTTING_WASTE_MTR,DEFECT_MTR,M_CUT,L_CUT,XL_CUT,"2XL_CUT","3XL_CUT",OTHER_CUT,TOTAL_CUT,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .bind(uuid(),id,planDate,dyeBatch,styleId,source.FABRIC_ID,source.COLOR_ID,planned,allocated,'',0,0,0,0,0,0,0,0,0,0,'PLANNED',notes,a.userId,t,a.userId,t),
+      auditStmt(db,a,'CREATE','PRODUCTION',id,'',JSON.stringify({PLAN_DATE:planDate,DYE_BATCH_ID:dyeBatch,STYLE_ID:styleId,FABRIC_ID:source.FABRIC_ID,COLOR_ID:source.COLOR_ID,PLANNED_QTY:planned,ALLOCATED_MTR:allocated,NOTES:notes}))
+    ]);
+    return{PRODUCTION_BATCH_ID:id}
+  }finally{await releaseLock(db,'dye:'+dyeBatch)}
+}
 async function saveCuttingActual(db,r,a,req=''){
   const pb=String(r.PRODUCTION_BATCH_ID||''),p=await row(db,"SELECT * FROM production_batches WHERE PRODUCTION_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",pb);
   if(!p)throw err('Invalid production batch.',400);
