@@ -875,15 +875,15 @@ async function rawFingerprint(db,supplier,invoice,lot,dateVal,items){
   for(const [id,g] of Object.entries(groups)){const fp=g.map(x=>[String(x.FABRIC_ID||''),String(x.VENDOR_ROLL_NO||''),n(x.INWARD_MTR).toFixed(3)].join('|')).sort().join('~');if(fp===target)return{INWARD_ID:id,ROLL_COUNT:g.length,TOTAL_MTR:g.reduce((s,x)=>s+n(x.INWARD_MTR),0),ROLL_IDS:g.map(x=>x.ROLL_ID),DUPLICATE_PREVENTED:true}}
   return null
 }
-async function saveRawBulk(db,r,a){
+async function saveRawBulk(db,r,a,req=''){
   const supplier=String(r.SUPPLIER_ID||''),invoice=String(r.INVOICE_CHALLAN||''),lot=String(r.LOT_REF||''),items=Array.isArray(r.items)?r.items:[],d=dateOnly(r.INWARD_DATE),notes=String(r.NOTES||'');if(!supplier)throw err('Supplier is required.',400);if(!items.length)throw err('Add at least one fabric roll.',400);for(let i=0;i<items.length;i++){if(!items[i].FABRIC_ID)throw err('Fabric is required on roll '+(i+1)+'.',400);requirePos(items[i].INWARD_MTR,'Roll '+(i+1)+' meter')}
   const dupe=await rawFingerprint(db,supplier,invoice,lot,d,items);if(dupe)return dupe;const inward=await nextId(db,'INW'),t=now(),rolls=[],stmts=[];
   for(const x of items){const roll=await nextId(db,'RF');rolls.push(roll);stmts.push(db.prepare('INSERT INTO raw_inward(ROW_ID,INWARD_ID,ROLL_ID,INWARD_DATE,SUPPLIER_ID,VENDOR_ROLL_NO,FABRIC_ID,INWARD_MTR,INVOICE_CHALLAN,LOT_REF,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(uuid(),inward,roll,d,supplier,String(x.VENDOR_ROLL_NO||''),String(x.FABRIC_ID||''),n(x.INWARD_MTR),invoice,lot,'AVAILABLE',String(x.NOTES||notes),a.userId,t,a.userId,t))}
-  await db.batch(stmts);const result={INWARD_ID:inward,ROLL_COUNT:items.length,TOTAL_MTR:items.reduce((s,x)=>s+n(x.INWARD_MTR),0),ROLL_IDS:rolls};await audit(db,a,'CREATE_BULK','RAW',inward,'',JSON.stringify(result));return result
+  const result={INWARD_ID:inward,ROLL_COUNT:items.length,TOTAL_MTR:items.reduce((s,x)=>s+n(x.INWARD_MTR),0),ROLL_IDS:rolls};stmts.push(auditStmt(db,a,'CREATE_BULK','RAW',inward,'',JSON.stringify(result)));await db.batch(stmts);return result
 }
 
 
-async function editRaw(db,r,a){
+async function editRaw(db,r,a,req=''){
   const roll=String(r.ROLL_ID||''),old=await row(db,'SELECT * FROM raw_inward WHERE ROLL_ID=?',roll);
   if(!old)throw err('Raw roll not found.',404);
   const issued=n((await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) q FROM dye_jobs WHERE ROLL_ID=?',roll))?.q);
@@ -894,20 +894,25 @@ async function editRaw(db,r,a){
   const supplier=String(r.SUPPLIER_ID??old.SUPPLIER_ID);
   if(!await row(db,'SELECT 1 ok FROM vendors WHERE VENDOR_ID=? AND ACTIVE=1 AND FABRIC_SUPPLIER=1',supplier))throw err('Select a valid active Fabric Supplier.',400);
   if(!await row(db,'SELECT 1 ok FROM fabrics WHERE FABRIC_ID=? AND ACTIVE=1',newFabric))throw err('Select a valid active fabric.',400);
-  const t=now();
-  await db.prepare(`UPDATE raw_inward SET INWARD_DATE=?,SUPPLIER_ID=?,VENDOR_ROLL_NO=?,FABRIC_ID=?,INWARD_MTR=?,INVOICE_CHALLAN=?,LOT_REF=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE ROLL_ID=?`)
-    .bind(dateOnly(r.INWARD_DATE||old.INWARD_DATE),supplier,String(r.VENDOR_ROLL_NO??old.VENDOR_ROLL_NO),newFabric,newQty,String(r.INVOICE_CHALLAN??old.INVOICE_CHALLAN),String(r.LOT_REF??old.LOT_REF),String(r.NOTES??old.NOTES),a.userId,t,roll).run();
-  const after=await row(db,'SELECT * FROM raw_inward WHERE ROLL_ID=?',roll);
-  await audit(db,a,'EDIT_RAW','RAW',roll,JSON.stringify(old),JSON.stringify(after));return after
+  await acquireLock(db,'raw:'+roll,req);
+  try{
+    const t=now(),after={...old,INWARD_DATE:dateOnly(r.INWARD_DATE||old.INWARD_DATE),SUPPLIER_ID:supplier,VENDOR_ROLL_NO:String(r.VENDOR_ROLL_NO??old.VENDOR_ROLL_NO),FABRIC_ID:newFabric,INWARD_MTR:newQty,INVOICE_CHALLAN:String(r.INVOICE_CHALLAN??old.INVOICE_CHALLAN),LOT_REF:String(r.LOT_REF??old.LOT_REF),NOTES:String(r.NOTES??old.NOTES),UPDATED_BY:a.userId,UPDATED_AT:t};
+    await db.batch([
+      db.prepare(`UPDATE raw_inward SET INWARD_DATE=?,SUPPLIER_ID=?,VENDOR_ROLL_NO=?,FABRIC_ID=?,INWARD_MTR=?,INVOICE_CHALLAN=?,LOT_REF=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE ROLL_ID=?`)
+        .bind(after.INWARD_DATE,supplier,after.VENDOR_ROLL_NO,newFabric,newQty,after.INVOICE_CHALLAN,after.LOT_REF,after.NOTES,a.userId,t,roll),
+      auditStmt(db,a,'EDIT_RAW','RAW',roll,JSON.stringify(old),JSON.stringify(after))
+    ]);return after
+  }finally{await releaseLock(db,'raw:'+roll)}
 }
 async function cancelRaw(db,r,a){
   const roll=String(r.ROLL_ID||''),old=await row(db,'SELECT * FROM raw_inward WHERE ROLL_ID=?',roll);if(!old)throw err('Raw roll not found.',404);
   const issued=n((await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) q FROM dye_jobs WHERE ROLL_ID=?',roll))?.q);
   if(issued>0.0001)throw err('This roll has already been issued to dye. Cancel/reverse downstream dye issue first.',409);
   const t=now(),reason=String(r.REASON||'Mistaken entry');
-  await db.prepare("UPDATE raw_inward SET STATUS=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE ROLL_ID=?")
-    .bind('CANCELLED',String(old.NOTES||'')+(old.NOTES?' | ':'')+'Cancelled: '+reason,a.userId,t,roll).run();
-  await audit(db,a,'CANCEL_RAW','RAW',roll,JSON.stringify(old),JSON.stringify({cancelled:true,reason}));return{ROLL_ID:roll,cancelled:true}
+  await db.batch([
+    db.prepare("UPDATE raw_inward SET STATUS=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE ROLL_ID=?").bind('CANCELLED',String(old.NOTES||'')+(old.NOTES?' | ':'')+'Cancelled: '+reason,a.userId,t,roll),
+    auditStmt(db,a,'CANCEL_RAW','RAW',roll,JSON.stringify(old),JSON.stringify({cancelled:true,reason}))
+  ]);return{ROLL_ID:roll,cancelled:true}
 }
 async function cancelProduction(db,r,a){
   const id=String(r.PRODUCTION_BATCH_ID||''),old=await row(db,'SELECT * FROM production_batches WHERE PRODUCTION_BATCH_ID=?',id);if(!old)throw err('Production batch not found.',404);
@@ -952,16 +957,22 @@ async function cancelHandover(db,r,a){
     auditStmt(db,a,'CANCEL_HANDOVER','HANDOVER',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason}))
   ]);return{HANDOVER_ID:id,cancelled:true}
 }
-async function saveDyeSingle(db,r,a){
+async function saveDyeSingle(db,r,a,req=''){
   const roll=String(r.ROLL_ID||''),issue=n(r.ISSUE_MTR);requirePos(issue,'Issue meter');
   const rr=await row(db,"SELECT * FROM raw_inward WHERE ROLL_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",roll);if(!rr)throw err('Raw roll not found.',400);
   const bal=await rawBalance(db,roll);if(issue>bal+0.0001)throw err('Issue meter exceeds raw roll balance.',409);
-  const id=await nextId(db,'DB'),t=now();
-  await db.prepare('INSERT INTO dye_jobs(ROW_ID,DYE_BATCH_ID,ISSUE_DATE,DYE_VENDOR_ID,ROLL_ID,VENDOR_ROLL_NO,FABRIC_ID,COLOR_ID,ISSUE_MTR,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT,DYE_PLAN_ID) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-    .bind(uuid(),id,dateOnly(r.ISSUE_DATE),String(r.DYE_VENDOR_ID||''),roll,String(rr.VENDOR_ROLL_NO||''),String(rr.FABRIC_ID||''),String(r.COLOR_ID||''),issue,'AT DYE VENDOR',String(r.NOTES||''),a.userId,t,a.userId,t,'').run();
-  await audit(db,a,'CREATE','DYE',id,'',JSON.stringify(r));return{DYE_BATCH_ID:id}
+  await acquireLock(db,'raw:'+roll,req);
+  try{
+    const fresh=await rawBalance(db,roll);if(issue>fresh+0.0001)throw err('Raw roll balance changed. Refresh and retry.',409);
+    const id=await nextId(db,'DB'),t=now();
+    await db.batch([
+      db.prepare('INSERT INTO dye_jobs(ROW_ID,DYE_BATCH_ID,ISSUE_DATE,DYE_VENDOR_ID,ROLL_ID,VENDOR_ROLL_NO,FABRIC_ID,COLOR_ID,ISSUE_MTR,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT,DYE_PLAN_ID) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .bind(uuid(),id,dateOnly(r.ISSUE_DATE),String(r.DYE_VENDOR_ID||''),roll,String(rr.VENDOR_ROLL_NO||''),String(rr.FABRIC_ID||''),String(r.COLOR_ID||''),issue,'AT DYE VENDOR',String(r.NOTES||''),a.userId,t,a.userId,t,''),
+      auditStmt(db,a,'CREATE','DYE',id,'',JSON.stringify(r))
+    ]);return{DYE_BATCH_ID:id}
+  }finally{await releaseLock(db,'raw:'+roll)}
 }
-async function saveDyeBulk(db,r,a){
+async function saveDyeBulk(db,r,a,req=''){
   const vendor=String(r.DYE_VENDOR_ID||''),color=String(r.COLOR_ID||''),items=Array.isArray(r.items)?r.items:[],d=dateOnly(r.ISSUE_DATE),notes=String(r.NOTES||'');
   if(!await row(db,'SELECT 1 ok FROM vendors WHERE VENDOR_ID=? AND ACTIVE=1 AND DYE_VENDOR=1',vendor))throw err('Selected vendor is not an active Dye Vendor.',400);
   if(!await row(db,'SELECT 1 ok FROM colors WHERE COLOR_ID=? AND ACTIVE=1',color))throw err('Selected color is not active.',400);
@@ -970,15 +981,15 @@ async function saveDyeBulk(db,r,a){
   for(let i=0;i<items.length;i++){const x=items[i],roll=String(x.ROLL_ID||''),qty=n(x.ISSUE_MTR);if(!roll)throw err('Roll is required on line '+(i+1)+'.',400);if(seen.has(roll))throw err('Same roll cannot be selected twice in one dye batch.',409);seen.add(roll);requirePos(qty,'Issue meter on line '+(i+1));const rr=await row(db,"SELECT * FROM raw_inward WHERE ROLL_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",roll);if(!rr)throw err('Roll '+roll+' is not available.',409);const bal=await rawBalance(db,roll);if(qty>bal+0.0001)throw err('Issue meter exceeds available balance for roll '+(rr.VENDOR_ROLL_NO||roll)+'. Available: '+bal,409);fabrics.add(String(rr.FABRIC_ID||''));resolved.push({x,rr})}
   if(fabrics.size!==1)throw err('One dye batch can contain rolls of only one fabric type. Create separate dye batches for different fabrics.',409);
   const batch=await nextId(db,'DB'),fabric=[...fabrics][0],t=now(),stmts=resolved.map(({x,rr})=>db.prepare('INSERT INTO dye_jobs(ROW_ID,DYE_BATCH_ID,ISSUE_DATE,DYE_VENDOR_ID,ROLL_ID,VENDOR_ROLL_NO,FABRIC_ID,COLOR_ID,ISSUE_MTR,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT,DYE_PLAN_ID) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(uuid(),batch,d,vendor,String(x.ROLL_ID),String(rr.VENDOR_ROLL_NO||''),fabric,color,n(x.ISSUE_MTR),'AT DYE VENDOR',String(x.NOTES||notes),a.userId,t,a.userId,t,''));
-  await db.batch(stmts);const result={DYE_BATCH_ID:batch,ROLL_COUNT:stmts.length,TOTAL_MTR:items.reduce((s,x)=>s+n(x.ISSUE_MTR),0),FABRIC_ID:fabric};await audit(db,a,'CREATE_BULK','DYE',batch,'',JSON.stringify(result));return result
+  const result={DYE_BATCH_ID:batch,ROLL_COUNT:stmts.length,TOTAL_MTR:items.reduce((s,x)=>s+n(x.ISSUE_MTR),0),FABRIC_ID:fabric};stmts.push(auditStmt(db,a,'CREATE_BULK','DYE',batch,'',JSON.stringify(result)));await db.batch(stmts);return result
 }
 
-async function saveDyePlan(db,r,a){
+async function saveDyePlan(db,r,a,req=''){
   const fabric=String(r.FABRIC_ID||''),items=Array.isArray(r.items)?r.items:[],d=dateOnly(r.ISSUE_DATE),notes=String(r.NOTES||'');if(!fabric)throw err('Fabric is required.',400);const fr=await row(db,'SELECT * FROM fabrics WHERE FABRIC_ID=? AND ACTIVE=1',fabric);if(!fr)throw err('Selected fabric is not active.',400);if(!items.length)throw err('Add at least one dye color.',400);
   const seen=new Set();let need=0;for(let i=0;i<items.length;i++){const x=items[i],c=String(x.COLOR_ID||''),v=String(x.DYE_VENDOR_ID||'');if(!c)throw err('Color is required on line '+(i+1)+'.',400);if(seen.has(c))throw err('Same color cannot appear twice in one dye plan.',409);seen.add(c);if(!await row(db,'SELECT 1 ok FROM colors WHERE COLOR_ID=? AND ACTIVE=1',c))throw err('Color on line '+(i+1)+' is not active.',400);if(!await row(db,'SELECT 1 ok FROM vendors WHERE VENDOR_ID=? AND ACTIVE=1 AND DYE_VENDOR=1',v))throw err('Select a valid active Dye Vendor on line '+(i+1)+'.',400);requirePos(x.ISSUE_MTR,'Issue meter on line '+(i+1));need+=n(x.ISSUE_MTR)}
   const src=await rows(db,`SELECT r.*,MAX(0,r.INWARD_MTR-COALESCE(d.issued,0)) BALANCE_MTR FROM raw_inward r LEFT JOIN(SELECT ROLL_ID,SUM(ISSUE_MTR) issued FROM dye_jobs WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY ROLL_ID)d ON d.ROLL_ID=r.ROLL_ID WHERE r.FABRIC_ID=? AND COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%' AND r.INWARD_MTR-COALESCE(d.issued,0)>0.0001 ORDER BY r.INWARD_DATE,r.CREATED_AT,r.ROLL_ID`,fabric);const available=src.reduce((s,x)=>s+n(x.BALANCE_MTR),0);if(need>available+0.0001)throw err('Dye plan total '+need+' m exceeds available '+available+' m for '+await fabricName(db,fabric)+'.',409);
   const plan=await nextId(db,'DP'),t=now(),stmts=[],batches=[];let cursor=0;for(const item of items){const batch=await nextId(db,'DB'),qty=n(item.ISSUE_MTR),vendor=String(item.DYE_VENDOR_ID),color=String(item.COLOR_ID);let left=qty,lines=0;while(left>0.0001){while(cursor<src.length&&n(src[cursor].BALANCE_MTR)<=0.0001)cursor++;if(cursor>=src.length)throw err('Unexpected allocation shortage while creating dye plan.',500);const rr=src[cursor],take=Math.min(left,n(rr.BALANCE_MTR));stmts.push(db.prepare('INSERT INTO dye_jobs(ROW_ID,DYE_BATCH_ID,ISSUE_DATE,DYE_VENDOR_ID,ROLL_ID,VENDOR_ROLL_NO,FABRIC_ID,COLOR_ID,ISSUE_MTR,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT,DYE_PLAN_ID) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(uuid(),batch,d,vendor,rr.ROLL_ID,rr.VENDOR_ROLL_NO||'',fabric,color,take,'AT DYE VENDOR',String(item.NOTES||notes),a.userId,t,a.userId,t,plan));rr.BALANCE_MTR=n(rr.BALANCE_MTR)-take;left-=take;lines++}batches.push({DYE_BATCH_ID:batch,COLOR_ID:color,DYE_VENDOR_ID:vendor,ISSUE_MTR:qty,ROLL_LINES:lines})}
-  await db.batch(stmts);const result={DYE_PLAN_ID:plan,FABRIC_ID:fabric,TOTAL_MTR:need,BATCH_COUNT:batches.length,BATCHES:batches};await audit(db,a,'CREATE_DYE_PLAN','DYE',plan,'',JSON.stringify(result));return result
+  const result={DYE_PLAN_ID:plan,FABRIC_ID:fabric,TOTAL_MTR:need,BATCH_COUNT:batches.length,BATCHES:batches};stmts.push(auditStmt(db,a,'CREATE_DYE_PLAN','DYE',plan,'',JSON.stringify(result)));await db.batch(stmts);return result
 }
 async function saveDyeReceive(db,r,a){
   const batch=String(r.DYE_BATCH_ID||''),received=n(r.RECEIVED_MTR),defect=n(r.DEFECT_MTR),final=truth(r.FINAL_RECEIPT),s=await dyeBatchSummary(db,batch);if(!s)throw err('Invalid dye batch.',400);if(s.CLOSED)throw err('This dye batch is already closed.',409);requirePos(received,'Received meter');if(defect<0||defect>received)throw err('Defect meter must be between 0 and received meter.',409);
@@ -1433,12 +1444,12 @@ export async function saveRecordD1(env,p){
   const reservation=await reserveRequest(db,req,m);if(!reservation.owner)return reservation.result;
   try{
     let record;
-    if(m==='raw_bulk')record=await saveRawBulk(db,p.record||{},a);
-    else if(m==='raw_edit')record=await editRaw(db,p.record||{},a);
+    if(m==='raw_bulk')record=await saveRawBulk(db,p.record||{},a,req);
+    else if(m==='raw_edit')record=await editRaw(db,p.record||{},a,req);
     else if(m==='raw_cancel')record=await cancelRaw(db,p.record||{},a);
-    else if(m==='dye')record=await saveDyeSingle(db,p.record||{},a);
-    else if(m==='dye_bulk')record=await saveDyeBulk(db,p.record||{},a);
-    else if(m==='dye_plan')record=await saveDyePlan(db,p.record||{},a);
+    else if(m==='dye')record=await saveDyeSingle(db,p.record||{},a,req);
+    else if(m==='dye_bulk')record=await saveDyeBulk(db,p.record||{},a,req);
+    else if(m==='dye_plan')record=await saveDyePlan(db,p.record||{},a,req);
     else if(m==='dye_receive')record=await saveDyeReceive(db,p.record||{},a);
     else if(m==='dye_edit_batch')record=await editDyeBatch(db,p.record||{},a);
     else if(m==='dye_edit_receipt')record=await editDyeReceipt(db,p.record||{},a);
