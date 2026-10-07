@@ -364,3 +364,52 @@ button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justif
 }
 .data th:last-child .th-main{justify-content:center}
 .row-actions{flex-wrap:nowrap}
+
+/* v0.30 Advanced lightweight data grid */
+.grid-scroll{max-height:calc(100vh - 315px);min-height:120px;overflow:auto;overscroll-behavior:contain;position:relative}
+.grid-scroll .data thead th{position:sticky;top:0;z-index:14;background:#eef2f6;box-shadow:0 1px 0 #aeb8c5}
+.grid-scroll .data .action-sticky{position:sticky;right:0;z-index:10;background:#fff;box-shadow:-1px 0 0 #cbd2dc}
+.grid-scroll .data thead .action-sticky{z-index:18;background:#eef2f6}
+.grid-scroll .data tbody tr:nth-child(even) .action-sticky{background:#f9fbfc}
+.grid-scroll .data tbody tr:hover .action-sticky{background:#eef5fb}
+.grid-scroll .data tfoot td{position:sticky;bottom:0;z-index:8;background:#f2f5f8;border-top:2px solid #bfc7d2;font-size:10px;font-weight:850}
+.grid-scroll .data tfoot .action-sticky{z-index:12;background:#f2f5f8}
+.select-col{width:38px!important;min-width:38px!important;max-width:38px!important;text-align:center!important;position:sticky;left:0;z-index:8;background:inherit}
+.grid-scroll .data thead .select-col{z-index:19;background:#eef2f6}
+.grid-scroll .data tbody tr:nth-child(odd) .select-col{background:#fff}
+.grid-scroll .data tbody tr:nth-child(even) .select-col{background:#f9fbfc}
+.grid-scroll .data tbody tr:hover .select-col{background:#eef5fb}
+.select-col input{width:15px;height:15px;accent-color:#111827}
+.col-resizer{position:absolute;right:-3px;top:0;width:7px;height:100%;cursor:col-resize;z-index:20}
+.col-resizer:hover{background:rgba(50,80,120,.15)}
+.grid-tools-cluster{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+.grid-tool-select{height:42px;border:1.5px solid #cbd3dd;border-radius:10px;background:#fff;padding:0 9px;font-size:9px;font-weight:800;color:#475467}
+.view-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:60;width:250px;background:#fff;border:1.5px solid #cbd3dd;border-radius:11px;padding:9px;box-shadow:0 16px 34px rgba(15,23,42,.16)}
+.view-save-row{display:flex;gap:6px;padding-bottom:8px;border-bottom:1px solid #e5e9ef}
+.view-save-row input{min-width:0;flex:1;height:34px;border:1px solid #d3d9e2;border-radius:7px;padding:0 8px;font-size:9px}
+.view-save-row button{height:34px;border:0;border-radius:7px;background:#111827;color:#fff;padding:0 10px;font-size:9px;font-weight:850}
+.saved-view-list{max-height:230px;overflow:auto;padding-top:6px}
+.saved-view-list>div{display:flex;align-items:center;gap:5px}
+.saved-view-list .load-view{flex:1;text-align:left;border:0;background:transparent;border-radius:7px;padding:8px;font-size:9px;font-weight:750;color:#344054;cursor:pointer}
+.saved-view-list .load-view:hover{background:#f2f5f8}
+.saved-view-list .delete-view{width:28px;height:28px;border:0;border-radius:7px;background:#fff0f2;color:#b83245;cursor:pointer}
+.column-menu{min-width:270px;max-height:380px;overflow:auto}
+.column-config-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 4px;border-bottom:1px solid #edf0f4}
+.column-config-row label{flex:1;display:flex;align-items:center;gap:7px;font-size:9px;font-weight:750}
+.column-config-row span{display:flex;gap:3px}
+.column-config-row button{width:26px;height:26px;border:1px solid #d6dce5;border-radius:6px;background:#fff;font-size:10px;cursor:pointer}
+.column-config-row button:disabled{opacity:.3}
+.density-compact .data th{padding:8px 9px;font-size:9px}
+.density-compact .data td{padding:7px 9px;font-size:10px}
+.density-comfortable .data th{padding:12px}
+.density-comfortable .data td{padding:11px 12px}
+.clear-selection{border:1px solid #d4dae3;background:#fff;border-radius:7px;padding:6px 8px;font-size:8px;font-weight:800;color:#596579;cursor:pointer}
+.smart-empty{display:grid;justify-items:center;gap:4px;padding:24px 14px;color:#7a8597}
+.smart-empty b{font-size:11px;color:#475467}.smart-empty span{font-size:9px}
+@media(max-width:760px){
+  .grid-scroll{max-height:calc(100vh - 260px)}
+  .smart-grid-toolbar{display:grid;grid-template-columns:1fr}
+  .grid-tools-cluster{justify-content:flex-start}
+  .grid-tool-select{max-width:145px}
+  .view-menu{left:0;right:auto}
+}
