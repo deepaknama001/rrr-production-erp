@@ -1432,15 +1432,55 @@ async function renderReports(force=false){
   }
   tabs.forEach(b=>b.onclick=()=>show(b.dataset.rpt));await show('summary')
 }
+
 async function renderUsers(force=false){
-  $('#stage').innerHTML='<section class="panel"><div class="panel-head"><div><h3>User Management</h3><small>Cloudflare D1 user database</small></div><button class="btn teal" onclick="window.ERP.newUser()">+ Add User</button></div><div id="usersGrid">Loading…</div></section><section class="panel" style="margin-top:16px"><div class="panel-head"><h3>Database</h3></div><div class="smart-note"><b>Cloudflare D1 is the live primary database.</b> Google Sheets is no longer part of normal ERP reads/writes.</div></section>';
+  $('#stage').innerHTML='<section class="panel"><div class="panel-head"><div><h3>User Management</h3><small>Module + action-level permissions</small></div><button class="btn teal" id="addUserBtn">+ Add User</button></div><div id="usersGrid"><div class="skeleton-grid"></div></div></section>';
+  $('#addUserBtn').onclick=()=>openUserForm(null);
   try{
     let d;if(!force){const cc=readCache('users');d=cc&&cc.data}
     if(!d){d=await api('/api/users');writeCache('users',d)}
-    await mountDataGrid($('#usersGrid'),{key:'users',title:'Users',items:d.items||[],columns:['userId','name','role','admin','active'],filters:['role','admin','active']});
+    const items=d.items||[];
+    await mountDataGrid($('#usersGrid'),{
+      key:'users',title:'Users',items,columns:['userId','name','role','admin','active','__ACTION'],filters:['role','admin','active'],
+      actionRenderer:r=>'<button class="btn ghost user-manage" data-idx="'+r.__gridIndex+'">Manage</button>',
+      bindActions:(rows,host)=>host.querySelectorAll('.user-manage').forEach(b=>b.onclick=()=>openUserForm(items[Number(b.dataset.idx)]))
+    });
   }catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}
 }
-function newUser(){const requestId=newRequestId(),f=['userId','name','pin','role'];$('#modalBody').innerHTML=`<div class="panel-head"><h3>Add User</h3><button id="closeModal" class="btn ghost">Close</button></div><form id="uForm"><div class="form-grid">${f.map(x=>`<div class="field"><label>${x.toUpperCase()}</label><input name="${x}" ${x==='pin'?'type="password"':''}></div>`).join('')}<div class="field"><label><input type="checkbox" name="admin"> Admin</label></div>${['raw','dye','production','stitching','qc','reports'].map(p=>`<div class="field"><label><input type="checkbox" name="perm_${p}"> ${p.toUpperCase()}</label></div>`).join('')}</div><div class="form-actions"><button class="btn primary">Save User</button></div></form>`;$('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;$('#uForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.target),b={};for(const[k,v]of fd.entries())b[k]=v==='on'?true:v;['admin','perm_raw','perm_dye','perm_production','perm_stitching','perm_qc','perm_reports'].forEach(k=>b[k]=!!b[k]);b.active=true;try{await api('/api/users',{method:'POST',activity:'Saving user…',success:'User saved',body:JSON.stringify({...b,requestId})});dropCaches();closeModal();renderUsers(true)}catch(err){toast(err.message,'bad',3500)}}}
+function openUserForm(row){
+  const editing=!!row,mods=['raw','dye','production','stitching','qc','reports'],acts=['view','create','edit','cancel','export','audit'];
+  const basePerm=m=>editing?!!row.permissions?.[m]:true;
+  const actionVal=(m,a)=>editing?(row.actions?.[m]?.[a]!==false):true;
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>${editing?'Manage User':'Add User'}</h3><small>${editing?esc(row.userId):'Create login and permissions'}</small></div><button id="closeModal" class="btn ghost">Close</button></div>
+    <form id="uForm">
+      <div class="form-grid">
+        <div class="field"><label>Employee ID</label><input name="userId" value="${esc(row?.userId||'')}" ${editing?'readonly':''} required></div>
+        <div class="field"><label>Name</label><input name="name" value="${esc(row?.name||'')}" required></div>
+        <div class="field"><label>${editing?'Reset PIN (leave blank to keep current)':'PIN'}</label><input name="pin" type="password" inputmode="numeric" ${editing?'':'required'}></div>
+        <div class="field"><label>Role</label><select name="role"><option value="EMPLOYEE" ${row?.role==='EMPLOYEE'?'selected':''}>Employee</option><option value="MANAGER" ${row?.role==='MANAGER'?'selected':''}>Manager</option><option value="ADMIN" ${row?.role==='ADMIN'?'selected':''}>Admin</option></select></div>
+        <div class="field"><label><input type="checkbox" name="admin" ${row?.admin?'checked':''}> Administrator</label></div>
+        <div class="field"><label><input type="checkbox" name="active" ${!editing||row?.active?'checked':''}> Active Login</label></div>
+      </div>
+      <div class="subsection"><h4>Module & Action Permissions</h4>
+        <div class="permission-matrix"><table><thead><tr><th>Module</th><th>Access</th>${acts.map(a=>'<th>'+gridLabel(a)+'</th>').join('')}</tr></thead><tbody>
+        ${mods.map(m=>'<tr><td><b>'+gridLabel(m)+'</b></td><td><input type="checkbox" data-base="'+m+'" '+(basePerm(m)?'checked':'')+'></td>'+acts.map(a=>'<td><input type="checkbox" data-act="'+m+':'+a+'" '+(actionVal(m,a)?'checked':'')+'></td>').join('')+'</tr>').join('')}
+        </tbody></table></div>
+        <small class="helper">Access off hone par us module ke saare actions automatically unavailable rahenge.</small>
+      </div>
+      <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary">Save User</button></div>
+    </form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  const form=$('#uForm');
+  form.querySelectorAll('[data-base]').forEach(cb=>cb.onchange=()=>{const m=cb.dataset.base;form.querySelectorAll('[data-act^="'+m+':"]').forEach(x=>{x.disabled=!cb.checked;if(!cb.checked)x.checked=false})});
+  form.querySelectorAll('[data-base]').forEach(cb=>cb.dispatchEvent(new Event('change')));
+  form.onsubmit=async e=>{
+    e.preventDefault();const fd=new FormData(form),b={userId:fd.get('userId'),name:fd.get('name'),pin:fd.get('pin'),role:fd.get('role'),admin:fd.has('admin'),active:fd.has('active'),actions:{}};
+    for(const m of mods){b['perm_'+m]=!!form.querySelector('[data-base="'+m+'"]')?.checked;b.actions[m]={};for(const a of acts)b.actions[m][a]=!!form.querySelector('[data-act="'+m+':'+a+'"]')?.checked}
+    try{await api('/api/users',{method:'POST',activity:'Saving user…',success:'User saved',body:JSON.stringify(b)});dropCaches();closeModal();renderUsers(true)}catch(err){toast(err.message,'bad',4200)}
+  }
+}
+function newUser(){openUserForm(null)}
 $('#loginForm').onsubmit=async e=>{e.preventDefault();$('#loginError').textContent='';try{const d=await api('/api/login',{method:'POST',activity:'Logging in…',success:'Login successful',body:JSON.stringify({userId:$('#userId').value,pin:$('#pin').value})});state.token=d.token;state.user=d.user;localStorage.setItem('rrr_prod_token',d.token);localStorage.setItem('rrr_prod_user',JSON.stringify(d.user));dropCaches();if(d.kpis)writeCache('dashboard',{user:d.user,kpis:d.kpis});showApp()}catch(err){$('#loginError').textContent=err.message}}
 $('#logoutBtn').onclick=()=>{localStorage.removeItem('rrr_prod_token');localStorage.removeItem('rrr_prod_user');sessionStorage.clear();location.reload()};async function refreshCurrent(){if(state.refreshing)return;state.refreshing=true;const b=$('#refreshBtn');b?.classList.add('spinning');setStatus('↻ Refreshing…','busy');try{dropCaches();await go(state.current,true);setStatus('● Updated just now','ok')}catch(e){setStatus('● Refresh failed','bad');if(e.status===401){localStorage.removeItem('rrr_prod_token');localStorage.removeItem('rrr_prod_user');location.reload()}else toast(e.message,'bad',3500)}finally{state.refreshing=false;b?.classList.remove('spinning')}}
 $('#refreshBtn')?.addEventListener('click',refreshCurrent);
