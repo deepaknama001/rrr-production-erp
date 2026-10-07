@@ -44,6 +44,18 @@ function intQty(v,label='Quantity',allowZero=true){
   return x
 }
 const LEGACY_SIZE_COL={M:'M',L:'L',XL:'XL','2XL':'2XL','3XL':'3XL',OTHER:'OTHER'};
+const STATUS_RULES={
+  production:{'PLANNED':['CUT COMPLETE','CANCELLED'],'CUT COMPLETE':['CANCELLED']},
+  stitching:{'PENDING FROM VENDOR':['PARTIAL RECEIVED','RECEIVED COMPLETE','CANCELLED'],'PARTIAL RECEIVED':['PARTIAL RECEIVED','RECEIVED COMPLETE','CANCELLED'],'RECEIVED COMPLETE':['CANCELLED']},
+  qc:{'QC COMPLETE':['REWORK PARTIAL','REWORK CLOSED','CANCELLED'],'REWORK PARTIAL':['REWORK PARTIAL','REWORK CLOSED','CANCELLED'],'REWORK CLOSED':['CANCELLED']},
+  handover:{'PARTIAL':['PARTIAL','RECEIVED','CANCELLED'],'RECEIVED':['CANCELLED']},
+  rework:{'AT REWORK':['PARTIAL REWORK RETURN','REWORK CLOSED','CANCELLED'],'PARTIAL REWORK RETURN':['PARTIAL REWORK RETURN','REWORK CLOSED']}
+};
+function assertTransition(domain,from,to){
+  const f=String(from||''),t=String(to||'');if(!f||f===t||t==='CANCELLED')return true;
+  const allowed=STATUS_RULES[domain]?.[f];if(allowed&&!allowed.includes(t))throw err('Invalid '+domain+' status transition: '+f+' → '+t,409);return true
+}
+
 async function actionPerms(db,userId){
   const rs=await rows(db,'SELECT * FROM user_action_permissions WHERE USER_ID=?',String(userId||'').toUpperCase()),o={};
   for(const r of rs)o[String(r.MODULE||'')]={
@@ -831,7 +843,7 @@ async function traceRecord(db,type,id){
   }
 }
 export async function getDataD1(env,{module,actorUserId,id='',type='',limit=100,offset=0}){
-  await ensureSchema(env);const db=env.DB,m=String(module||'dashboard'),trailPerm=m==='trail'?({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[String(type||'').toLowerCase()]||null):null,perm=trailPerm||({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc',reports:'reports'}[m]||null),a=await actor(db,actorUserId,perm,false);
+  await ensureSchema(env);const db=env.DB,m=String(module||'dashboard'),trailPerm=m==='trail'?({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[String(type||'').toLowerCase()]||null):null,perm=trailPerm||({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc',reports:'reports'}[m]||null),a=await actor(db,actorUserId,perm,false);if(perm&&m!=='trail')await requireAction(db,a,perm,'view');
   if(m==='dashboard'){a.actions=await actionPerms(db,a.userId);const analytics=await operationsAnalytics(db);return{user:a,kpis:await kpisD1(db),alerts:{exceptionCount:analytics.exceptionCount,rates:analytics.rates,exceptions:analytics.exceptions.slice(0,8)}}};if(m==='trail'){await requireAction(db,a,trailPerm,'view');return{trail:await traceRecord(db,type,id)}};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='production_detail')return{detail:await getProductionDetail(db,String(id||''))};if(m==='stitching_detail')return{detail:await getStitchingDetail(db,String(id||''))};if(m==='qc_detail')return{detail:await getQcDetail(db,String(id||''))};if(m==='handover_detail')return{detail:await getHandoverDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db),analytics:await operationsAnalytics(db)};if(m==='audit'){await requireAction(db,a,'reports','audit');const lim=Math.min(250,Math.max(10,Number(limit)||100)),off=Math.max(0,Number(offset)||0),total=n((await row(db,'SELECT COUNT(*) c FROM audit_log'))?.c);return{items:await rows(db,'SELECT AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON,DEVICE_INFO,IP_HASH FROM audit_log ORDER BY TIMESTAMP DESC LIMIT ? OFFSET ?',lim,off),total,limit:lim,offset:off}};if(m==='errors'){await requireAction(db,a,'reports','audit');const lim=Math.min(250,Math.max(10,Number(limit)||100)),off=Math.max(0,Number(offset)||0),total=n((await row(db,'SELECT COUNT(*) c FROM app_errors'))?.c);return{items:await rows(db,'SELECT ERROR_ID,TIMESTAMP,USER_ID,MODULE,MESSAGE,CONTEXT_JSON FROM app_errors ORDER BY TIMESTAMP DESC LIMIT ? OFFSET ?',lim,off),total,limit:lim,offset:off}};if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
 }
 
@@ -1266,8 +1278,9 @@ async function refreshStitchingHeader(db,challan,a){
   const st=await row(db,'SELECT * FROM stitching_jobs WHERE CHALLAN_ID=?',challan);if(!st)return;
   const received=await receivedLinesForChallan(db,challan),total=received.reduce((s,x)=>s+x.QTY,0),issued=(await issueLinesForChallan(db,challan)).reduce((s,x)=>s+x.QTY,0),pending=Math.max(0,issued-total),legacy={M:0,L:0,XL:0,'2XL':0,'3XL':0,OTHER:0};
   for(const x of received){const nm=legacySizeName(x.SIZE_NAME||x.SIZE_ID);if(nm)legacy[nm]+=x.QTY}
+  const nextStatus=pending>0?'PARTIAL RECEIVED':'RECEIVED COMPLETE';assertTransition('stitching',st.STATUS,nextStatus);
   await db.prepare('UPDATE stitching_jobs SET M_RECEIVED=?,L_RECEIVED=?,XL_RECEIVED=?,"2XL_RECEIVED"=?,"3XL_RECEIVED"=?,OTHER_RECEIVED=?,TOTAL_RECEIVED=?,PENDING_QTY=?,STATUS=?,UPDATED_BY=?,UPDATED_AT=? WHERE CHALLAN_ID=?')
-    .bind(legacy.M,legacy.L,legacy.XL,legacy['2XL'],legacy['3XL'],legacy.OTHER,total,pending,pending>0?'PARTIAL RECEIVED':'RECEIVED COMPLETE',a.userId,now(),challan).run()
+    .bind(legacy.M,legacy.L,legacy.XL,legacy['2XL'],legacy['3XL'],legacy.OTHER,total,pending,nextStatus,a.userId,now(),challan).run()
 }
 async function saveStitchingReceipt(db,r,a,req=''){
   const challan=String(r.CHALLAN_ID||''),st=await row(db,"SELECT * FROM stitching_jobs WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",challan);if(!st)throw err('Invalid stitching challan.',400);
@@ -1330,7 +1343,7 @@ async function saveReworkReceive(db,r,a,req=''){
   await acquireLock(db,'qc:'+rw.QC_ID,req);
   try{
     const q=await row(db,'SELECT * FROM qc_events WHERE QC_ID=?',rw.QC_ID);if(!q)throw err('Source QC not found.',409);
-    const newReturned=intQty(rw.RETURNED_QTY,'Returned quantity')+ret,newPass=intQty(rw.PASS_QTY,'Pass quantity')+pass,newReject=intQty(rw.REJECT_QTY,'Reject quantity')+reject,status=newReturned>=intQty(rw.ISSUE_QTY,'Issue quantity')?'REWORK CLOSED':'PARTIAL REWORK RETURN',t=now();
+    const newReturned=intQty(rw.RETURNED_QTY,'Returned quantity')+ret,newPass=intQty(rw.PASS_QTY,'Pass quantity')+pass,newReject=intQty(rw.REJECT_QTY,'Reject quantity')+reject,status=newReturned>=intQty(rw.ISSUE_QTY,'Issue quantity')?'REWORK CLOSED':'PARTIAL REWORK RETURN',t=now();assertTransition('rework',rw.STATUS,status);
     await db.batch([
       db.prepare('UPDATE rework_jobs SET RETURNED_QTY=?,PASS_QTY=?,REJECT_QTY=?,STATUS=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE REWORK_ID=?').bind(newReturned,newPass,newReject,status,String(r.NOTES??rw.NOTES??''),a.userId,t,id),
       db.prepare('UPDATE qc_events SET REWORK_RETURNED_QTY=COALESCE(REWORK_RETURNED_QTY,0)+?,FINAL_ACCEPTED_QTY=COALESCE(FINAL_ACCEPTED_QTY,0)+?,STATUS=?,UPDATED_BY=?,UPDATED_AT=? WHERE QC_ID=?').bind(ret,pass,status==='REWORK CLOSED'?'QC COMPLETE':'REWORK PARTIAL',a.userId,t,rw.QC_ID),
