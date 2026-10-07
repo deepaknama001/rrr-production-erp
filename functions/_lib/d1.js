@@ -288,7 +288,7 @@ async function dyeBatchSummary(db,batch){
   if(!r?.DYE_BATCH_ID)return null;const variance=truth(r.CLOSED)?n(r.RECEIVED_MTR)-n(r.ISSUE_MTR):0;return{...r,VARIANCE_MTR:variance,PENDING_MTR:truth(r.CLOSED)?0:Math.max(0,n(r.ISSUE_MTR)-n(r.RECEIVED_MTR)),CLOSED:truth(r.CLOSED),STATUS:truth(r.CLOSED)?(variance>0.0001?'RECEIVED EXCESS':variance<-0.0001?'RECEIVED SHORT':'RECEIVED EXACT'):(n(r.RECEIVED_MTR)>0?'PARTIAL RECEIVED':'AT DYE VENDOR')}
 }
 async function dyePlanSummary(db,plan){
-  const bs=await rows(db,'SELECT DISTINCT DYE_BATCH_ID FROM dye_jobs WHERE DYE_PLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'',plan),sums=[];for(const b of bs){const s=await dyeBatchSummary(db,b.DYE_BATCH_ID);if(s)sums.push(s)}
+  const bs=await rows(db,'SELECT DISTINCT DYE_BATCH_ID FROM dye_jobs WHERE DYE_PLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",plan),sums=[];for(const b of bs){const s=await dyeBatchSummary(db,b.DYE_BATCH_ID);if(s)sums.push(s)}
   const issued=sums.reduce((s,x)=>s+n(x.ISSUE_MTR),0),received=sums.reduce((s,x)=>s+n(x.RECEIVED_MTR),0),usable=sums.reduce((s,x)=>s+n(x.USABLE_MTR),0),defect=sums.reduce((s,x)=>s+n(x.DEFECT_MTR),0),closed=sums.filter(x=>x.CLOSED).length;
   return{DYE_PLAN_ID:plan,ISSUE_MTR:issued,RECEIVED_MTR:received,USABLE_MTR:usable,DEFECT_MTR:defect,VARIANCE_MTR:received-issued,BATCH_COUNT:sums.length,CLOSED_BATCHES:closed,ALL_CLOSED:!!sums.length&&closed===sums.length}
 }
@@ -880,7 +880,7 @@ async function saveDyeReceive(db,r,a){
 }
 
 async function dyeDownstreamCount(db,batch){
-  const r=await row(db,'SELECT COUNT(*) c FROM production_batches WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'',batch);
+  const r=await row(db,"SELECT COUNT(*) c FROM production_batches WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",batch);
   return n(r?.c);
 }
 async function getDyeBatchDetail(db,batch){
@@ -923,7 +923,7 @@ async function editDyeBatch(db,r,a){
     requirePos(qty,'Issue meter on line '+(i+1));
     const rr=await row(db,'SELECT * FROM raw_inward WHERE ROLL_ID=?',roll);if(!rr)throw err('Raw roll '+roll+' not found.',404);
     if(String(rr.FABRIC_ID)!==String(old.FABRIC_ID))throw err('All rolls must be of the same original batch fabric.',409);
-    const other=await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) q FROM dye_jobs WHERE ROLL_ID=? AND DYE_BATCH_ID<>? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'',roll,batch);
+    const other=await row(db,"SELECT COALESCE(SUM(ISSUE_MTR),0) q FROM dye_jobs WHERE ROLL_ID=? AND DYE_BATCH_ID<>? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",roll,batch);
     const max=n(rr.INWARD_MTR)-n(other?.q);
     if(qty>max+0.0001)throw err('Issue exceeds available meter for roll '+(rr.VENDOR_ROLL_NO||roll)+'. Available: '+max,409);
     resolved.push({rr,qty});
@@ -947,8 +947,8 @@ async function editDyeReceipt(db,r,a){
   const received=n(r.RECEIVED_MTR),defect=n(r.DEFECT_MTR),final=truth(r.FINAL_RECEIPT);
   requirePos(received,'Received meter');if(defect<0||defect>received)throw err('Defect meter must be between 0 and received meter.',409);
   const usable=received-defect,t=now();
-  const other=await row(db,'SELECT COALESCE(SUM(RECEIVED_MTR),0) received FROM dye_receipts WHERE DYE_BATCH_ID=? AND RECEIPT_ID<>? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'',receipt.DYE_BATCH_ID,receiptId);
-  const issued=await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) issued FROM dye_jobs WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'',receipt.DYE_BATCH_ID);
+  const other=await row(db,"SELECT COALESCE(SUM(RECEIVED_MTR),0) received FROM dye_receipts WHERE DYE_BATCH_ID=? AND RECEIPT_ID<>? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",receipt.DYE_BATCH_ID,receiptId);
+  const issued=await row(db,"SELECT COALESCE(SUM(ISSUE_MTR),0) issued FROM dye_jobs WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",receipt.DYE_BATCH_ID);
   const cumulative=n(other?.received)+received,variance=final?cumulative-n(issued?.issued):0;
   const status=final?(variance>0.0001?'CLOSED EXCESS':variance<-0.0001?'CLOSED SHORT':'CLOSED EXACT'):'PARTIAL';
   await db.prepare(`UPDATE dye_receipts SET RECEIPT_DATE=?,RECEIVED_MTR=?,DEFECT_MTR=?,USABLE_MTR=?,VARIANCE_MTR=?,FINAL_RECEIPT=?,STATUS=?,DEFECT_REASON=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE RECEIPT_ID=?`)
