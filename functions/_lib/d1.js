@@ -375,6 +375,8 @@ async function viewDye(db){
     )
     SELECT x.*,
            (PLAN_RECEIVED_MTR-PLAN_ISSUE_MTR) PLAN_VARIANCE_MTR,
+           e.EXPECTED_DATE,
+           CASE WHEN e.EXPECTED_DATE<>'' AND CLOSED=0 AND date(e.EXPECTED_DATE)<date('now') THEN CAST(julianday('now')-julianday(e.EXPECTED_DATE) AS INTEGER) ELSE 0 END OVERDUE_DAYS,
            COALESCE(v.VENDOR_NAME,x.DYE_VENDOR_ID) DYE_VENDOR,
            COALESCE(f.FABRIC_NAME,x.FABRIC_ID) FABRIC,
            COALESCE(c.COLOR_NAME,x.COLOR_ID) COLOR,
@@ -389,6 +391,7 @@ async function viewDye(db){
     LEFT JOIN vendors v ON v.VENDOR_ID=x.DYE_VENDOR_ID
     LEFT JOIN fabrics f ON f.FABRIC_ID=x.FABRIC_ID
     LEFT JOIN colors c ON c.COLOR_ID=x.COLOR_ID
+    LEFT JOIN record_expectations e ON e.MODULE='DYE' AND e.RECORD_ID=x.DYE_BATCH_ID
     ORDER BY ISSUE_DATE DESC,DYE_BATCH_ID DESC
   `)
 }
@@ -428,6 +431,8 @@ async function viewStitch(db){
     )
     SELECT s.*,COALESCE(v.VENDOR_NAME,s.STITCHING_VENDOR_ID) STITCHING_VENDOR,
       COALESCE(st.STYLE_NAME,s.STYLE_ID) STYLE,COALESCE(c.COLOR_NAME,s.COLOR_ID) COLOR,
+      e.EXPECTED_DATE,
+      CASE WHEN e.EXPECTED_DATE<>'' AND MAX(0,(CASE WHEN il.CHALLAN_ID IS NOT NULL THEN il.ISSUE_QTY ELSE s.TOTAL_ISSUED END)-(CASE WHEN rl.CHALLAN_ID IS NOT NULL THEN rl.RECEIVED_QTY ELSE s.TOTAL_RECEIVED END))>0 AND date(e.EXPECTED_DATE)<date('now') THEN CAST(julianday('now')-julianday(e.EXPECTED_DATE) AS INTEGER) ELSE 0 END OVERDUE_DAYS,
       CASE WHEN il.CHALLAN_ID IS NOT NULL THEN il.ISSUE_QTY ELSE s.TOTAL_ISSUED END ACTUAL_ISSUED,
       CASE WHEN rl.CHALLAN_ID IS NOT NULL THEN rl.RECEIVED_QTY ELSE s.TOTAL_RECEIVED END ACTUAL_RECEIVED,
       MAX(0,(CASE WHEN il.CHALLAN_ID IS NOT NULL THEN il.ISSUE_QTY ELSE s.TOTAL_ISSUED END)-
@@ -439,6 +444,7 @@ async function viewStitch(db){
     LEFT JOIN colors c ON c.COLOR_ID=s.COLOR_ID
     LEFT JOIN il ON il.CHALLAN_ID=s.CHALLAN_ID
     LEFT JOIN rl ON rl.CHALLAN_ID=s.CHALLAN_ID
+    LEFT JOIN record_expectations e ON e.MODULE='STITCHING' AND e.RECORD_ID=s.CHALLAN_ID
     WHERE COALESCE(s.STATUS,'') NOT LIKE 'CANCELLED%'
     ORDER BY s.CREATED_AT DESC`)
 }
@@ -564,22 +570,28 @@ async function operationsAnalytics(db){
   const exceptions=[];
   for(const x of await rows(db,`
     SELECT 'DYE' TYPE,j.DYE_BATCH_ID RECORD_ID,COALESCE(v.VENDOR_NAME,j.DYE_VENDOR_ID) OWNER,
-      CAST(julianday('now')-julianday(MAX(j.ISSUE_DATE)) AS INTEGER) AGE_DAYS,
+      CAST(julianday('now')-julianday(MAX(j.ISSUE_DATE)) AS INTEGER) AGE_DAYS,e.EXPECTED_DATE,
+      CASE WHEN e.EXPECTED_DATE<>'' AND date(e.EXPECTED_DATE)<date('now') THEN CAST(julianday('now')-julianday(e.EXPECTED_DATE) AS INTEGER) ELSE 0 END OVERDUE_DAYS,
       MAX(0,SUM(j.ISSUE_MTR)-COALESCE((SELECT SUM(r.RECEIVED_MTR) FROM dye_receipts r WHERE r.DYE_BATCH_ID=j.DYE_BATCH_ID AND COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%'),0)) PENDING,
-      'Dye batch pending' MESSAGE
-    FROM dye_jobs j LEFT JOIN vendors v ON v.VENDOR_ID=j.DYE_VENDOR_ID
-    WHERE COALESCE(j.STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY j.DYE_BATCH_ID
-    HAVING PENDING>0 AND AGE_DAYS>=3 ORDER BY AGE_DAYS DESC LIMIT 50`))exceptions.push(x);
+      CASE WHEN e.EXPECTED_DATE<>'' AND date(e.EXPECTED_DATE)<date('now') THEN 'Dye return overdue' ELSE 'Dye batch pending' END MESSAGE
+    FROM dye_jobs j LEFT JOIN vendors v ON v.VENDOR_ID=j.DYE_VENDOR_ID LEFT JOIN record_expectations e ON e.MODULE='DYE' AND e.RECORD_ID=j.DYE_BATCH_ID
+    WHERE COALESCE(j.STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY j.DYE_BATCH_ID,e.EXPECTED_DATE
+    HAVING PENDING>0 AND (OVERDUE_DAYS>0 OR (COALESCE(e.EXPECTED_DATE,'')='' AND AGE_DAYS>=3)) ORDER BY OVERDUE_DAYS DESC,AGE_DAYS DESC LIMIT 50`))exceptions.push(x);
   for(const x of await rows(db,`
     SELECT 'STITCHING' TYPE,s.CHALLAN_ID RECORD_ID,COALESCE(v.VENDOR_NAME,s.STITCHING_VENDOR_ID) OWNER,
-      CAST(julianday('now')-julianday(s.ISSUE_DATE) AS INTEGER) AGE_DAYS,s.PENDING_QTY PENDING,'Stitching return pending' MESSAGE
-    FROM stitching_jobs s LEFT JOIN vendors v ON v.VENDOR_ID=s.STITCHING_VENDOR_ID
-    WHERE COALESCE(s.STATUS,'') NOT LIKE 'CANCELLED%' AND s.PENDING_QTY>0 AND CAST(julianday('now')-julianday(s.ISSUE_DATE) AS INTEGER)>=3
-    ORDER BY AGE_DAYS DESC LIMIT 50`))exceptions.push(x);
+      CAST(julianday('now')-julianday(s.ISSUE_DATE) AS INTEGER) AGE_DAYS,e.EXPECTED_DATE,
+      CASE WHEN e.EXPECTED_DATE<>'' AND date(e.EXPECTED_DATE)<date('now') THEN CAST(julianday('now')-julianday(e.EXPECTED_DATE) AS INTEGER) ELSE 0 END OVERDUE_DAYS,
+      s.PENDING_QTY PENDING,CASE WHEN e.EXPECTED_DATE<>'' AND date(e.EXPECTED_DATE)<date('now') THEN 'Stitching return overdue' ELSE 'Stitching return pending' END MESSAGE
+    FROM stitching_jobs s LEFT JOIN vendors v ON v.VENDOR_ID=s.STITCHING_VENDOR_ID LEFT JOIN record_expectations e ON e.MODULE='STITCHING' AND e.RECORD_ID=s.CHALLAN_ID
+    WHERE COALESCE(s.STATUS,'') NOT LIKE 'CANCELLED%' AND s.PENDING_QTY>0 AND (CASE WHEN e.EXPECTED_DATE<>'' THEN date(e.EXPECTED_DATE)<date('now') ELSE CAST(julianday('now')-julianday(s.ISSUE_DATE) AS INTEGER)>=3 END)
+    ORDER BY OVERDUE_DAYS DESC,AGE_DAYS DESC LIMIT 50`))exceptions.push(x);
   for(const x of await rows(db,`
-    SELECT 'REWORK' TYPE,REWORK_ID RECORD_ID,VENDOR_ID OWNER,CAST(julianday('now')-julianday(ISSUE_DATE) AS INTEGER) AGE_DAYS,
-      MAX(0,ISSUE_QTY-RETURNED_QTY) PENDING,'Rework pending' MESSAGE FROM rework_jobs
-    WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' AND ISSUE_QTY>RETURNED_QTY ORDER BY AGE_DAYS DESC LIMIT 50`))exceptions.push(x);
+    SELECT 'REWORK' TYPE,r.REWORK_ID RECORD_ID,COALESCE(v.VENDOR_NAME,r.VENDOR_ID) OWNER,CAST(julianday('now')-julianday(r.ISSUE_DATE) AS INTEGER) AGE_DAYS,e.EXPECTED_DATE,
+      CASE WHEN e.EXPECTED_DATE<>'' AND date(e.EXPECTED_DATE)<date('now') THEN CAST(julianday('now')-julianday(e.EXPECTED_DATE) AS INTEGER) ELSE 0 END OVERDUE_DAYS,
+      MAX(0,r.ISSUE_QTY-r.RETURNED_QTY) PENDING,CASE WHEN e.EXPECTED_DATE<>'' AND date(e.EXPECTED_DATE)<date('now') THEN 'Rework return overdue' ELSE 'Rework pending' END MESSAGE
+    FROM rework_jobs r LEFT JOIN vendors v ON v.VENDOR_ID=r.VENDOR_ID LEFT JOIN record_expectations e ON e.MODULE='REWORK' AND e.RECORD_ID=r.REWORK_ID
+    WHERE COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%' AND r.ISSUE_QTY>r.RETURNED_QTY AND (CASE WHEN e.EXPECTED_DATE<>'' THEN date(e.EXPECTED_DATE)<date('now') ELSE CAST(julianday('now')-julianday(r.ISSUE_DATE) AS INTEGER)>=3 END)
+    ORDER BY OVERDUE_DAYS DESC,AGE_DAYS DESC LIMIT 50`))exceptions.push(x);
   return{
     dyeVendors,stitchVendors,quality,dyeQuality,
     exceptionCount:exceptions.length,
@@ -1042,7 +1054,7 @@ async function saveDyePlan(db,r,a,req=''){
   await acquireLock(db,'fabric:'+fabric,req);
   try{
     const src=await rows(db,`SELECT r.*,MAX(0,r.INWARD_MTR-COALESCE(d.issued,0)) BALANCE_MTR FROM raw_inward r LEFT JOIN(SELECT ROLL_ID,SUM(ISSUE_MTR) issued FROM dye_jobs WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY ROLL_ID)d ON d.ROLL_ID=r.ROLL_ID WHERE r.FABRIC_ID=? AND COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%' AND r.INWARD_MTR-COALESCE(d.issued,0)>0.0001 ORDER BY r.INWARD_DATE,r.CREATED_AT,r.ROLL_ID`,fabric);const available=src.reduce((s,x)=>s+n(x.BALANCE_MTR),0);if(need>available+0.0001)throw err('Dye plan total '+need+' m exceeds available '+available+' m for '+await fabricName(db,fabric)+'.',409);
-    const plan=await nextId(db,'DP'),t=now(),stmts=[],batches=[];let cursor=0;for(const item of items){const batch=await nextId(db,'DB'),qty=n(item.ISSUE_MTR),vendor=String(item.DYE_VENDOR_ID),color=String(item.COLOR_ID);let left=qty,lines=0;while(left>0.0001){while(cursor<src.length&&n(src[cursor].BALANCE_MTR)<=0.0001)cursor++;if(cursor>=src.length)throw err('Unexpected allocation shortage while creating dye plan.',500);const rr=src[cursor],take=Math.min(left,n(rr.BALANCE_MTR));stmts.push(db.prepare('INSERT INTO dye_jobs(ROW_ID,DYE_BATCH_ID,ISSUE_DATE,DYE_VENDOR_ID,ROLL_ID,VENDOR_ROLL_NO,FABRIC_ID,COLOR_ID,ISSUE_MTR,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT,DYE_PLAN_ID) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(uuid(),batch,d,vendor,rr.ROLL_ID,rr.VENDOR_ROLL_NO||'',fabric,color,take,'AT DYE VENDOR',String(item.NOTES||notes),a.userId,t,a.userId,t,plan));rr.BALANCE_MTR=n(rr.BALANCE_MTR)-take;left-=take;lines++}batches.push({DYE_BATCH_ID:batch,COLOR_ID:color,DYE_VENDOR_ID:vendor,ISSUE_MTR:qty,ROLL_LINES:lines})}
+    const plan=await nextId(db,'DP'),t=now(),stmts=[],batches=[];let cursor=0;for(const item of items){const batch=await nextId(db,'DB'),qty=n(item.ISSUE_MTR),vendor=String(item.DYE_VENDOR_ID),color=String(item.COLOR_ID);let left=qty,lines=0;while(left>0.0001){while(cursor<src.length&&n(src[cursor].BALANCE_MTR)<=0.0001)cursor++;if(cursor>=src.length)throw err('Unexpected allocation shortage while creating dye plan.',500);const rr=src[cursor],take=Math.min(left,n(rr.BALANCE_MTR));stmts.push(db.prepare('INSERT INTO dye_jobs(ROW_ID,DYE_BATCH_ID,ISSUE_DATE,DYE_VENDOR_ID,ROLL_ID,VENDOR_ROLL_NO,FABRIC_ID,COLOR_ID,ISSUE_MTR,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT,DYE_PLAN_ID) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(uuid(),batch,d,vendor,rr.ROLL_ID,rr.VENDOR_ROLL_NO||'',fabric,color,take,'AT DYE VENDOR',String(item.NOTES||notes),a.userId,t,a.userId,t,plan));rr.BALANCE_MTR=n(rr.BALANCE_MTR)-take;left-=take;lines++}const expected=item.EXPECTED_DATE||r.EXPECTED_DATE||'';if(expected)stmts.push(expectationStmt(db,'DYE',batch,expected,a.userId,'Dye expected return'));batches.push({DYE_BATCH_ID:batch,COLOR_ID:color,DYE_VENDOR_ID:vendor,ISSUE_MTR:qty,ROLL_LINES:lines,EXPECTED_DATE:expected})}
     const result={DYE_PLAN_ID:plan,FABRIC_ID:fabric,TOTAL_MTR:need,BATCH_COUNT:batches.length,BATCHES:batches};stmts.push(auditStmt(db,a,'CREATE_DYE_PLAN','DYE',plan,'',JSON.stringify(result)));await db.batch(stmts);return result
   }finally{await releaseLock(db,'fabric:'+fabric)}
 }
@@ -1074,7 +1086,7 @@ async function getDyeBatchDetail(db,batch){
     ) x ON x.ROLL_ID=j.ROLL_ID
     WHERE j.DYE_BATCH_ID=? AND COALESCE(j.STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY j.ROW_ID`,batch,batch);
   const receipts=await rows(db,"SELECT * FROM dye_receipts WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY CREATED_AT,RECEIPT_ID",batch);
-  return{...head,lines,receipts,downstreamCount:await dyeDownstreamCount(db,batch)}
+  return{...head,EXPECTED_DATE:await expectedDate(db,'DYE',batch),lines,receipts,downstreamCount:await dyeDownstreamCount(db,batch)}
 }
 async function editDyeBatch(db,r,a){
   const batch=String(r.DYE_BATCH_ID||'');if(!batch)throw err('Dye batch is required.',400);
@@ -1108,6 +1120,7 @@ async function editDyeBatch(db,r,a){
   const stmts=resolved.map(({rr,qty})=>db.prepare(
     'INSERT INTO dye_jobs(ROW_ID,DYE_BATCH_ID,ISSUE_DATE,DYE_VENDOR_ID,ROLL_ID,VENDOR_ROLL_NO,FABRIC_ID,COLOR_ID,ISSUE_MTR,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT,DYE_PLAN_ID) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
   ).bind(uuid(),batch,issueDate,vendor,rr.ROLL_ID,rr.VENDOR_ROLL_NO||'',old.FABRIC_ID,color,qty,'AT DYE VENDOR',notes,a.userId,t,a.userId,t,old.DYE_PLAN_ID));
+  if(r.EXPECTED_DATE!==undefined)stmts.push(expectationStmt(db,'DYE',batch,r.EXPECTED_DATE,a.userId,'Dye expected return'));
   await db.batch(stmts);
   const after=await getDyeBatchDetail(db,batch);
   await audit(db,a,'EDIT_DYE_BATCH','DYE',batch,JSON.stringify(old),JSON.stringify(after));
@@ -1147,6 +1160,15 @@ function auditStmt(db,u,action,module,id,oldV='',newV=''){
   return db.prepare('INSERT INTO audit_log(AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON,DEVICE_INFO,IP_HASH) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
     .bind(uuid(),now(),u.userId,u.name,action,module,id,String(oldV||''),String(newV||''),String(u?.auditMeta?.device||'').slice(0,300),String(u?.auditMeta?.ipHash||'').slice(0,100))
 }
+function expectationStmt(db,module,id,date,userId,note=''){
+  return db.prepare(`INSERT INTO record_expectations(MODULE,RECORD_ID,EXPECTED_DATE,NOTE,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?)
+    ON CONFLICT(MODULE,RECORD_ID) DO UPDATE SET EXPECTED_DATE=excluded.EXPECTED_DATE,NOTE=excluded.NOTE,UPDATED_BY=excluded.UPDATED_BY,UPDATED_AT=excluded.UPDATED_AT`)
+    .bind(String(module||'').toUpperCase(),String(id||''),date?dateOnly(date):'',String(note||''),String(userId||''),now())
+}
+async function expectedDate(db,module,id){
+  const r=await row(db,'SELECT EXPECTED_DATE FROM record_expectations WHERE MODULE=? AND RECORD_ID=?',String(module||'').toUpperCase(),String(id||''));
+  return String(r?.EXPECTED_DATE||'')
+}
 async function getProductionDetail(db,id){
   const p=await row(db,`SELECT p.*,COALESCE(s.STYLE_NAME,p.STYLE_ID) STYLE,COALESCE(c.COLOR_NAME,p.COLOR_ID) COLOR
     FROM production_batches p LEFT JOIN styles s ON s.STYLE_ID=p.STYLE_ID LEFT JOIN colors c ON c.COLOR_ID=p.COLOR_ID
@@ -1166,11 +1188,11 @@ async function getStitchingDetail(db,id){
   const issueLines=await issueLinesForChallan(db,id),receivedLines=await receivedLinesForChallan(db,id),pendingLines=await stitchingPendingLines(db,id),qcPending=await qcPendingLines(db,id),sizeBalances=await cutBalanceLines(db,s.PRODUCTION_BATCH_ID);
   const receipts=await rows(db,"SELECT * FROM stitching_receipts WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY RECEIPT_DATE,RECEIPT_ID",id);
   const qcCount=n((await row(db,"SELECT COUNT(*) c FROM qc_events WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
-  return{...s,issueLines,receivedLines,pendingLines,qcPendingLines:qcPending,sizeBalances,receipts,qcCount}
+  return{...s,EXPECTED_DATE:await expectedDate(db,'STITCHING',id),issueLines,receivedLines,pendingLines,qcPendingLines:qcPending,sizeBalances,receipts,qcCount}
 }
 async function getQcDetail(db,id){
   const q=await row(db,'SELECT * FROM qc_events WHERE QC_ID=?',id);if(!q)throw err('QC entry not found.',404);
-  const reworks=await rows(db,"SELECT * FROM rework_jobs WHERE QC_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY ISSUE_DATE,REWORK_ID",id);
+  const reworks=await rows(db,`SELECT r.*,e.EXPECTED_DATE,CASE WHEN e.EXPECTED_DATE<>'' AND r.ISSUE_QTY>r.RETURNED_QTY AND date(e.EXPECTED_DATE)<date('now') THEN CAST(julianday('now')-julianday(e.EXPECTED_DATE) AS INTEGER) ELSE 0 END OVERDUE_DAYS FROM rework_jobs r LEFT JOIN record_expectations e ON e.MODULE='REWORK' AND e.RECORD_ID=r.REWORK_ID WHERE r.QC_ID=? AND COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY r.ISSUE_DATE,r.REWORK_ID`,id);
   const wh=n((await row(db,"SELECT COUNT(*) c FROM warehouse_handover WHERE PRODUCTION_BATCH_ID=? AND STYLE_ID=? AND COLOR_ID=? AND SIZE=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",q.PRODUCTION_BATCH_ID,q.STYLE_ID,q.COLOR_ID,q.SIZE))?.c);
   return{...q,reworks,warehouseDownstreamCount:wh}
 }
@@ -1263,7 +1285,7 @@ async function saveStitching(db,r,a,req=''){
         .bind(uuid(),id,dateOnly(r.ISSUE_DATE),vendor,pb,p.STYLE_ID,p.COLOR_ID,legacy.M,legacy.L,legacy.XL,legacy['2XL'],legacy['3XL'],legacy.OTHER,0,0,0,0,0,0,total,0,total,'PENDING FROM VENDOR',String(r.NOTES||''),a.userId,t,a.userId,t)
     ];
     for(const x of lines)stmts.push(db.prepare('INSERT INTO stitching_issue_lines(LINE_ID,CHALLAN_ID,SIZE_ID,QTY,CREATED_AT,UPDATED_AT) VALUES(?,?,?,?,?,?)').bind(uuid(),id,x.SIZE_ID,x.QTY,t,t));
-    stmts.push(auditStmt(db,a,'CREATE','STITCHING',id,'',JSON.stringify({pb,vendor,lines,total})));
+    if(r.EXPECTED_DATE)stmts.push(expectationStmt(db,'STITCHING',id,r.EXPECTED_DATE,a.userId,'Vendor expected return'));stmts.push(auditStmt(db,a,'CREATE','STITCHING',id,'',JSON.stringify({pb,vendor,lines,total,expectedDate:String(r.EXPECTED_DATE||'')})));
     await db.batch(stmts);return{CHALLAN_ID:id}
   }finally{await releaseLock(db,'production:'+pb)}
 }
@@ -1356,7 +1378,7 @@ async function editStitching(db,r,a,req=''){
       db.prepare('DELETE FROM stitching_issue_lines WHERE CHALLAN_ID=?').bind(id)
     ];
     for(const x of lines)stmts.push(db.prepare('INSERT INTO stitching_issue_lines(LINE_ID,CHALLAN_ID,SIZE_ID,QTY,CREATED_AT,UPDATED_AT) VALUES(?,?,?,?,?,?)').bind(uuid(),id,x.SIZE_ID,x.QTY,t,t));
-    stmts.push(auditStmt(db,a,'EDIT_STITCHING','STITCHING',id,JSON.stringify(old),JSON.stringify({vendor,total,lines})));
+    stmts.push(expectationStmt(db,'STITCHING',id,r.EXPECTED_DATE??await expectedDate(db,'STITCHING',id),a.userId,'Vendor expected return'));stmts.push(auditStmt(db,a,'EDIT_STITCHING','STITCHING',id,JSON.stringify(old),JSON.stringify({vendor,total,lines,expectedDate:String(r.EXPECTED_DATE||'')})));
     await db.batch(stmts);return await getStitchingDetail(db,id)
   }finally{await releaseLock(db,'production:'+old.PRODUCTION_BATCH_ID)}
 }
@@ -1419,7 +1441,8 @@ async function saveReworkIssue(db,r,a,req=''){
     await db.batch([
       db.prepare('INSERT INTO rework_jobs(REWORK_ID,QC_ID,CHALLAN_ID,PRODUCTION_BATCH_ID,VENDOR_ID,SIZE_ID,ISSUE_DATE,ISSUE_QTY,RETURNED_QTY,PASS_QTY,REJECT_QTY,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
         .bind(id,qcId,q.CHALLAN_ID,q.PRODUCTION_BATCH_ID,vendor,q.SIZE,dateOnly(r.ISSUE_DATE),qty,0,0,0,'AT REWORK',String(r.NOTES||''),a.userId,t,a.userId,t),
-      auditStmt(db,a,'REWORK_ISSUE','QC',id,'',JSON.stringify({qcId,qty,vendor}))
+      ...(r.EXPECTED_DATE?[expectationStmt(db,'REWORK',id,r.EXPECTED_DATE,a.userId,'Rework expected return')]:[]),
+      auditStmt(db,a,'REWORK_ISSUE','QC',id,'',JSON.stringify({qcId,qty,vendor,expectedDate:String(r.EXPECTED_DATE||'')}))
     ]);return{REWORK_ID:id}
   }finally{await releaseLock(db,'qc:'+qcId)}
 }
