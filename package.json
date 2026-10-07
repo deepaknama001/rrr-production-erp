@@ -1,8 +1,0 @@
-{
-  "name":"rrr-production-erp",
-  "version":"0.1.0",
-  "private":true,
-  "type":"module",
-  "scripts":{"dev":"npx wrangler pages dev public","deploy":"npx wrangler pages deploy public"},
-  "devDependencies":{"wrangler":"^4.0.0"}
-}

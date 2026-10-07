@@ -12,6 +12,19 @@ async function can(context,user,type,action='view'){
   return !r||Number(r[col])!==0
 }
 function id(){return crypto.randomUUID()}
+async function recordExists(context,module,recordId){
+  const cfg={
+    raw:['raw_inward','ROLL_ID'],
+    dye:['dye_jobs','DYE_BATCH_ID'],
+    production:['production_batches','PRODUCTION_BATCH_ID'],
+    stitching:['stitching_jobs','CHALLAN_ID'],
+    qc:['qc_events','QC_ID'],
+    handover:['warehouse_handover','HANDOVER_ID']
+  }[String(module||'').toLowerCase()];
+  if(!cfg||!recordId)return false;
+  const r=await context.env.DB.prepare('SELECT 1 ok FROM '+cfg[0]+' WHERE '+cfg[1]+'=? LIMIT 1').bind(String(recordId)).first();
+  return !!r
+}
 function safeName(s){return String(s||'file').replace(/[^a-zA-Z0-9._-]+/g,'-').slice(0,120)||'file'}
 async function audit(context,user,action,module,recordId,newV){
   try{await context.env.DB.prepare('INSERT INTO audit_log(AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON,DEVICE_INFO,IP_HASH) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
@@ -21,7 +34,6 @@ export async function onRequestGet(context){
   try{
     const user=await requireAuth(context),u=new URL(context.request.url),module=String(u.searchParams.get('module')||''),recordId=String(u.searchParams.get('recordId')||''),fileId=String(u.searchParams.get('fileId')||'');
     if(!context.env.DB)return json({error:'D1 unavailable'},503);
-    if(!await can(context,user,module,'view'))return json({error:'Permission denied.'},403);
     if(fileId){
       if(!context.env.ATTACHMENTS)return json({error:'Attachment storage is not configured.'},503);
       const meta=await context.env.DB.prepare("SELECT * FROM record_attachments WHERE FILE_ID=? AND STATUS='ACTIVE'").bind(fileId).first();if(!meta)return json({error:'File not found.'},404);
@@ -30,6 +42,8 @@ export async function onRequestGet(context){
       return new Response(obj.body,{headers:{'content-type':meta.CONTENT_TYPE||'application/octet-stream','content-disposition':'inline; filename="'+safeName(meta.FILE_NAME)+'"','cache-control':'private, max-age=60'}})
     }
     if(!module||!recordId)return json({configured:!!context.env.ATTACHMENTS,items:[]});
+    if(!await can(context,user,module,'view'))return json({error:'Permission denied.'},403);
+    if(!await recordExists(context,module,recordId))return json({error:'Record not found.'},404);
     const rs=await context.env.DB.prepare("SELECT FILE_ID,MODULE,RECORD_ID,FILE_NAME,CONTENT_TYPE,SIZE_BYTES,CREATED_BY,CREATED_AT FROM record_attachments WHERE MODULE=? AND RECORD_ID=? AND STATUS='ACTIVE' ORDER BY CREATED_AT DESC").bind(module,recordId).all();
     return json({configured:!!context.env.ATTACHMENTS,items:rs.results||[]})
   }catch(e){return errorResponse(e)}
@@ -38,8 +52,9 @@ export async function onRequestPost(context){
   try{
     const user=await requireAuth(context);if(!context.env.DB)return json({error:'D1 unavailable'},503);if(!context.env.ATTACHMENTS)return json({error:'Attachment storage is not configured. Bind an R2 bucket as ATTACHMENTS.'},503);
     const fd=await context.request.formData(),module=String(fd.get('module')||''),recordId=String(fd.get('recordId')||''),file=fd.get('file');
-    if(!await can(context,user,module,'edit'))return json({error:'Edit permission required.'},403);
     if(!module||!recordId||!(file instanceof File))return json({error:'Module, record and file are required.'},400);
+    if(!await can(context,user,module,'edit'))return json({error:'Edit permission required.'},403);
+    if(!await recordExists(context,module,recordId))return json({error:'Record not found.'},404);
     if(file.size<=0||file.size>10*1024*1024)return json({error:'File must be between 1 byte and 10 MB.'},400);
     const allowed=/^(image\/|application\/pdf$|text\/plain$|application\/vnd\.openxmlformats-officedocument\.|application\/msword$|application\/vnd\.ms-excel$)/i;
     if(file.type&&!allowed.test(file.type))return json({error:'Unsupported file type.'},400);
