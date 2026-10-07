@@ -388,9 +388,143 @@ async function lookupData(db){
     productionBatches,stitchingChallans,warehouseReady:wr
   }
 }
-export async function getDataD1(env,{module,actorUserId,id=''}){
+
+function uniq(a){return [...new Set((a||[]).filter(Boolean).map(String))]}
+function qs(a){return a.map(()=>'?').join(',')}
+async function traceRecord(db,type,id){
+  type=String(type||'').toLowerCase();id=String(id||'');
+  if(!type||!id)throw err('Trail type and record id are required.',400);
+
+  let rollIds=[],dyeBatchIds=[],prodIds=[],challanIds=[],qcIds=[],handoverIds=[];
+
+  if(type==='raw')rollIds=[id];
+  else if(type==='dye')dyeBatchIds=[id];
+  else if(type==='production')prodIds=[id];
+  else if(type==='stitching')challanIds=[id];
+  else if(type==='qc')qcIds=[id];
+  else if(type==='handover')handoverIds=[id];
+  else throw err('Unknown trail type.',400);
+
+  if(qcIds.length){
+    const a=await rows(db,`SELECT * FROM qc_events WHERE QC_ID IN (${qs(qcIds)})`,...qcIds);
+    challanIds=uniq([...challanIds,...a.map(x=>x.CHALLAN_ID)]);
+    prodIds=uniq([...prodIds,...a.map(x=>x.PRODUCTION_BATCH_ID)]);
+  }
+  if(handoverIds.length){
+    const a=await rows(db,`SELECT * FROM warehouse_handover WHERE HANDOVER_ID IN (${qs(handoverIds)})`,...handoverIds);
+    prodIds=uniq([...prodIds,...a.map(x=>x.PRODUCTION_BATCH_ID)]);
+  }
+  if(challanIds.length){
+    const a=await rows(db,`SELECT * FROM stitching_jobs WHERE CHALLAN_ID IN (${qs(challanIds)})`,...challanIds);
+    prodIds=uniq([...prodIds,...a.map(x=>x.PRODUCTION_BATCH_ID)]);
+  }
+  if(prodIds.length){
+    const a=await rows(db,`SELECT * FROM production_batches WHERE PRODUCTION_BATCH_ID IN (${qs(prodIds)})`,...prodIds);
+    dyeBatchIds=uniq([...dyeBatchIds,...a.map(x=>x.DYE_BATCH_ID)]);
+  }
+  if(dyeBatchIds.length){
+    const a=await rows(db,`SELECT * FROM dye_jobs WHERE DYE_BATCH_ID IN (${qs(dyeBatchIds)})`,...dyeBatchIds);
+    rollIds=uniq([...rollIds,...a.map(x=>x.ROLL_ID)]);
+  }
+  if(rollIds.length&&!dyeBatchIds.length){
+    const a=await rows(db,`SELECT * FROM dye_jobs WHERE ROLL_ID IN (${qs(rollIds)})`,...rollIds);
+    dyeBatchIds=uniq(a.map(x=>x.DYE_BATCH_ID));
+  }
+  if(dyeBatchIds.length&&!prodIds.length){
+    const a=await rows(db,`SELECT * FROM production_batches WHERE DYE_BATCH_ID IN (${qs(dyeBatchIds)})`,...dyeBatchIds);
+    prodIds=uniq(a.map(x=>x.PRODUCTION_BATCH_ID));
+  }
+  if(prodIds.length&&!challanIds.length){
+    const a=await rows(db,`SELECT * FROM stitching_jobs WHERE PRODUCTION_BATCH_ID IN (${qs(prodIds)})`,...prodIds);
+    challanIds=uniq(a.map(x=>x.CHALLAN_ID));
+  }
+
+  const raw=rollIds.length?await rows(db,`
+    SELECT r.ROLL_ID,r.INWARD_ID,r.INWARD_DATE,r.VENDOR_ROLL_NO,r.INWARD_MTR,r.INVOICE_CHALLAN,r.LOT_REF,
+           COALESCE(v.VENDOR_NAME,r.SUPPLIER_ID) SUPPLIER,COALESCE(f.FABRIC_NAME,r.FABRIC_ID) FABRIC
+    FROM raw_inward r
+    LEFT JOIN vendors v ON v.VENDOR_ID=r.SUPPLIER_ID
+    LEFT JOIN fabrics f ON f.FABRIC_ID=r.FABRIC_ID
+    WHERE r.ROLL_ID IN (${qs(rollIds)}) ORDER BY r.INWARD_DATE,r.ROLL_ID`,...rollIds):[];
+
+  const dyeJobs=dyeBatchIds.length?await rows(db,`
+    SELECT d.DYE_PLAN_ID,d.DYE_BATCH_ID,d.ISSUE_DATE,d.ROLL_ID,d.VENDOR_ROLL_NO,d.ISSUE_MTR,
+           COALESCE(v.VENDOR_NAME,d.DYE_VENDOR_ID) DYE_VENDOR,
+           COALESCE(f.FABRIC_NAME,d.FABRIC_ID) FABRIC,COALESCE(c.COLOR_NAME,d.COLOR_ID) COLOR
+    FROM dye_jobs d
+    LEFT JOIN vendors v ON v.VENDOR_ID=d.DYE_VENDOR_ID
+    LEFT JOIN fabrics f ON f.FABRIC_ID=d.FABRIC_ID
+    LEFT JOIN colors c ON c.COLOR_ID=d.COLOR_ID
+    WHERE d.DYE_BATCH_ID IN (${qs(dyeBatchIds)})
+    ORDER BY d.ISSUE_DATE,d.DYE_BATCH_ID,d.ROLL_ID`,...dyeBatchIds):[];
+
+  const dyeReceipts=dyeBatchIds.length?await rows(db,`
+    SELECT * FROM dye_receipts WHERE DYE_BATCH_ID IN (${qs(dyeBatchIds)}) ORDER BY RECEIPT_DATE,RECEIPT_ID`,...dyeBatchIds):[];
+
+  const production=prodIds.length?await rows(db,`
+    SELECT p.*,COALESCE(s.STYLE_NAME,p.STYLE_ID) STYLE,COALESCE(f.FABRIC_NAME,p.FABRIC_ID) FABRIC,
+           COALESCE(c.COLOR_NAME,p.COLOR_ID) COLOR
+    FROM production_batches p
+    LEFT JOIN styles s ON s.STYLE_ID=p.STYLE_ID
+    LEFT JOIN fabrics f ON f.FABRIC_ID=p.FABRIC_ID
+    LEFT JOIN colors c ON c.COLOR_ID=p.COLOR_ID
+    WHERE p.PRODUCTION_BATCH_ID IN (${qs(prodIds)}) ORDER BY p.PLAN_DATE,p.PRODUCTION_BATCH_ID`,...prodIds):[];
+
+  if(prodIds.length){
+    const st=await rows(db,`SELECT CHALLAN_ID FROM stitching_jobs WHERE PRODUCTION_BATCH_ID IN (${qs(prodIds)})`,...prodIds);
+    challanIds=uniq([...challanIds,...st.map(x=>x.CHALLAN_ID)]);
+  }
+
+  const stitching=challanIds.length?await rows(db,`
+    SELECT s.*,COALESCE(v.VENDOR_NAME,s.STITCHING_VENDOR_ID) STITCHING_VENDOR,
+           COALESCE(st.STYLE_NAME,s.STYLE_ID) STYLE,COALESCE(c.COLOR_NAME,s.COLOR_ID) COLOR
+    FROM stitching_jobs s
+    LEFT JOIN vendors v ON v.VENDOR_ID=s.STITCHING_VENDOR_ID
+    LEFT JOIN styles st ON st.STYLE_ID=s.STYLE_ID
+    LEFT JOIN colors c ON c.COLOR_ID=s.COLOR_ID
+    WHERE s.CHALLAN_ID IN (${qs(challanIds)}) ORDER BY s.ISSUE_DATE,s.CHALLAN_ID`,...challanIds):[];
+
+  const qc=(prodIds.length||challanIds.length||qcIds.length)?await rows(db,`
+    SELECT q.*,COALESCE(v.VENDOR_NAME,q.VENDOR_ID) VENDOR,COALESCE(st.STYLE_NAME,q.STYLE_ID) STYLE,
+           COALESCE(c.COLOR_NAME,q.COLOR_ID) COLOR
+    FROM qc_events q
+    LEFT JOIN vendors v ON v.VENDOR_ID=q.VENDOR_ID
+    LEFT JOIN styles st ON st.STYLE_ID=q.STYLE_ID
+    LEFT JOIN colors c ON c.COLOR_ID=q.COLOR_ID
+    WHERE ${[
+      prodIds.length?`q.PRODUCTION_BATCH_ID IN (${qs(prodIds)})`:null,
+      challanIds.length?`q.CHALLAN_ID IN (${qs(challanIds)})`:null,
+      qcIds.length?`q.QC_ID IN (${qs(qcIds)})`:null
+    ].filter(Boolean).join(' OR ')}
+    ORDER BY q.QC_DATE,q.QC_ID`,
+    ...prodIds,...challanIds,...qcIds):[];
+
+  const hand=prodIds.length?await rows(db,`
+    SELECT h.*,COALESCE(st.STYLE_NAME,h.STYLE_ID) STYLE,COALESCE(c.COLOR_NAME,h.COLOR_ID) COLOR
+    FROM warehouse_handover h
+    LEFT JOIN styles st ON st.STYLE_ID=h.STYLE_ID
+    LEFT JOIN colors c ON c.COLOR_ID=h.COLOR_ID
+    WHERE h.PRODUCTION_BATCH_ID IN (${qs(prodIds)})
+    ORDER BY h.HANDOVER_DATE,h.HANDOVER_ID`,...prodIds):[];
+
+  const planIds=uniq(dyeJobs.map(x=>x.DYE_PLAN_ID));
+  return{
+    seed:{type,id},
+    ids:{rollIds,dyePlanIds:planIds,dyeBatchIds,productionBatchIds:prodIds,challanIds},
+    stages:[
+      {key:'raw',label:'Raw Fabric',items:raw},
+      {key:'dye',label:'Dye Issue / Plan',items:dyeJobs},
+      {key:'dye_receipt',label:'Dye Receipt',items:dyeReceipts},
+      {key:'production',label:'Production / Cutting',items:production},
+      {key:'stitching',label:'Stitching',items:stitching},
+      {key:'qc',label:'QC / Rework',items:qc},
+      {key:'handover',label:'Warehouse Handover',items:hand}
+    ]
+  }
+}
+export async function getDataD1(env,{module,actorUserId,id='',type=''}){
   const db=env.DB,m=String(module||'dashboard'),perm={raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc',reports:'reports'}[m]||null,a=await actor(db,actorUserId,perm,false);
-  if(m==='dashboard')return{user:a,kpis:await kpisD1(db)};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db)};if(m==='audit'){await actor(db,actorUserId,'reports',false);return{items:await rows(db,'SELECT AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON FROM audit_log ORDER BY TIMESTAMP DESC LIMIT 2000')}};if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
+  if(m==='dashboard')return{user:a,kpis:await kpisD1(db)};if(m==='trail')return{trail:await traceRecord(db,type,id)};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db)};if(m==='audit'){await actor(db,actorUserId,'reports',false);return{items:await rows(db,'SELECT AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON FROM audit_log ORDER BY TIMESTAMP DESC LIMIT 2000')}};if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
 }
 
 async function saveMaster(db,r,a){
