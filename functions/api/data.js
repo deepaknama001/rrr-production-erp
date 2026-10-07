@@ -5,8 +5,8 @@ export async function onRequestGet(context){
   try{
     if(!context.env.DB)return json({error:'D1 database binding is unavailable.'},503);
     const actor=await requireAuth(context);
-    const url=new URL(context.request.url),module=url.searchParams.get('module')||'dashboard',id=url.searchParams.get('id')||'';
-    const r=await getDataD1(context.env,{module,id,actorUserId:actor.uid});
+    const url=new URL(context.request.url),module=url.searchParams.get('module')||'dashboard',id=url.searchParams.get('id')||'',type=url.searchParams.get('type')||'';
+    const r=await getDataD1(context.env,{module,id,type,actorUserId:actor.uid});
     return json({...r,actor,backend:'D1'});
   }catch(e){return errorResponse(e)}
 }
