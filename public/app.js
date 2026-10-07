@@ -1,7 +1,7 @@
-const APP_BUILD='0.14';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.15';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
-const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{}};
+const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
 function setStatus(text,kind='ok'){const el=$('#syncStatus');if(!el)return;el.textContent=text;el.className='status '+kind}
 function newRequestId(){return (crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math.random().toString(36).slice(2))}
 function cacheKey(m){return 'rrr_prod_cache_'+m}
@@ -21,7 +21,7 @@ const NAV=[['dashboard','⌂','Dashboard'],['raw','▣','Raw Fabric'],['dye','�
 function allowed(m){if(!state.user)return false;if(m==='dashboard')return true;if(m==='users'||m==='masters')return !!state.user.admin;if(m==='handover')return state.user.admin||state.user.permissions?.qc;return state.user.admin||!!state.user.permissions?.[m]}
 function showApp(){$('#loginView').classList.add('hidden');$('#appView').classList.remove('hidden');$('#sideName').textContent=state.user.name;$('#sideRole').textContent=state.user.role;renderNav();go(allowed(state.current)?state.current:'dashboard')}
 function renderNav(){$('#nav').innerHTML=NAV.filter(x=>allowed(x[0])).map(([m,i,l])=>`<button data-m="${m}">${i} &nbsp; ${l}</button>`).join('');$('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>go(b.dataset.m))}
-async function go(m,force=false){if(!allowed(m))return;setStatus('↻ Opening '+(NAV.find(x=>x[0]===m)?.[2]||m)+'…','busy');state.current=m;sessionStorage.setItem('rrr_prod_page',m);document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.m===m));$('#pageTitle').textContent=NAV.find(x=>x[0]===m)?.[2]||m;if(m==='dashboard')return renderDashboard(force);if(m==='reports')return renderReports(force);if(m==='masters')return renderMasters(force);if(m==='users')return renderUsers(force);return renderModule(m,force)}
+async function go(m,force=false){if(!allowed(m))return;state.activeGridKey='';setStatus('↻ Opening '+(NAV.find(x=>x[0]===m)?.[2]||m)+'…','busy');state.current=m;sessionStorage.setItem('rrr_prod_page',m);document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.m===m));$('#pageTitle').textContent=NAV.find(x=>x[0]===m)?.[2]||m;if(m==='dashboard')return renderDashboard(force);if(m==='reports')return renderReports(force);if(m==='masters')return renderMasters(force);if(m==='users')return renderUsers(force);return renderModule(m,force)}
 async function renderDashboard(force=false){const s=$('#stage');s.innerHTML=`<section class="hero"><div><h2>Production Control</h2><p>Raw fabric to warehouse handover — one traceable workflow.</p></div><div>${new Date().toLocaleDateString()}</div></section><section class="kpis">${['Raw Available','At Dye','Dyed Available','Cut Pending','At Stitching','Ready Warehouse'].map(x=>`<div class="kpi"><span>${x}</span><strong>—</strong></div>`).join('')}</section><section class="grid2"><div class="panel"><div class="panel-head"><h3>Quick Actions</h3></div><div class="quick">${[['raw','New Fabric Inward'],['dye','Issue to Dye'],['production','Plan Production'],['stitching','Create Stitch Challan'],['qc','QC Entry'],['handover','Warehouse Handover']].filter(x=>allowed(x[0])).map(x=>`<button onclick="window.ERP.quick('${x[0]}')"><b>${x[1]}</b><small>Open module</small></button>`).join('')}</div></div><div class="panel"><div class="panel-head"><h3>System</h3></div><p>Cloudflare D1 primary database</p><p>Cloudflare secure frontend & API</p><p>User-wise permissions & audit trail</p></div></section>`;try{const d=await getCachedModule('dashboard',force);state.user=d.user||d.actor||state.user;const v=d.kpis||{};[v.rawAvailable,v.atDye,v.dyedAvailable,v.cutPending,v.atStitching,v.readyWarehouse].forEach((x,i)=>document.querySelectorAll('.kpi strong')[i].textContent=x??0)}catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}}
 
 const prefMem=new Map(),prefTimers=new Map();
@@ -69,7 +69,7 @@ async function mountDataGrid(container,opt){
   prefs.visibleColumns=(prefs.visibleColumns||columns.filter(x=>x!=='__ACTION')).filter(x=>columns.includes(x)&&x!=='__ACTION');
   if(!prefs.visibleColumns.length)prefs.visibleColumns=columns.filter(x=>x!=='__ACTION');
   prefs.pageSize=[10,25,50,100].includes(Number(prefs.pageSize))?Number(prefs.pageSize):25;
-  const rt={key,opt,items,prefs,filtered:[],pageRows:[]};state.grids[key]=rt;
+  const rt={key,opt,items,prefs,filtered:[],pageRows:[]};state.grids[key]=rt;state.activeGridKey=key;
 
   function render(){
     const filtered=applyGridData(items,prefs,filters);rt.filtered=filtered;
@@ -124,7 +124,7 @@ async function renderModule(m,force=false){
   try{
     const d=await getCachedModule(m,force),items=d.items||[];
     await mountDataGrid($('#gridHost'),{
-      key:'module:'+m,items,columns:cfg.columns,filters:cfg.filters||[],
+      key:'module:'+m,title:cfg.title,items,columns:cfg.columns,filters:cfg.filters||[],
       actionRenderer:m==='dye'?(r=>'<div class="row-actions">'+(!/^RECEIVED/.test(String(r.STATUS))?'<button class="btn ghost dye-receive-btn" data-idx="'+r.__gridIndex+'">Receive</button>':'')+'<button class="btn ghost dye-manage-btn" data-idx="'+r.__gridIndex+'">Manage</button></div>'):null,
       bindActions:m==='dye'?((pageRows,host)=>{host.querySelectorAll('.dye-receive-btn').forEach(b=>b.onclick=()=>openDyeReceive(items[Number(b.dataset.idx)]));host.querySelectorAll('.dye-manage-btn').forEach(b=>b.onclick=()=>openDyeManage(items[Number(b.dataset.idx)]))}):null
     });
@@ -156,20 +156,21 @@ function exportStamp(){const d=new Date();return [d.getFullYear(),String(d.getMo
 function currentPageLabel(){return NAV.find(x=>x[0]===state.current)?.[2]||$('#pageTitle')?.textContent||'Report'}
 function htmlText(el){return String(el?.textContent||'').replace(/\s+/g,' ').trim()}
 function getVisibleExportData(){
+  const rt=state.grids[state.activeGridKey];
+  if(rt&&rt.filtered){
+    const title=rt.opt.title||currentPageLabel(),cols=(rt.prefs.visibleColumns||rt.opt.columns||[]).filter(k=>k!=='__ACTION');
+    return{title,headers:cols.map(gridLabel),rows:rt.filtered.map(r=>cols.map(k=>String(gridCell(k,r[k]).replace?gridCell(k,r[k]).replace(/<[^>]+>/g,''):gridCell(k,r[k]))))};
+  }
   const title=currentPageLabel();
+  const kpis=[...document.querySelectorAll('#stage .kpi')].filter(x=>x.offsetParent!==null).map(x=>[htmlText(x.querySelector('span')),htmlText(x.querySelector('strong'))]).filter(x=>x[0]);
+  if(kpis.length)return{title,headers:['Metric','Value'],rows:kpis};
   const tables=[...document.querySelectorAll('#stage table.data')].filter(t=>t.offsetParent!==null);
   if(tables.length){
     const table=tables[0],headers=[...table.querySelectorAll('thead th')].map(th=>htmlText(th));
     const keep=headers.map((h,i)=>({h,i})).filter(x=>!/^(ACTION|__ACTION)$/i.test(x.h));
-    const rows=[...table.querySelectorAll('tbody tr')].filter(tr=>tr.offsetParent!==null).map(tr=>{
-      const cells=[...tr.querySelectorAll('td')];
-      if(!cells.length||cells.length===1&&/no records|loading/i.test(htmlText(cells[0])))return null;
-      return keep.map(x=>htmlText(cells[x.i]));
-    }).filter(Boolean);
+    const rows=[...table.querySelectorAll('tbody tr')].filter(tr=>tr.offsetParent!==null).map(tr=>{const cells=[...tr.querySelectorAll('td')];if(!cells.length)return null;return keep.map(x=>htmlText(cells[x.i]))}).filter(Boolean);
     return{title,headers:keep.map(x=>x.h),rows};
   }
-  const kpis=[...document.querySelectorAll('#stage .kpi')].filter(x=>x.offsetParent!==null).map(x=>[htmlText(x.querySelector('span')),htmlText(x.querySelector('strong'))]).filter(x=>x[0]);
-  if(kpis.length)return{title,headers:['Metric','Value'],rows:kpis};
   return{title,headers:['Message'],rows:[['No exportable data on this page.']]};
 }
 function loadScriptOnce(src,test){
@@ -582,12 +583,24 @@ const MASTER_CFG={
 let mastersCache=null,masterTab='vendor';
 async function renderMasters(force=false){
   const s=$('#stage');s.innerHTML='<section class="panel"><div class="panel-head"><div><h3>Masters</h3><small>Manage the database values used by production entry forms.</small></div><button class="btn teal" id="masterAdd">+ Add</button></div><div class="master-tabs" id="masterTabs"></div><div id="masterContent">Loading…</div></section>';
-  try{const d=await getCachedModule('masters',force);mastersCache=d.masters||{};drawMasterTabs();drawMasterTable();$('#masterAdd').onclick=()=>openMasterForm(masterTab,null)}catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}
+  try{const d=await getCachedModule('masters',force);mastersCache=d.masters||{};drawMasterTabs();await drawMasterTable();$('#masterAdd').onclick=()=>openMasterForm(masterTab,null)}catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}
 }
 function drawMasterTabs(){$('#masterTabs').innerHTML=Object.entries(MASTER_CFG).map(([k,v])=>`<button class="${k===masterTab?'active':''}" data-k="${k}">${v.label}</button>`).join('');$('#masterTabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{masterTab=b.dataset.k;drawMasterTabs();drawMasterTable()})}
 function masterItems(type){const key={vendor:'vendors',fabric:'fabrics',color:'colors',style:'styles',size:'sizes',defect:'defects'}[type];return mastersCache?.[key]||[]}
 function boolText(v){return isTrue(v)?'Yes':'No'}
-function drawMasterTable(){const cfg=MASTER_CFG[masterTab],items=masterItems(masterTab);$('#masterContent').innerHTML=`<div class="table-wrap"><table class="data"><thead><tr>${cfg.cols.map(c=>'<th>'+c.replaceAll('_',' ')+'</th>').join('')}<th>ACTION</th></tr></thead><tbody>${items.length?items.map((r,i)=>'<tr>'+cfg.cols.map(k=>`<td>${['ACTIVE','FABRIC_SUPPLIER','DYE_VENDOR','STITCHING_VENDOR','CUTTING_VENDOR'].includes(k)?boolText(r[k]):esc(r[k])}</td>`).join('')+`<td><button class="btn ghost master-edit" data-i="${i}">Edit</button></td></tr>`).join(''):`<tr><td colspan="${cfg.cols.length+1}">No records yet.</td></tr>`}</tbody></table></div>`;document.querySelectorAll('.master-edit').forEach(b=>b.onclick=()=>openMasterForm(masterTab,items[Number(b.dataset.i)]))}
+const MASTER_FILTERS={
+  vendor:['ACTIVE','FABRIC_SUPPLIER','DYE_VENDOR','STITCHING_VENDOR','CUTTING_VENDOR'],
+  fabric:['UOM','ACTIVE'],color:['ACTIVE'],style:['CATEGORY','ACTIVE'],size:['ACTIVE'],defect:['STAGE','CATEGORY','ACTIVE']
+};
+async function drawMasterTable(){
+  const cfg=MASTER_CFG[masterTab],items=masterItems(masterTab),host=$('#masterContent');host.innerHTML='Loading…';
+  await mountDataGrid(host,{
+    key:'masters:'+masterTab,title:'Masters - '+cfg.label,items,
+    columns:[...cfg.cols,'__ACTION'],filters:MASTER_FILTERS[masterTab]||[],
+    actionRenderer:r=>'<button class="btn ghost master-edit" data-idx="'+r.__gridIndex+'">Edit</button>',
+    bindActions:(pageRows,el)=>el.querySelectorAll('.master-edit').forEach(b=>b.onclick=()=>openMasterForm(masterTab,items[Number(b.dataset.idx)]))
+  })
+}
 async function openMasterForm(type,row){
   const requestId=newRequestId(),cfg=MASTER_CFG[type],editing=!!row,l=await getLookups(false),f=[];
   if(type==='vendor')f.push(['VENDOR_NAME','text'],['FABRIC_SUPPLIER','check'],['DYE_VENDOR','check'],['STITCHING_VENDOR','check'],['CUTTING_VENDOR','check'],['PHONE','text'],['GST_REF','text'],['ADDRESS','text'],['ACTIVE','check']);
@@ -603,19 +616,20 @@ async function openMasterForm(type,row){
 
 async function renderReports(force=false){try{const d=await getCachedModule('reports',force),v=d.kpis||{};$('#stage').innerHTML=`<section class="panel"><div class="panel-head"><h3>Production Reports</h3></div><div class="kpis">${Object.entries(v).map(([k,x])=>`<div class="kpi"><span>${k}</span><strong>${x}</strong></div>`).join('')}</div></section>`}catch(e){toast(e.message,'bad',3500)}}
 async function renderUsers(force=false){
-  $('#stage').innerHTML='<section class="panel"><div class="panel-head"><div><h3>User Management</h3><small>Cloudflare D1 user database</small></div><button class="btn teal" onclick="window.ERP.newUser()">+ Add User</button></div><div class="table-wrap"><table class="data"><thead><tr><th>User ID</th><th>Name</th><th>Role</th><th>Admin</th><th>Active</th></tr></thead><tbody id="userRows"></tbody></table></div></section><section class="panel" style="margin-top:16px"><div class="panel-head"><h3>Database</h3></div><div class="smart-note"><b>Cloudflare D1 is the live primary database.</b> Google Sheets is no longer part of normal ERP reads/writes.</div></section>';
+  $('#stage').innerHTML='<section class="panel"><div class="panel-head"><div><h3>User Management</h3><small>Cloudflare D1 user database</small></div><button class="btn teal" onclick="window.ERP.newUser()">+ Add User</button></div><div id="usersGrid">Loading…</div></section><section class="panel" style="margin-top:16px"><div class="panel-head"><h3>Database</h3></div><div class="smart-note"><b>Cloudflare D1 is the live primary database.</b> Google Sheets is no longer part of normal ERP reads/writes.</div></section>';
   try{
-    let d;if(!force){const c=readCache('users');d=c&&c.data}
+    let d;if(!force){const cc=readCache('users');d=cc&&cc.data}
     if(!d){d=await api('/api/users');writeCache('users',d)}
-    $('#userRows').innerHTML=(d.items||[]).map(u=>`<tr><td>${esc(u.userId)}</td><td>${esc(u.name)}</td><td>${esc(u.role)}</td><td>${u.admin?'Yes':'No'}</td><td>${u.active?'Active':'Disabled'}</td></tr>`).join('')
-  }catch(e){toast(e.message,'bad',3500)}
+    await mountDataGrid($('#usersGrid'),{key:'users',title:'Users',items:d.items||[],columns:['userId','name','role','admin','active'],filters:['role','admin','active']});
+  }catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}
 }
 function newUser(){const requestId=newRequestId(),f=['userId','name','pin','role'];$('#modalBody').innerHTML=`<div class="panel-head"><h3>Add User</h3><button id="closeModal" class="btn ghost">Close</button></div><form id="uForm"><div class="form-grid">${f.map(x=>`<div class="field"><label>${x.toUpperCase()}</label><input name="${x}" ${x==='pin'?'type="password"':''}></div>`).join('')}<div class="field"><label><input type="checkbox" name="admin"> Admin</label></div>${['raw','dye','production','stitching','qc','reports'].map(p=>`<div class="field"><label><input type="checkbox" name="perm_${p}"> ${p.toUpperCase()}</label></div>`).join('')}</div><div class="form-actions"><button class="btn primary">Save User</button></div></form>`;$('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;$('#uForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.target),b={};for(const[k,v]of fd.entries())b[k]=v==='on'?true:v;['admin','perm_raw','perm_dye','perm_production','perm_stitching','perm_qc','perm_reports'].forEach(k=>b[k]=!!b[k]);b.active=true;try{await api('/api/users',{method:'POST',activity:'Saving user…',success:'User saved',body:JSON.stringify({...b,requestId})});dropCaches();closeModal();renderUsers(true)}catch(err){toast(err.message,'bad',3500)}}}
 $('#loginForm').onsubmit=async e=>{e.preventDefault();$('#loginError').textContent='';try{const d=await api('/api/login',{method:'POST',activity:'Logging in…',success:'Login successful',body:JSON.stringify({userId:$('#userId').value,pin:$('#pin').value})});state.token=d.token;state.user=d.user;localStorage.setItem('rrr_prod_token',d.token);localStorage.setItem('rrr_prod_user',JSON.stringify(d.user));dropCaches();if(d.kpis)writeCache('dashboard',{user:d.user,kpis:d.kpis});showApp()}catch(err){$('#loginError').textContent=err.message}}
 $('#logoutBtn').onclick=()=>{localStorage.removeItem('rrr_prod_token');localStorage.removeItem('rrr_prod_user');sessionStorage.clear();location.reload()};async function refreshCurrent(){if(state.refreshing)return;state.refreshing=true;const b=$('#refreshBtn');b?.classList.add('spinning');setStatus('↻ Refreshing…','busy');try{dropCaches();await go(state.current,true);setStatus('● Updated just now','ok')}catch(e){setStatus('● Refresh failed','bad');if(e.status===401){localStorage.removeItem('rrr_prod_token');localStorage.removeItem('rrr_prod_user');location.reload()}else toast(e.message,'bad',3500)}finally{state.refreshing=false;b?.classList.remove('spinning')}}
 $('#refreshBtn')?.addEventListener('click',refreshCurrent);
-$('#exportExcelBtn')?.addEventListener('click',exportExcel);
-$('#exportPdfBtn')?.addEventListener('click',exportPdf);
+$('#exportMenuBtn')?.addEventListener('click',e=>{e.stopPropagation();$('#exportMenu')?.classList.toggle('hidden')});
+$('#exportExcelBtn')?.addEventListener('click',()=>{$('#exportMenu')?.classList.add('hidden');exportExcel()});
+$('#exportPdfBtn')?.addEventListener('click',()=>{$('#exportMenu')?.classList.add('hidden');exportPdf()});
 window.addEventListener('online',()=>setStatus('● Online','ok'));window.addEventListener('offline',()=>setStatus('● Offline','bad'));
 window.ERP={quick:m=>go(m).then(()=>setTimeout(()=>$('#newBtn')?.click(),50)),newUser,refresh:refreshCurrent,exportExcel,exportPdf};
 if(state.token&&state.user){showApp();setStatus(navigator.onLine?'● Ready':'● Offline',navigator.onLine?'ok':'bad')}else if(state.token&&!state.user){localStorage.removeItem('rrr_prod_token')}
