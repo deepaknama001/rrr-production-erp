@@ -210,6 +210,77 @@ async function qcSizePending(db,challan,size){
   const r=await row(db,`SELECT MAX(0,COALESCE((SELECT "${col}" FROM stitching_jobs WHERE CHALLAN_ID=?),0)-COALESCE((SELECT SUM(QC_QTY) FROM qc_events WHERE CHALLAN_ID=? AND UPPER(SIZE)=?),0)) AS bal`,challan,challan,String(size).toUpperCase());return n(r?.bal)
 }
 
+async function sizeMasterRow(db,key){
+  const k=String(key||'').trim();
+  if(!k)return null;
+  return row(db,'SELECT * FROM sizes WHERE SIZE_ID=? OR UPPER(SIZE_NAME)=UPPER(?) ORDER BY CASE WHEN SIZE_ID=? THEN 0 ELSE 1 END LIMIT 1',k,k,k)
+}
+async function activeSizeRows(db){return rows(db,'SELECT * FROM sizes WHERE ACTIVE=1 ORDER BY SORT_ORDER,SIZE_NAME')}
+function legacySizeName(s){const x=String(s||'').toUpperCase();return LEGACY_SIZE_COL[x]||null}
+function legacyCol(prefix,sizeName){
+  const s=legacySizeName(sizeName);return s?s+'_'+prefix:null
+}
+async function cutLinesForPb(db,pb){
+  const lines=await rows(db,`SELECT l.SIZE_ID,s.SIZE_NAME,s.SORT_ORDER,l.QTY
+    FROM production_cut_lines l LEFT JOIN sizes s ON s.SIZE_ID=l.SIZE_ID
+    WHERE l.PRODUCTION_BATCH_ID=? ORDER BY COALESCE(s.SORT_ORDER,9999),COALESCE(s.SIZE_NAME,l.SIZE_ID)`,pb);
+  if(lines.length)return lines.map(x=>({...x,SIZE_NAME:x.SIZE_NAME||x.SIZE_ID,QTY:intQty(x.QTY,'Cut quantity')}));
+  const p=await row(db,'SELECT * FROM production_batches WHERE PRODUCTION_BATCH_ID=?',pb);if(!p)return[];
+  const sizes=await activeSizeRows(db),out=[];
+  for(const s of sizes){const col=legacyCol('CUT',s.SIZE_NAME);if(col&&n(p[col])>0)out.push({SIZE_ID:s.SIZE_ID,SIZE_NAME:s.SIZE_NAME,SORT_ORDER:s.SORT_ORDER,QTY:Math.round(n(p[col]))})}
+  const known=new Set(out.map(x=>String(x.SIZE_NAME).toUpperCase()));
+  for(const nm of ['M','L','XL','2XL','3XL','OTHER'])if(!known.has(nm)){const col=nm+'_CUT';if(n(p[col])>0)out.push({SIZE_ID:nm,SIZE_NAME:nm,SORT_ORDER:9999,QTY:Math.round(n(p[col]))})}
+  return out
+}
+async function issueLinesForChallan(db,challan){
+  const lines=await rows(db,`SELECT l.SIZE_ID,s.SIZE_NAME,s.SORT_ORDER,l.QTY
+    FROM stitching_issue_lines l LEFT JOIN sizes s ON s.SIZE_ID=l.SIZE_ID
+    WHERE l.CHALLAN_ID=? ORDER BY COALESCE(s.SORT_ORDER,9999),COALESCE(s.SIZE_NAME,l.SIZE_ID)`,challan);
+  if(lines.length)return lines.map(x=>({...x,SIZE_NAME:x.SIZE_NAME||x.SIZE_ID,QTY:Math.round(n(x.QTY))}));
+  const st=await row(db,'SELECT * FROM stitching_jobs WHERE CHALLAN_ID=?',challan);if(!st)return[];
+  const sizes=await activeSizeRows(db),out=[];
+  for(const s of sizes){const col=legacyCol('ISSUED',s.SIZE_NAME);if(col&&n(st[col])>0)out.push({SIZE_ID:s.SIZE_ID,SIZE_NAME:s.SIZE_NAME,SORT_ORDER:s.SORT_ORDER,QTY:Math.round(n(st[col]))})}
+  const known=new Set(out.map(x=>String(x.SIZE_NAME).toUpperCase()));
+  for(const nm of ['M','L','XL','2XL','3XL','OTHER'])if(!known.has(nm)){const col=nm+'_ISSUED';if(n(st[col])>0)out.push({SIZE_ID:nm,SIZE_NAME:nm,SORT_ORDER:9999,QTY:Math.round(n(st[col]))})}
+  return out
+}
+async function receivedLinesForChallan(db,challan){
+  const lines=await rows(db,`SELECT l.SIZE_ID,COALESCE(s.SIZE_NAME,l.SIZE_ID) SIZE_NAME,COALESCE(s.SORT_ORDER,9999) SORT_ORDER,SUM(l.QTY) QTY
+    FROM stitching_receipt_lines l
+    JOIN stitching_receipts r ON r.RECEIPT_ID=l.RECEIPT_ID AND COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%'
+    LEFT JOIN sizes s ON s.SIZE_ID=l.SIZE_ID
+    WHERE l.CHALLAN_ID=? GROUP BY l.SIZE_ID,s.SIZE_NAME,s.SORT_ORDER
+    ORDER BY COALESCE(s.SORT_ORDER,9999),COALESCE(s.SIZE_NAME,l.SIZE_ID)`,challan);
+  if(lines.length)return lines.map(x=>({...x,QTY:Math.round(n(x.QTY))}));
+  const st=await row(db,'SELECT * FROM stitching_jobs WHERE CHALLAN_ID=?',challan);if(!st)return[];
+  const sizes=await activeSizeRows(db),out=[];
+  for(const s of sizes){const col=legacyCol('RECEIVED',s.SIZE_NAME);if(col&&n(st[col])>0)out.push({SIZE_ID:s.SIZE_ID,SIZE_NAME:s.SIZE_NAME,SORT_ORDER:s.SORT_ORDER,QTY:Math.round(n(st[col]))})}
+  const known=new Set(out.map(x=>String(x.SIZE_NAME).toUpperCase()));
+  for(const nm of ['M','L','XL','2XL','3XL','OTHER'])if(!known.has(nm)){const col=nm+'_RECEIVED';if(n(st[col])>0)out.push({SIZE_ID:nm,SIZE_NAME:nm,SORT_ORDER:9999,QTY:Math.round(n(st[col]))})}
+  return out
+}
+async function qcInitialQtyBySize(db,challan,sizeId,sizeName=''){
+  const r=await row(db,`SELECT COALESCE(SUM(QC_QTY),0) q FROM qc_events
+    WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'
+      AND COALESCE(REWORK_CHALLAN_ID,'')=''
+      AND (SIZE=? OR UPPER(SIZE)=UPPER(?))`,challan,String(sizeId),String(sizeName||sizeId));
+  return Math.round(n(r?.q))
+}
+async function qcPendingLines(db,challan){
+  const rec=await receivedLinesForChallan(db,challan),out=[];
+  for(const x of rec){const q=await qcInitialQtyBySize(db,challan,x.SIZE_ID,x.SIZE_NAME),pending=Math.max(0,x.QTY-q);if(pending>0)out.push({...x,QC_QTY:q,PENDING_QTY:pending})}
+  return out
+}
+async function cutBalanceLines(db,pb){
+  const cuts=await cutLinesForPb(db,pb),challans=await rows(db,"SELECT CHALLAN_ID FROM stitching_jobs WHERE PRODUCTION_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",pb),issued={};
+  for(const ch of challans){for(const x of await issueLinesForChallan(db,ch.CHALLAN_ID))issued[x.SIZE_ID]=(issued[x.SIZE_ID]||0)+x.QTY}
+  return cuts.map(x=>({...x,ISSUED_QTY:issued[x.SIZE_ID]||0,BALANCE_QTY:Math.max(0,x.QTY-(issued[x.SIZE_ID]||0))}))
+}
+async function stitchingPendingLines(db,challan){
+  const issued=await issueLinesForChallan(db,challan),rec=Object.fromEntries((await receivedLinesForChallan(db,challan)).map(x=>[x.SIZE_ID,x.QTY]));
+  return issued.map(x=>({...x,RECEIVED_QTY:rec[x.SIZE_ID]||0,PENDING_QTY:Math.max(0,x.QTY-(rec[x.SIZE_ID]||0))}))
+}
+
 async function dyeBatchSummary(db,batch){
   const r=await row(db,`WITH j AS (SELECT DYE_BATCH_ID,MAX(DYE_PLAN_ID) DYE_PLAN_ID,MAX(ISSUE_DATE) ISSUE_DATE,MAX(DYE_VENDOR_ID) DYE_VENDOR_ID,MAX(FABRIC_ID) FABRIC_ID,MAX(COLOR_ID) COLOR_ID,SUM(ISSUE_MTR) ISSUE_MTR,COUNT(*) ROLL_COUNT FROM dye_jobs WHERE DYE_BATCH_ID=?),
   d AS (SELECT COALESCE(SUM(RECEIVED_MTR),0) RECEIVED_MTR,COALESCE(SUM(DEFECT_MTR),0) DEFECT_MTR,COALESCE(SUM(USABLE_MTR),0) USABLE_MTR,MAX(FINAL_RECEIPT) CLOSED FROM dye_receipts WHERE DYE_BATCH_ID=?)
