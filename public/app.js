@@ -134,6 +134,9 @@ function gridPageNumbers(current,total){
   const set=new Set([1,total,current,current-1,current+1]);if(total>5){set.add(2);set.add(total-1)}
   return [...set].filter(x=>x>=1&&x<=total).sort((a,b)=>a-b)
 }
+function isTotalableKey(k){return /(?:MTR|METER|QTY|COUNT|PIECES|_CUT$|_ISSUED$|_RECEIVED$|PENDING|BALANCE)/i.test(String(k))&&!/(?:ID|DATE|STATUS|AGE)/i.test(String(k))}
+function gridTotals(rows,cols){const o={};for(const k of cols)if(isTotalableKey(k)){const v=rows.map(r=>Number(r?.[k])).filter(Number.isFinite);if(v.length)o[k]=v.reduce((a,b)=>a+b,0)}return o}
+function gridViewSnapshot(p){return{search:p.search,filters:structuredClone(p.filters||{}),visibleColumns:[...(p.visibleColumns||[])],columnOrder:[...(p.columnOrder||[])],columnWidths:{...(p.columnWidths||{})},pageSize:p.pageSize,sortKey:p.sortKey,sortDir:p.sortDir,density:p.density,exportScope:p.exportScope}}
 function buildHeaderFilterPopup(k,items,prefs){
   const dateCol=isDateColumn(k,items),current=normalizeFilterState(prefs.filters?.[k],dateCol);
   if(dateCol)return `
