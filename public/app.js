@@ -16,7 +16,20 @@ function activityEnd(slow,button,ok=true,message=''){clearTimeout(slow);state.ne
 async function api(path,opt={}){const h={'content-type':'application/json',...(opt.headers||{})};if(state.token)h.authorization='Bearer '+state.token;const label=inferActivity(path,opt);const recentBtn=(Date.now()-state.lastButtonAt<1200)?state.lastButton:null;const btn=opt.button||recentBtn||null;const slow=activityStart(label,btn);try{const r=await fetch(path,{...opt,headers:h});const d=await r.json().catch(()=>({}));if(!r.ok){const e=new Error(d.error||'Request failed');e.status=r.status;throw e}if(String(opt.method||'GET').toUpperCase()==='POST'&&$('#modal'))$('#modal').dataset.dirty='0';activityEnd(slow,btn,true,opt.success||'');return d}catch(e){activityEnd(slow,btn,false,e.message||'Failed');throw e}}
 fetch('/api/health',{cache:'no-store'}).catch(()=>{});
 document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;state.lastButton=b;state.lastButtonAt=Date.now();b.classList.remove('tap');void b.offsetWidth;b.classList.add('tap');setTimeout(()=>b.classList.remove('tap'),260)},true);
-async function getCachedModule(module,force=false){const c=readCache(module);if(!force&&c){if(Date.now()-c.ts>20000){api('/api/data?module='+module).then(d=>writeCache(module,d)).catch(()=>{})}return c.data}const d=await api('/api/data?module='+module);return writeCache(module,d)}
+const moduleInflight=new Map();
+async function getCachedModule(module,force=false){
+  const cached=readCache(module);
+  if(!force&&cached){
+    if(Date.now()-cached.ts>60000&&!moduleInflight.has(module)){
+      const p=api('/api/data?module='+module).then(d=>writeCache(module,d)).finally(()=>moduleInflight.delete(module));
+      moduleInflight.set(module,p)
+    }
+    return cached.data
+  }
+  if(!force&&moduleInflight.has(module))return moduleInflight.get(module);
+  const p=api('/api/data?module='+module).then(d=>writeCache(module,d)).finally(()=>moduleInflight.delete(module));
+  moduleInflight.set(module,p);return p
+}
 const NAV=[['dashboard','⌂','Dashboard'],['raw','▣','Raw Fabric'],['dye','◉','Dyeing'],['production','✂','Production'],['stitching','⇄','Stitching'],['qc','✓','QC & Rework'],['handover','⇥','Warehouse Handover'],['reports','▤','Reports'],['masters','◆','Masters'],['users','⚙','Users']];
 function allowed(m){if(!state.user)return false;if(m==='dashboard')return true;if(m==='users'||m==='masters')return !!state.user.admin;if(m==='handover')return state.user.admin||state.user.permissions?.qc;return state.user.admin||!!state.user.permissions?.[m]}
 function actionModule(m){return m==='handover'?'qc':m}
@@ -41,7 +54,7 @@ function syncShell(){if($('#appVersion'))$('#appVersion').textContent='v'+APP_BU
 let notificationTimer=null;
 function setExceptionBadge(n){const b=$('#notificationBtn'),c=$('#notificationCount');if(!b||!c)return;const permitted=canAction('reports','view'),x=permitted?Math.max(0,Number(n||0)):0;c.textContent=x>99?'99+':String(x);b.classList.toggle('hidden',!permitted||x===0)}
 async function refreshExceptionBadge(){if(!state.token||!canAction('reports','view')){setExceptionBadge(0);return}try{const r=await fetch('/api/data?module=dashboard',{headers:{authorization:'Bearer '+state.token}});if(!r.ok)return;const d=await r.json();setExceptionBadge(d.alerts?.exceptionCount||0)}catch{}}
-function startNotificationPolling(){clearInterval(notificationTimer);refreshExceptionBadge();notificationTimer=setInterval(refreshExceptionBadge,5*60*1000)}
+function startNotificationPolling(){clearInterval(notificationTimer);setTimeout(refreshExceptionBadge,15000);notificationTimer=setInterval(refreshExceptionBadge,5*60*1000)}
 function showApp(){$('#loginView').classList.add('hidden');$('#appView').classList.remove('hidden');$('#sideName').textContent=state.user.name;$('#sideRole').textContent=state.user.role;syncShell();renderNav();startNotificationPolling();go(allowed(state.current)?state.current:'dashboard')}
 function setMobileNav(open){document.body.classList.toggle('nav-open',!!open);$('#navOverlay')?.classList.toggle('hidden',!open)}
 function renderNav(){$('#nav').innerHTML=NAV.filter(x=>allowed(x[0])).map(([m,i,l])=>`<button data-m="${m}">${i} &nbsp; ${l}</button>`).join('');$('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>{setMobileNav(false);go(b.dataset.m)})}
@@ -92,7 +105,7 @@ function saveGridPrefs(page,prefs){
   prefMem.set(page,prefs);try{localStorage.setItem(prefLocalKey(page),JSON.stringify(prefs))}catch{}
   clearTimeout(prefTimers.get(page));prefTimers.set(page,setTimeout(async()=>{
     try{await fetch('/api/preferences',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+state.token},body:JSON.stringify({page,prefs})})}catch{}
-  },350))
+  },650))
 }
 function gridLabel(k){return String(k||'').replace(/^__/,'').replaceAll('_',' ').replace(/\b\w/g,x=>x.toUpperCase())}
 function gridCell(k,v){
@@ -248,7 +261,7 @@ async function mountDataGrid(container,opt){
         render();
         const next=container.querySelector('.grid-search');
         if(next){next.focus();try{next.setSelectionRange(pos,pos)}catch{}}
-      },120)
+      },220)
     };
 
     container.querySelectorAll('[data-sort]').forEach(btn=>btn.onclick=e=>{
