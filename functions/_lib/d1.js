@@ -1219,23 +1219,24 @@ async function editProduction(db,r,a,req=''){
   if(!old)throw err('Production batch not found.',404);
   const cut=await row(db,"SELECT 1 ok FROM production_cut_actuals WHERE PRODUCTION_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id);
   const stitch=n((await row(db,"SELECT COUNT(*) c FROM stitching_jobs WHERE PRODUCTION_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
-  const newAlloc=n(r.ALLOCATED_MTR??old.ALLOCATED_MTR),newStyle=String(r.STYLE_ID??old.STYLE_ID),newDate=dateOnly(r.PLAN_DATE||old.PLAN_DATE),planned=intQty(r.PLANNED_QTY??old.PLANNED_QTY,'Planned garment quantity');
+  const newAlloc=n(r.ALLOCATED_MTR??old.ALLOCATED_MTR),newStyle=String(r.STYLE_ID??old.STYLE_ID),newBatch=String(r.DYE_BATCH_ID??old.DYE_BATCH_ID),newDate=dateOnly(r.PLAN_DATE||old.PLAN_DATE),planned=intQty(r.PLANNED_QTY??old.PLANNED_QTY,'Planned garment quantity');let source={FABRIC_ID:old.FABRIC_ID,COLOR_ID:old.COLOR_ID};
   if(cut||stitch){
-    if(Math.abs(newAlloc-n(old.ALLOCATED_MTR))>.0001||newStyle!==String(old.STYLE_ID))throw err('Style and allocated meter are locked after cutting/stitching starts.',409)
+    if(Math.abs(newAlloc-n(old.ALLOCATED_MTR))>.0001||newStyle!==String(old.STYLE_ID)||newBatch!==String(old.DYE_BATCH_ID))throw err('Source batch, style and allocated meter are locked after cutting/stitching starts.',409)
   }else{
     requirePos(newAlloc,'Allocated meter');
     const st=await row(db,'SELECT * FROM styles WHERE STYLE_ID=? AND ACTIVE=1',newStyle);if(!st)throw err('Select a valid active style.',400);
-    if(st.DEFAULT_FABRIC_ID&&String(st.DEFAULT_FABRIC_ID)!==String(old.FABRIC_ID))throw err('Selected style is mapped to a different fabric.',409);
-    const available=await dyeBalance(db,old.DYE_BATCH_ID)+n(old.ALLOCATED_MTR);
-    if(newAlloc>available+.0001)throw err('Allocated meter exceeds dyed usable balance. Available including current allocation: '+available.toFixed(2),409)
+    source=await row(db,'SELECT FABRIC_ID,COLOR_ID FROM dye_jobs WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,\'\') NOT LIKE \'CANCELLED%\' LIMIT 1',newBatch);if(!source)throw err('Select a valid dye batch.',400);
+    if(st.DEFAULT_FABRIC_ID&&String(st.DEFAULT_FABRIC_ID)!==String(source.FABRIC_ID))throw err('Selected style is mapped to a different fabric.',409);
+    const available=await dyeBalance(db,newBatch)+(newBatch===String(old.DYE_BATCH_ID)?n(old.ALLOCATED_MTR):0);
+    if(newAlloc>available+.0001)throw err('Allocated meter exceeds dyed usable balance. Available: '+available.toFixed(2),409)
   }
   await acquireLock(db,'production:'+id,req);
   try{
     const t=now();
     await db.batch([
-      db.prepare('UPDATE production_batches SET PLAN_DATE=?,STYLE_ID=?,PLANNED_QTY=?,ALLOCATED_MTR=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE PRODUCTION_BATCH_ID=?')
-        .bind(newDate,newStyle,planned,newAlloc,String(r.NOTES??old.NOTES??''),a.userId,t,id),
-      auditStmt(db,a,'EDIT_PRODUCTION','PRODUCTION',id,JSON.stringify(old),JSON.stringify({PLAN_DATE:newDate,STYLE_ID:newStyle,PLANNED_QTY:planned,ALLOCATED_MTR:newAlloc,NOTES:String(r.NOTES??old.NOTES??'')}))
+      db.prepare('UPDATE production_batches SET PLAN_DATE=?,DYE_BATCH_ID=?,STYLE_ID=?,FABRIC_ID=?,COLOR_ID=?,PLANNED_QTY=?,ALLOCATED_MTR=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE PRODUCTION_BATCH_ID=?')
+        .bind(newDate,newBatch,newStyle,source.FABRIC_ID,source.COLOR_ID,planned,newAlloc,String(r.NOTES??old.NOTES??''),a.userId,t,id),
+      auditStmt(db,a,'EDIT_PRODUCTION','PRODUCTION',id,JSON.stringify(old),JSON.stringify({PLAN_DATE:newDate,DYE_BATCH_ID:newBatch,STYLE_ID:newStyle,FABRIC_ID:source.FABRIC_ID,COLOR_ID:source.COLOR_ID,PLANNED_QTY:planned,ALLOCATED_MTR:newAlloc,NOTES:String(r.NOTES??old.NOTES??'')}))
     ]);
     return await getProductionDetail(db,id)
   }finally{await releaseLock(db,'production:'+id)}
