@@ -1,4 +1,4 @@
-const APP_BUILD='0.17';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.18';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -26,7 +26,7 @@ async function renderDashboard(force=false){const s=$('#stage');s.innerHTML=`<se
 
 const prefMem=new Map(),prefTimers=new Map();
 function prefLocalKey(page){return 'rrr_prod_pref_'+String(state.user?.userId||'anon')+'_'+page}
-function defaultGridPrefs(columns){return{search:'',filters:{},visibleColumns:columns.filter(x=>x!=='__ACTION'),pageSize:25,page:1}}
+function defaultGridPrefs(columns){return{search:'',filters:{},visibleColumns:columns.filter(x=>x!=='__ACTION'),pageSize:25,page:1,sortKey:'',sortDir:'asc'}}
 async function loadGridPrefs(page,columns){
   const base=defaultGridPrefs(columns);let local={};
   try{local=JSON.parse(localStorage.getItem(prefLocalKey(page))||'{}')}catch{}
@@ -53,10 +53,21 @@ function uniqueFilterValues(items,key){
   const m=new Map();for(const r of items||[]){const raw=r?.[key];if(raw===undefined||raw===null||raw==='')continue;const label=gridCell(key,raw);m.set(String(raw),label)}
   return [...m.entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1])))
 }
+function sortableValue(v){
+  if(v===null||v===undefined)return'';
+  const s=String(v).trim();
+  if(s!==''&&!Number.isNaN(Number(s)))return Number(s);
+  const d=Date.parse(s);if(/\d{4}-\d{2}-\d{2}/.test(s)&&!Number.isNaN(d))return d;
+  return s.toLowerCase()
+}
 function applyGridData(items,prefs,filters){
   let out=[...(items||[])],q=String(prefs.search||'').trim().toLowerCase();
   if(q)out=out.filter(r=>JSON.stringify(r).toLowerCase().includes(q));
   for(const key of filters||[]){const val=String(prefs.filters?.[key]??'');if(val!=='')out=out.filter(r=>String(r?.[key]??'')===val)}
+  if(prefs.sortKey){
+    const key=prefs.sortKey,dir=prefs.sortDir==='desc'?-1:1;
+    out.sort((a,b)=>{const av=sortableValue(a?.[key]),bv=sortableValue(b?.[key]);if(av<bv)return-dir;if(av>bv)return dir;return 0})
+  }
   return out
 }
 function gridPageNumbers(current,total){
@@ -64,29 +75,37 @@ function gridPageNumbers(current,total){
   return [...set].filter(x=>x>=1&&x<=total).sort((a,b)=>a-b)
 }
 async function mountDataGrid(container,opt){
-  const key=opt.key,columns=opt.columns||[],filters=opt.filters||[],items=(opt.items||[]).map((r,i)=>({...r,__gridIndex:i}));
+  const key=opt.key,columns=opt.columns||[],filterable=new Set(opt.filters||[]),items=(opt.items||[]).map((r,i)=>({...r,__gridIndex:i}));
   let prefs=await loadGridPrefs(key,columns);
   prefs.visibleColumns=(prefs.visibleColumns||columns.filter(x=>x!=='__ACTION')).filter(x=>columns.includes(x)&&x!=='__ACTION');
   if(!prefs.visibleColumns.length)prefs.visibleColumns=columns.filter(x=>x!=='__ACTION');
   prefs.pageSize=[10,25,50,100].includes(Number(prefs.pageSize))?Number(prefs.pageSize):25;
+  prefs.sortKey=columns.includes(prefs.sortKey)?prefs.sortKey:'';
+  prefs.sortDir=prefs.sortDir==='desc'?'desc':'asc';
   const rt={key,opt,items,prefs,filtered:[],pageRows:[]};state.grids[key]=rt;state.activeGridKey=key;
 
+  function headerCell(k){
+    const sorted=prefs.sortKey===k,arrow=sorted?(prefs.sortDir==='asc'?'▲':'▼'):'↕';
+    const filterOn=String(prefs.filters?.[k]??'')!=='';
+    return `<th><div class="th-main"><button class="th-sort" data-sort="${esc(k)}"><span>${gridLabel(k)}</span><i>${arrow}</i></button>${filterable.has(k)?`<button class="th-filter-btn ${filterOn?'active':''}" data-filter-menu="${esc(k)}" title="Filter ${gridLabel(k)}">▾</button>`:''}</div>${filterable.has(k)?`<div class="th-filter-menu hidden" data-filter-pop="${esc(k)}"><div class="th-filter-title">Filter ${gridLabel(k)}</div><select data-filter-select="${esc(k)}"><option value="">All</option>${uniqueFilterValues(items,k).map(([v,l])=>`<option value="${esc(v)}" ${String(prefs.filters?.[k]??'')===String(v)?'selected':''}>${esc(l)}</option>`).join('')}</select></div>`:''}</th>`
+  }
+
   function render(){
-    const filtered=applyGridData(items,prefs,filters);rt.filtered=filtered;
+    const filtered=applyGridData(items,prefs,[...filterable]);rt.filtered=filtered;
     const pages=Math.max(1,Math.ceil(filtered.length/prefs.pageSize));prefs.page=Math.min(Math.max(1,Number(prefs.page)||1),pages);
     const start=(prefs.page-1)*prefs.pageSize,end=Math.min(start+prefs.pageSize,filtered.length),pageRows=filtered.slice(start,end);rt.pageRows=pageRows;
     const visible=prefs.visibleColumns;
-    const filterHtml=filters.map(k=>`<label class="grid-filter"><span>${gridLabel(k)}</span><select data-filter="${esc(k)}"><option value="">All</option>${uniqueFilterValues(items,k).map(([v,l])=>`<option value="${esc(v)}" ${String(prefs.filters?.[k]??'')===String(v)?'selected':''}>${esc(l)}</option>`).join('')}</select></label>`).join('');
-    const nums=gridPageNumbers(prefs.page,pages),buttons=[];let last=0;for(const n of nums){if(last&&n-last>1)buttons.push('<span class="page-gap">…</span>');buttons.push(`<button class="page-btn ${n===prefs.page?'active':''}" data-page="${n}">${n}</button>`);last=n}
-    const head=visible.map(k=>`<th>${gridLabel(k)}</th>`).join('')+(columns.includes('__ACTION')?'<th>ACTION</th>':'');
-    const body=pageRows.length?pageRows.map((r,pi)=>'<tr>'+visible.map(k=>k==='STATUS'?`<td>${badge(r[k])}</td>`:`<td>${gridCell(k,r[k])}</td>`).join('')+(columns.includes('__ACTION')?`<td>${opt.actionRenderer?opt.actionRenderer(r,pi):'—'}</td>`:'')+'</tr>').join(''):`<tr><td colspan="${visible.length+(columns.includes('__ACTION')?1:0)}">No matching records.</td></tr>`;
+    const nums=gridPageNumbers(prefs.page,pages),buttons=[];let last=0;
+    for(const n of nums){if(last&&n-last>1)buttons.push('<span class="page-gap">…</span>');buttons.push(`<button class="page-btn ${n===prefs.page?'active':''}" data-page="${n}">${n}</button>`);last=n}
+    const head=visible.map(headerCell).join('')+(columns.includes('__ACTION')?'<th><div class="th-main"><span class="th-static">Action</span></div></th>':'');
+    const body=pageRows.length?pageRows.map((r,pi)=>'<tr>'+visible.map(k=>k==='STATUS'? `<td>${badge(r[k])}</td>`:`<td>${gridCell(k,r[k])}</td>`).join('')+(columns.includes('__ACTION')?`<td>${opt.actionRenderer?opt.actionRenderer(r,pi):'—'}</td>`:'')+'</tr>').join(''):`<tr><td colspan="${visible.length+(columns.includes('__ACTION')?1:0)}">No matching records.</td></tr>`;
+
     container.innerHTML=`
       <div class="smart-grid-toolbar">
         <div class="grid-search-wrap"><span>⌕</span><input class="grid-search" placeholder="Search..." value="${esc(prefs.search||'')}"></div>
-        <div class="grid-filters">${filterHtml}</div>
         <div class="grid-tool-wrap"><button class="grid-tool-btn column-btn">Columns ▾</button><div class="column-menu hidden">${columns.filter(k=>k!=='__ACTION').map(k=>`<label><input type="checkbox" data-col="${esc(k)}" ${visible.includes(k)?'checked':''}> ${gridLabel(k)}</label>`).join('')}</div></div>
       </div>
-      <div class="grid-active-meta"><span>Showing ${filtered.length?`${start+1}–${end}`:'0'} of ${filtered.length} filtered · ${items.length} total</span><button class="clear-grid-filters ${(!prefs.search&&!Object.values(prefs.filters||{}).some(Boolean))?'hidden':''}">Clear filters</button></div>
+      <div class="grid-active-meta"><span>Showing ${filtered.length?`${start+1}–${end}`:'0'} of ${filtered.length} filtered · ${items.length} total${prefs.sortKey?` · Sorted by ${gridLabel(prefs.sortKey)} ${prefs.sortDir==='asc'?'↑':'↓'}`:''}</span><button class="clear-grid-filters ${(!prefs.search&&!Object.values(prefs.filters||{}).some(Boolean)&&!prefs.sortKey)?'hidden':''}">Reset view</button></div>
       <div class="table-wrap"><table class="data"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
       <div class="grid-footer">
         <div class="rows-control"><span>Rows per page</span><select class="page-size">${[10,25,50,100].map(n=>`<option value="${n}" ${n===prefs.pageSize?'selected':''}>${n}</option>`).join('')}</select></div>
@@ -94,21 +113,42 @@ async function mountDataGrid(container,opt){
         <div class="page-count">Page ${prefs.page} of ${pages}</div>
       </div>`;
 
-    const search=container.querySelector('.grid-search');search.oninput=()=>{prefs.search=search.value;prefs.page=1;saveGridPrefs(key,prefs);render()};
-    container.querySelectorAll('[data-filter]').forEach(sel=>sel.onchange=()=>{prefs.filters[sel.dataset.filter]=sel.value;prefs.page=1;saveGridPrefs(key,prefs);render()});
-    const colBtn=container.querySelector('.column-btn'),colMenu=container.querySelector('.column-menu');colBtn.onclick=e=>{e.stopPropagation();colMenu.classList.toggle('hidden')};
-    colMenu.onclick=e=>e.stopPropagation();
-    colMenu.querySelectorAll('[data-col]').forEach(cb=>cb.onchange=()=>{const col=cb.dataset.col;if(cb.checked&&!prefs.visibleColumns.includes(col))prefs.visibleColumns.push(col);if(!cb.checked)prefs.visibleColumns=prefs.visibleColumns.filter(x=>x!==col);if(!prefs.visibleColumns.length){cb.checked=true;prefs.visibleColumns=[col]}saveGridPrefs(key,prefs);render()});
+    const search=container.querySelector('.grid-search');
+    search.oninput=()=>{prefs.search=search.value;prefs.page=1;saveGridPrefs(key,prefs);render()};
+
+    container.querySelectorAll('[data-sort]').forEach(btn=>btn.onclick=e=>{
+      e.stopPropagation();const k=btn.dataset.sort;
+      if(prefs.sortKey===k)prefs.sortDir=prefs.sortDir==='asc'?'desc':'asc';
+      else{prefs.sortKey=k;prefs.sortDir='asc'}
+      prefs.page=1;saveGridPrefs(key,prefs);render()
+    });
+
+    container.querySelectorAll('[data-filter-menu]').forEach(btn=>btn.onclick=e=>{
+      e.stopPropagation();const k=btn.dataset.filterMenu,pop=container.querySelector('[data-filter-pop="'+CSS.escape(k)+'"]');
+      container.querySelectorAll('.th-filter-menu').forEach(x=>{if(x!==pop)x.classList.add('hidden')});pop?.classList.toggle('hidden')
+    });
+    container.querySelectorAll('[data-filter-select]').forEach(sel=>sel.onchange=()=>{
+      prefs.filters[sel.dataset.filterSelect]=sel.value;prefs.page=1;saveGridPrefs(key,prefs);render()
+    });
+
+    const colBtn=container.querySelector('.column-btn'),colMenu=container.querySelector('.column-menu');
+    colBtn.onclick=e=>{e.stopPropagation();colMenu.classList.toggle('hidden')};colMenu.onclick=e=>e.stopPropagation();
+    colMenu.querySelectorAll('[data-col]').forEach(cb=>cb.onchange=()=>{
+      const col=cb.dataset.col;if(cb.checked&&!prefs.visibleColumns.includes(col))prefs.visibleColumns.push(col);
+      if(!cb.checked)prefs.visibleColumns=prefs.visibleColumns.filter(x=>x!==col);
+      if(!prefs.visibleColumns.length){cb.checked=true;prefs.visibleColumns=[col]}
+      saveGridPrefs(key,prefs);render()
+    });
     container.querySelector('.page-size').onchange=e=>{prefs.pageSize=Number(e.target.value);prefs.page=1;saveGridPrefs(key,prefs);render()};
     container.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>{prefs.page=Number(b.dataset.page);saveGridPrefs(key,prefs);render()});
     container.querySelector('.prev').onclick=()=>{if(prefs.page>1){prefs.page--;saveGridPrefs(key,prefs);render()}};
     container.querySelector('.next').onclick=()=>{if(prefs.page<pages){prefs.page++;saveGridPrefs(key,prefs);render()}};
-    container.querySelector('.clear-grid-filters')?.addEventListener('click',()=>{prefs.search='';prefs.filters={};prefs.page=1;saveGridPrefs(key,prefs);render()});
+    container.querySelector('.clear-grid-filters')?.addEventListener('click',()=>{prefs.search='';prefs.filters={};prefs.sortKey='';prefs.sortDir='asc';prefs.page=1;saveGridPrefs(key,prefs);render()});
     if(opt.bindActions)opt.bindActions(pageRows,container);
   }
   rt.render=render;render();return rt
 }
-document.addEventListener('click',e=>{if(!e.target.closest('.grid-tool-wrap'))document.querySelectorAll('.column-menu').forEach(x=>x.classList.add('hidden'));if(!e.target.closest('.export-menu-wrap'))$('#exportMenu')?.classList.add('hidden')});
+document.addEventListener('click',e=>{if(!e.target.closest('.grid-tool-wrap'))document.querySelectorAll('.column-menu').forEach(x=>x.classList.add('hidden'));if(!e.target.closest('th'))document.querySelectorAll('.th-filter-menu').forEach(x=>x.classList.add('hidden'));if(!e.target.closest('.export-menu-wrap'))$('#exportMenu')?.classList.add('hidden')});
 const configs={
 raw:{title:'Raw Fabric',columns:['ROLL_ID','INWARD_DATE','SUPPLIER','VENDOR_ROLL_NO','FABRIC','INWARD_MTR','ISSUED_MTR','BALANCE_MTR','STATUS','__ACTION'],filters:['SUPPLIER','FABRIC','STATUS'],action:'New Inward',fields:['INWARD_DATE','SUPPLIER_ID','VENDOR_ROLL_NO','FABRIC_ID','INWARD_MTR','INVOICE_CHALLAN','LOT_REF','NOTES']},
 dye:{title:'Dyeing',columns:['DYE_PLAN_ID','DYE_BATCH_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR','ROLL_COUNT','ISSUE_MTR','RECEIVED_MTR','VARIANCE_MTR','USABLE_MTR','PLAN_VARIANCE_MTR','STATUS','__ACTION'],filters:['DYE_VENDOR','FABRIC','COLOR','STATUS'],action:'New Dye Plan',fields:['ISSUE_DATE','DYE_VENDOR_ID','ROLL_ID','COLOR_ID','ISSUE_MTR','NOTES']},
@@ -685,7 +725,24 @@ async function openMasterForm(type,row){
   $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;$('#masterForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.target),rec={entity:type};if(editing)rec[cfg.id]=row[cfg.id];for(const [k,t] of f){rec[k]=t==='check'?fd.has(k):(fd.get(k)||'')}try{await api('/api/data',{method:'POST',activity:'Saving '+cfg.label.replace(/s$/,'')+'…',success:cfg.label.replace(/s$/,'')+' saved',body:JSON.stringify({module:'master',record:rec,requestId})});dropCaches();closeModal();const d=await getCachedModule('masters',true);mastersCache=d.masters||{};drawMasterTable()}catch(err){toast(err.message,'bad',3500)}}
 }
 
-async function renderReports(force=false){try{const d=await getCachedModule('reports',force),v=d.kpis||{};$('#stage').innerHTML=`<section class="panel"><div class="panel-head"><h3>Production Reports</h3></div><div class="kpis">${Object.entries(v).map(([k,x])=>`<div class="kpi"><span>${k}</span><strong>${x}</strong></div>`).join('')}</div></section>`}catch(e){toast(e.message,'bad',3500)}}
+async function renderReports(force=false){
+  $('#stage').innerHTML=`<section class="panel"><div class="panel-head"><h3>Reports</h3></div><div class="master-tabs" id="reportTabs"><button class="active" data-rpt="summary">Production Summary</button><button data-rpt="audit">Audit Trail</button></div><div id="reportBody">Loading…</div></section>`;
+  const tabs=[...document.querySelectorAll('#reportTabs button')];
+  async function show(tab){
+    tabs.forEach(b=>b.classList.toggle('active',b.dataset.rpt===tab));state.activeGridKey='';
+    const host=$('#reportBody');host.innerHTML='Loading…';
+    try{
+      if(tab==='summary'){
+        const d=await getCachedModule('reports',force),v=d.kpis||{};
+        host.innerHTML=`<div class="kpis">${Object.entries(v).map(([k,x])=>`<div class="kpi"><span>${gridLabel(k)}</span><strong>${moneyless(x)}</strong></div>`).join('')}</div>`
+      }else{
+        const d=await getCachedModule('audit',force),items=d.items||[];
+        await mountDataGrid(host,{key:'reports:audit',title:'Audit Trail',items,columns:['TIMESTAMP','USER_NAME','USER_ID','ACTION','MODULE','RECORD_ID','OLD_VALUE_JSON','NEW_VALUE_JSON'],filters:['USER_NAME','ACTION','MODULE']})
+      }
+    }catch(e){host.innerHTML='';toast(e.message,'bad',4200)}
+  }
+  tabs.forEach(b=>b.onclick=()=>show(b.dataset.rpt));await show('summary')
+}
 async function renderUsers(force=false){
   $('#stage').innerHTML='<section class="panel"><div class="panel-head"><div><h3>User Management</h3><small>Cloudflare D1 user database</small></div><button class="btn teal" onclick="window.ERP.newUser()">+ Add User</button></div><div id="usersGrid">Loading…</div></section><section class="panel" style="margin-top:16px"><div class="panel-head"><h3>Database</h3></div><div class="smart-note"><b>Cloudflare D1 is the live primary database.</b> Google Sheets is no longer part of normal ERP reads/writes.</div></section>';
   try{
