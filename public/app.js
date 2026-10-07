@@ -1,4 +1,4 @@
-const APP_BUILD='0.15';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.16';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -110,12 +110,12 @@ async function mountDataGrid(container,opt){
 }
 document.addEventListener('click',e=>{if(!e.target.closest('.grid-tool-wrap'))document.querySelectorAll('.column-menu').forEach(x=>x.classList.add('hidden'));if(!e.target.closest('.export-menu-wrap'))$('#exportMenu')?.classList.add('hidden')});
 const configs={
-raw:{title:'Raw Fabric',columns:['ROLL_ID','INWARD_DATE','SUPPLIER','VENDOR_ROLL_NO','FABRIC','INWARD_MTR','STATUS'],filters:['SUPPLIER','FABRIC','STATUS'],action:'New Inward',fields:['INWARD_DATE','SUPPLIER_ID','VENDOR_ROLL_NO','FABRIC_ID','INWARD_MTR','INVOICE_CHALLAN','LOT_REF','NOTES']},
+raw:{title:'Raw Fabric',columns:['ROLL_ID','INWARD_DATE','SUPPLIER','VENDOR_ROLL_NO','FABRIC','INWARD_MTR','ISSUED_MTR','BALANCE_MTR','STATUS','__ACTION'],filters:['SUPPLIER','FABRIC','STATUS'],action:'New Inward',fields:['INWARD_DATE','SUPPLIER_ID','VENDOR_ROLL_NO','FABRIC_ID','INWARD_MTR','INVOICE_CHALLAN','LOT_REF','NOTES']},
 dye:{title:'Dyeing',columns:['DYE_PLAN_ID','DYE_BATCH_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR','ROLL_COUNT','ISSUE_MTR','RECEIVED_MTR','VARIANCE_MTR','USABLE_MTR','PLAN_VARIANCE_MTR','STATUS','__ACTION'],filters:['DYE_VENDOR','FABRIC','COLOR','STATUS'],action:'New Dye Plan',fields:['ISSUE_DATE','DYE_VENDOR_ID','ROLL_ID','COLOR_ID','ISSUE_MTR','NOTES']},
-production:{title:'Production / Cutting',columns:['PRODUCTION_BATCH_ID','PLAN_DATE','STYLE','DYE_BATCH_ID','PLANNED_QTY','ALLOCATED_MTR','TOTAL_CUT','STATUS'],filters:['STYLE','DYE_BATCH_ID','STATUS'],action:'New Production Batch',fields:['PLAN_DATE','DYE_BATCH_ID','STYLE_ID','PLANNED_QTY','ALLOCATED_MTR','NOTES']},
-stitching:{title:'Stitching',columns:['CHALLAN_ID','ISSUE_DATE','STITCHING_VENDOR','PRODUCTION_BATCH_ID','TOTAL_ISSUED','TOTAL_RECEIVED','PENDING_QTY','STATUS'],filters:['STITCHING_VENDOR','PRODUCTION_BATCH_ID','STATUS'],action:'New Challan',fields:['ISSUE_DATE','STITCHING_VENDOR_ID','PRODUCTION_BATCH_ID','M_ISSUED','L_ISSUED','XL_ISSUED','2XL_ISSUED','3XL_ISSUED','OTHER_ISSUED','NOTES']},
-qc:{title:'QC & Rework',columns:['QC_ID','QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','STATUS'],filters:['SIZE','CHALLAN_ID','STATUS'],action:'New QC Entry',fields:['QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','DEFECT_REASON','NOTES']},
-handover:{title:'Warehouse Handover',columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','PENDING_QTY','STATUS'],filters:['STYLE','COLOR','SIZE','STATUS'],action:'New Handover',fields:['HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE_ID','COLOR_ID','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','WAREHOUSE_REF','NOTES']}
+production:{title:'Production / Cutting',columns:['PRODUCTION_BATCH_ID','PLAN_DATE','STYLE','DYE_BATCH_ID','PLANNED_QTY','ALLOCATED_MTR','TOTAL_CUT','STATUS','__ACTION'],filters:['STYLE','DYE_BATCH_ID','STATUS'],action:'New Production Batch',fields:['PLAN_DATE','DYE_BATCH_ID','STYLE_ID','PLANNED_QTY','ALLOCATED_MTR','NOTES']},
+stitching:{title:'Stitching',columns:['CHALLAN_ID','ISSUE_DATE','STITCHING_VENDOR','PRODUCTION_BATCH_ID','TOTAL_ISSUED','TOTAL_RECEIVED','PENDING_QTY','STATUS','__ACTION'],filters:['STITCHING_VENDOR','PRODUCTION_BATCH_ID','STATUS'],action:'New Challan',fields:['ISSUE_DATE','STITCHING_VENDOR_ID','PRODUCTION_BATCH_ID','M_ISSUED','L_ISSUED','XL_ISSUED','2XL_ISSUED','3XL_ISSUED','OTHER_ISSUED','NOTES']},
+qc:{title:'QC & Rework',columns:['QC_ID','QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','STATUS','__ACTION'],filters:['SIZE','CHALLAN_ID','STATUS'],action:'New QC Entry',fields:['QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','DEFECT_REASON','NOTES']},
+handover:{title:'Warehouse Handover',columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','PENDING_QTY','STATUS','__ACTION'],filters:['STYLE','COLOR','SIZE','STATUS'],action:'New Handover',fields:['HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE_ID','COLOR_ID','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','WAREHOUSE_REF','NOTES']}
 };
 async function renderModule(m,force=false){
   const cfg=configs[m],s=$('#stage');
@@ -125,8 +125,17 @@ async function renderModule(m,force=false){
     const d=await getCachedModule(m,force),items=d.items||[];
     await mountDataGrid($('#gridHost'),{
       key:'module:'+m,title:cfg.title,items,columns:cfg.columns,filters:cfg.filters||[],
-      actionRenderer:m==='dye'?(r=>'<div class="row-actions">'+(!/^RECEIVED/.test(String(r.STATUS))?'<button class="btn ghost dye-receive-btn" data-idx="'+r.__gridIndex+'">Receive</button>':'')+'<button class="btn ghost dye-manage-btn" data-idx="'+r.__gridIndex+'">Manage</button></div>'):null,
-      bindActions:m==='dye'?((pageRows,host)=>{host.querySelectorAll('.dye-receive-btn').forEach(b=>b.onclick=()=>openDyeReceive(items[Number(b.dataset.idx)]));host.querySelectorAll('.dye-manage-btn').forEach(b=>b.onclick=()=>openDyeManage(items[Number(b.dataset.idx)]))}):null
+      actionRenderer:(r=>{
+        if(m==='dye')return '<div class="row-actions">'+(!/^RECEIVED/.test(String(r.STATUS))?'<button class="btn ghost dye-receive-btn" data-idx="'+r.__gridIndex+'">Receive</button>':'')+'<button class="btn ghost dye-manage-btn" data-idx="'+r.__gridIndex+'">Manage</button></div>';
+        if(m==='raw')return '<button class="btn ghost raw-manage-btn" data-idx="'+r.__gridIndex+'">Manage</button>';
+        if(['production','stitching','qc','handover'].includes(m))return '<button class="btn ghost txn-cancel-btn" data-idx="'+r.__gridIndex+'">Manage</button>';
+        return '—'
+      }),
+      bindActions:(pageRows,host)=>{
+        if(m==='dye'){host.querySelectorAll('.dye-receive-btn').forEach(b=>b.onclick=()=>openDyeReceive(items[Number(b.dataset.idx)]));host.querySelectorAll('.dye-manage-btn').forEach(b=>b.onclick=()=>openDyeManage(items[Number(b.dataset.idx)]))}
+        if(m==='raw')host.querySelectorAll('.raw-manage-btn').forEach(b=>b.onclick=()=>openRawManage(items[Number(b.dataset.idx)]));
+        if(['production','stitching','qc','handover'].includes(m))host.querySelectorAll('.txn-cancel-btn').forEach(b=>b.onclick=()=>openTxnManage(m,items[Number(b.dataset.idx)]));
+      }
     });
   }catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}
 }
@@ -240,6 +249,59 @@ function deriveRawFabricGroups(rawRolls=[]){
 
 
 
+
+async function openRawManage(row){
+  let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
+  const issued=Number(row.ISSUED_MTR||0),locked=issued>0.0001;
+  const suppliers=(l.vendors||[]).filter(v=>isTrue(v.ACTIVE)&&isTrue(v.FABRIC_SUPPLIER));
+  const fabrics=(l.fabrics||[]).filter(x=>isTrue(x.ACTIVE));
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>Manage Raw Fabric</h3><small>${esc(row.ROLL_ID)} · ${locked?'partially locked because dye issue exists':'fully editable'}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <form id="rawManageForm"><div class="form-grid">
+      <div class="field"><label>Inward Date</label><input name="INWARD_DATE" type="date" value="${esc(String(row.INWARD_DATE||'').slice(0,10))}"></div>
+      <div class="field"><label>Supplier</label><select name="SUPPLIER_ID">${suppliers.map(v=>`<option value="${esc(v.VENDOR_ID)}" ${String(v.VENDOR_ID)===String(row.SUPPLIER_ID)?'selected':''}>${esc(v.VENDOR_NAME)}</option>`).join('')}</select></div>
+      <div class="field"><label>Vendor Roll No</label><input name="VENDOR_ROLL_NO" value="${esc(row.VENDOR_ROLL_NO||'')}"></div>
+      <div class="field"><label>Fabric</label><select name="FABRIC_ID" ${locked?'disabled':''}>${fabrics.map(x=>`<option value="${esc(x.FABRIC_ID)}" ${String(x.FABRIC_ID)===String(row.FABRIC_ID)?'selected':''}>${esc(x.FABRIC_NAME)}</option>`).join('')}</select></div>
+      <div class="field"><label>Inward Meter</label><input name="INWARD_MTR" type="number" step="0.01" min="${issued||0.01}" value="${esc(row.INWARD_MTR)}"></div>
+      <div class="field"><label>Already Issued</label><input value="${moneyless(issued)} m" disabled></div>
+      <div class="field"><label>Balance</label><input value="${moneyless(row.BALANCE_MTR)} m" disabled></div>
+      <div class="field"><label>Invoice / Challan</label><input name="INVOICE_CHALLAN" value="${esc(row.INVOICE_CHALLAN||'')}"></div>
+      <div class="field"><label>Lot Ref</label><input name="LOT_REF" value="${esc(row.LOT_REF||'')}"></div>
+      <div class="field wide"><label>Notes</label><input name="NOTES" value="${esc(row.NOTES||'')}"></div>
+    </div>
+    ${locked?'<div class="smart-note"><b>Dependency lock:</b> Fabric type and cancellation are blocked because some quantity is already issued to dye. Inward meter can still be corrected, but not below issued meter.</div>':''}
+    <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary">Save Correction</button></div></form>
+    ${!locked?'<div class="danger-zone"><div><b>Cancel mistaken inward</b><small>Removes this roll from usable stock while preserving audit history.</small></div><button class="btn danger" id="cancelRawBtn">Cancel Inward</button></div>':''}
+  `;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  $('#rawManageForm').onsubmit=async e=>{
+    e.preventDefault();const fd=new FormData(e.target);
+    const rec={ROLL_ID:row.ROLL_ID,INWARD_DATE:fd.get('INWARD_DATE'),SUPPLIER_ID:fd.get('SUPPLIER_ID'),VENDOR_ROLL_NO:fd.get('VENDOR_ROLL_NO'),FABRIC_ID:locked?row.FABRIC_ID:fd.get('FABRIC_ID'),INWARD_MTR:fd.get('INWARD_MTR'),INVOICE_CHALLAN:fd.get('INVOICE_CHALLAN'),LOT_REF:fd.get('LOT_REF'),NOTES:fd.get('NOTES')};
+    try{await api('/api/data',{method:'POST',activity:'Saving raw fabric correction…',success:'Raw fabric corrected',body:JSON.stringify({module:'raw_edit',record:rec,requestId:newRequestId()})});dropCaches();closeModal();go('raw',true)}catch(err){toast(err.message,'bad',5000)}
+  };
+  $('#cancelRawBtn')?.addEventListener('click',async()=>{
+    if(!confirm('Cancel this raw inward roll?'))return;const reason=prompt('Reason for cancellation:','Mistaken entry')||'Mistaken entry';
+    try{await api('/api/data',{method:'POST',activity:'Cancelling raw inward…',success:'Raw inward cancelled',body:JSON.stringify({module:'raw_cancel',record:{ROLL_ID:row.ROLL_ID,REASON:reason},requestId:newRequestId()})});dropCaches();closeModal();go('raw',true)}catch(err){toast(err.message,'bad',5000)}
+  });
+}
+function openTxnManage(module,row){
+  const map={
+    production:{id:'PRODUCTION_BATCH_ID',cancel:'production_cancel',label:'Production Batch'},
+    stitching:{id:'CHALLAN_ID',cancel:'stitching_cancel',label:'Stitching Challan'},
+    qc:{id:'QC_ID',cancel:'qc_cancel',label:'QC Entry'},
+    handover:{id:'HANDOVER_ID',cancel:'handover_cancel',label:'Warehouse Handover'}
+  },cfg=map[module];if(!cfg)return;
+  const id=row[cfg.id];
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>Manage ${cfg.label}</h3><small>${esc(id)} · safe correction policy</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <div class="smart-note"><b>Global dependency rule:</b> cancellation is allowed only while no downstream transaction depends on this entry. If dependency exists, the system will block it and tell you what must be reversed first.</div>
+    <div class="danger-zone"><div><b>Cancel mistaken entry</b><small>Balances will recalculate automatically and the action will be audit logged.</small></div><button class="btn danger" id="cancelTxnBtn">Cancel Entry</button></div>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;
+  $('#cancelTxnBtn').onclick=async()=>{
+    if(!confirm('Cancel '+cfg.label+' '+id+'?'))return;const reason=prompt('Reason for cancellation:','Mistaken entry')||'Mistaken entry';
+    try{await api('/api/data',{method:'POST',activity:'Cancelling entry…',success:'Entry cancelled',body:JSON.stringify({module:cfg.cancel,record:{[cfg.id]:id,REASON:reason},requestId:newRequestId()})});dropCaches();closeModal();go(module,true)}catch(err){toast(err.message,'bad',5000)}
+  }
+}
 async function openDyeIssue(){
   const requestId=newRequestId();let l;
   try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
