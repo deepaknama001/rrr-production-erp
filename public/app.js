@@ -14,7 +14,6 @@ function setButtonBusy(btn,on,label='Working…'){if(!btn)return;if(on){if(btn.d
 function activityStart(label,button){state.netCount++;const hud=$('#operationHud');if(hud){$('#operationTitle').textContent=label;$('#operationSub').textContent='Please wait…';hud.classList.remove('hidden')}setStatus('↻ '+label,'busy');setButtonBusy(button,true,label.replace('…',''));const slow=setTimeout(()=>{if(state.netCount>0){if($('#operationSub'))$('#operationSub').textContent='Still working… do not click again';setStatus('↻ Still working…','busy')}},3500);return slow}
 function activityEnd(slow,button,ok=true,message=''){clearTimeout(slow);state.netCount=Math.max(0,state.netCount-1);setButtonBusy(button,false);if(state.netCount===0){$('#operationHud')?.classList.add('hidden');setStatus(ok?'● Ready':'● Action failed',ok?'ok':'bad')}if(message)toast(message,ok?'ok':'bad')}
 async function api(path,opt={}){const h={'content-type':'application/json',...(opt.headers||{})};if(state.token)h.authorization='Bearer '+state.token;const label=inferActivity(path,opt);const recentBtn=(Date.now()-state.lastButtonAt<1200)?state.lastButton:null;const btn=opt.button||recentBtn||null;const slow=activityStart(label,btn);try{const r=await fetch(path,{...opt,headers:h});const d=await r.json().catch(()=>({}));if(!r.ok){const e=new Error(d.error||'Request failed');e.status=r.status;throw e}if(String(opt.method||'GET').toUpperCase()==='POST'&&$('#modal'))$('#modal').dataset.dirty='0';activityEnd(slow,btn,true,opt.success||'');return d}catch(e){activityEnd(slow,btn,false,e.message||'Failed');throw e}}
-fetch('/api/health',{cache:'no-store'}).catch(()=>{});
 document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;state.lastButton=b;state.lastButtonAt=Date.now();b.classList.remove('tap');void b.offsetWidth;b.classList.add('tap');setTimeout(()=>b.classList.remove('tap'),260)},true);
 const moduleInflight=new Map();
 async function getCachedModule(module,force=false){
@@ -921,7 +920,7 @@ async function openProductionManage(row){
   $('#cancelProd')?.addEventListener('click',()=>cancelRecord('production_cancel',{PRODUCTION_BATCH_ID:id},'production batch','production'))
 }
 async function openProductionEdit(d){
-  let l;try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
+  let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
   const batches=l.dyeBatches||[],styles=l.styles||[],id=d.PRODUCTION_BATCH_ID;
   const allBatch=[...batches];if(!allBatch.some(x=>String(x.DYE_BATCH_ID)===String(d.DYE_BATCH_ID)))allBatch.unshift({DYE_BATCH_ID:d.DYE_BATCH_ID,FABRIC_NAME:d.FABRIC_ID,COLOR_NAME:d.COLOR||d.COLOR_ID,BALANCE_MTR:d.ALLOCATED_MTR});
   $('#modalBody').innerHTML=`
@@ -938,7 +937,7 @@ async function openProductionEdit(d){
   $('#prodEditForm').onsubmit=async e=>{e.preventDefault();const rec={...Object.fromEntries(new FormData(e.target).entries()),PRODUCTION_BATCH_ID:id};try{await api('/api/data',{method:'POST',activity:'Updating production plan…',success:'Production plan updated',body:JSON.stringify({module:'production_edit',record:rec,requestId:newRequestId()})});dropCaches();closeModal();go('production',true)}catch(err){toast(err.message,'bad',5000)}}
 }
 async function openCuttingActual(d){
-  let l;try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
+  let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
   const sizes=(l.sizes||[]).filter(x=>isTrue(x.ACTIVE)),old=Object.fromEntries((d.cutLines||[]).map(x=>[x.SIZE_ID,Number(x.QTY||0)])),cut=d.cut||{};
   if(!sizes.length)return toast('Create active sizes in Masters → Sizes first.','bad',4000);
   $('#modalBody').innerHTML=`
@@ -983,7 +982,7 @@ async function openStitchingManage(row){
   document.querySelectorAll('.cancel-stitch-receipt').forEach(b=>b.onclick=()=>cancelRecord('stitching_receipt_cancel',{RECEIPT_ID:b.dataset.id},'stitching receipt','stitching'))
 }
 async function openStitchingEdit(d){
-  let l;try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
+  let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
   const vendors=(l.vendors||[]).filter(v=>isTrue(v.ACTIVE)&&isTrue(v.STITCHING_VENDOR)),sizes=(l.sizes||[]).filter(x=>isTrue(x.ACTIVE));
   const vals=Object.fromEntries((d.issueLines||[]).map(x=>[x.SIZE_ID,x.QTY])),mx=Object.fromEntries((d.sizeBalances||[]).map(x=>[x.SIZE_ID,Number(x.BALANCE_QTY||0)+(vals[x.SIZE_ID]||0)]));
   $('#modalBody').innerHTML=`
@@ -1091,7 +1090,7 @@ function openWarehouseReceipt(d){
 }
 async function openDyeIssue(){
   const requestId=newRequestId();let l;
-  try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
+  try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
   const vendors=(l.vendors||[]).filter(v=>isTrue(v.DYE_VENDOR)&&isTrue(v.ACTIVE));
   const fabrics=(l.rawFabricGroups&&l.rawFabricGroups.length?l.rawFabricGroups:deriveRawFabricGroups(l.rawRolls||[]));
   const colors=(l.colors||[]).filter(c=>isTrue(c.ACTIVE));
@@ -1257,7 +1256,7 @@ async function openDyeManage(batchRow){
 
 async function openDyeReceive(batchRow){
   const requestId=newRequestId(),batchId=String(batchRow.DYE_BATCH_ID||'');let l;
-  try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
+  try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
   const batch=(l.dyePendingReceipt||[]).find(x=>String(x.DYE_BATCH_ID)===batchId)||batchRow;
   const issued=Number(batch.ISSUE_MTR||0),already=Number(batch.RECEIVED_MTR||0),plannedGap=issued-already;
   const defects=(l.defects||[]).filter(d=>!d.STAGE||/dye/i.test(String(d.STAGE)));
@@ -1299,7 +1298,7 @@ async function openDyeReceive(batchRow){
 }
 
 async function openProductionPlan(){
-  const requestId=newRequestId();let l;try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
+  const requestId=newRequestId();let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
   const batches=l.dyeBatches||[],styles=l.styles||[];
   if(!batches.length)return toast('No dyed usable stock is available. Dye receipt must be completed before production allocation.','bad',4500);
   if(!styles.length)return toast('Create active Styles in Masters first.','bad',3500);
@@ -1320,7 +1319,7 @@ async function openProductionPlan(){
 }
 
 async function openStitchingIssue(){
-  const requestId=newRequestId();let l;try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
+  const requestId=newRequestId();let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
   const vendors=(l.vendors||[]).filter(v=>isTrue(v.STITCHING_VENDOR)&&isTrue(v.ACTIVE)),batches=l.productionBatches||[],sizes=(l.sizes||[]).filter(x=>isTrue(x.ACTIVE));
   if(!vendors.length)return toast('Create an active Stitching Vendor in Masters → Vendors.','bad',4200);
   if(!sizes.length)return toast('Create active Sizes in Masters → Sizes.','bad',4200);
@@ -1354,7 +1353,7 @@ async function openStitchingIssue(){
 }
 
 async function openQcEntry(){
-  const requestId=newRequestId();let l;try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
+  const requestId=newRequestId();let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
   const challans=l.stitchingChallans||[],defects=(l.defects||[]).filter(x=>isTrue(x.ACTIVE));
   if(!challans.length)return toast('No stitching receipt is pending QC. Receive garments from stitching first.','bad',4500);
   $('#modalBody').innerHTML=`
@@ -1389,7 +1388,7 @@ async function openQcEntry(){
 }
 
 async function openWarehouseHandover(){
-  const requestId=newRequestId();let l;try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',3500)}
+  const requestId=newRequestId();let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
   const ready=l.warehouseReady||[];
   if(!ready.length)return toast('No QC-passed garment quantity is pending warehouse handover.','bad',4200);
   $('#modalBody').innerHTML=`
