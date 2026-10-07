@@ -40,8 +40,29 @@ function isQtyKey(k){return /(?:QTY|COUNT|PIECES|_CUT$|_ISSUED$|_RECEIVED$|PENDI
 function showApp(){$('#loginView').classList.add('hidden');$('#appView').classList.remove('hidden');$('#sideName').textContent=state.user.name;$('#sideRole').textContent=state.user.role;renderNav();go(allowed(state.current)?state.current:'dashboard')}
 function renderNav(){$('#nav').innerHTML=NAV.filter(x=>allowed(x[0])).map(([m,i,l])=>`<button data-m="${m}">${i} &nbsp; ${l}</button>`).join('');$('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>go(b.dataset.m))}
 async function go(m,force=false){if(!allowed(m))return;state.activeGridKey='';setStatus('↻ Opening '+(NAV.find(x=>x[0]===m)?.[2]||m)+'…','busy');state.current=m;sessionStorage.setItem('rrr_prod_page',m);document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.m===m));$('#pageTitle').textContent=NAV.find(x=>x[0]===m)?.[2]||m;if(m==='dashboard')return renderDashboard(force);if(m==='reports')return renderReports(force);if(m==='masters')return renderMasters(force);if(m==='users')return renderUsers(force);return renderModule(m,force)}
-async function renderDashboard(force=false){const s=$('#stage');s.innerHTML=`<section class="hero"><div><h2>Production Control</h2><p>Raw fabric to warehouse handover — one traceable workflow.</p></div><div>${new Date().toLocaleDateString()}</div></section><section class="kpis">${['Raw Available','At Dye','Dyed Available','Cut Pending','At Stitching','Ready Warehouse'].map(x=>`<div class="kpi"><span>${x}</span><strong>—</strong></div>`).join('')}</section><section class="grid2"><div class="panel"><div class="panel-head"><h3>Quick Actions</h3></div><div class="quick">${[['raw','New Fabric Inward'],['dye','Issue to Dye'],['production','Plan Production'],['stitching','Create Stitch Challan'],['qc','QC Entry'],['handover','Warehouse Handover']].filter(x=>allowed(x[0])).map(x=>`<button onclick="window.ERP.quick('${x[0]}')"><b>${x[1]}</b><small>Open module</small></button>`).join('')}</div></div><div class="panel"><div class="panel-head"><h3>System</h3></div><p>Cloudflare D1 primary database</p><p>Cloudflare secure frontend & API</p><p>User-wise permissions & audit trail</p></div></section>`;try{const d=await getCachedModule('dashboard',force);state.user=d.user||d.actor||state.user;const v=d.kpis||{};[v.rawAvailable,v.atDye,v.dyedAvailable,v.cutPending,v.atStitching,v.readyWarehouse].forEach((x,i)=>document.querySelectorAll('.kpi strong')[i].textContent=x??0)}catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}}
-
+async function renderDashboard(force=false){
+  const s=$('#stage');
+  s.innerHTML=`<section class="hero"><div><h2>Production Control</h2><p>Raw fabric to warehouse handover — one traceable workflow.</p></div><div>${fmtDate(todayLocal())}</div></section>
+    <section class="kpis" id="dashKpis">${['Raw Available','At Dye','Dyed Available','Cut Pending','At Stitching','Ready Warehouse'].map(x=>`<div class="kpi"><span>${x}</span><strong>—</strong></div>`).join('')}</section>
+    <section class="dashboard-alerts" id="dashAlerts"></section>
+    <section class="grid2"><div class="panel"><div class="panel-head"><h3>Quick Actions</h3></div><div class="quick">${[['raw','New Fabric Inward'],['dye','Issue to Dye'],['production','Plan Production'],['stitching','Create Stitch Challan'],['qc','QC Entry'],['handover','Warehouse Handover']].filter(x=>canAction(x[0],'create')).map(x=>`<button onclick="window.ERP.quick('${x[0]}')"><b>${x[1]}</b><small>Open module</small></button>`).join('')}</div></div>
+    <div class="panel"><div class="panel-head"><h3>System</h3></div><p>Cloudflare D1 primary database</p><p>Concurrency-safe production writes</p><p>User-wise permissions & audit trail</p><p id="buildInfo"></p></div></section>`;
+  $('#buildInfo').textContent='App build v'+APP_BUILD;
+  try{
+    const d=await getCachedModule('dashboard',force);state.user=d.user||d.actor||state.user;
+    try{localStorage.setItem('rrr_prod_user',JSON.stringify(state.user))}catch{}
+    const v=d.kpis||{};[v.rawAvailable,v.atDye,v.dyedAvailable,v.cutPending,v.atStitching,v.readyWarehouse].forEach((x,i)=>document.querySelectorAll('#dashKpis .kpi strong')[i].textContent=isQtyKey(Object.keys(v)[i]||'')?Math.round(Number(x||0)):moneyless(x??0));
+    const a=d.alerts||{},rates=a.rates||{},ex=a.exceptions||[];
+    $('#dashAlerts').innerHTML=`<div class="mini-metrics">
+      <div><span>Exceptions</span><b class="${Number(a.exceptionCount||0)>0?'metric-bad':''}">${Number(a.exceptionCount||0)}</b></div>
+      <div><span>Dye Defect</span><b>${Number(rates.dyeDefectPct||0).toFixed(2)}%</b></div>
+      <div><span>QC Rework</span><b>${Number(rates.qcReworkPct||0).toFixed(2)}%</b></div>
+      <div><span>QC Reject</span><b>${Number(rates.qcRejectPct||0).toFixed(2)}%</b></div>
+    </div>
+    ${ex.length?`<div class="panel exception-panel"><div class="panel-head"><div><h3>Needs Attention</h3><small>Ageing and pending production exceptions</small></div><button class="btn ghost" id="openExceptions">View All</button></div><div class="exception-list">${ex.map(x=>`<div><span class="exception-type">${esc(x.TYPE)}</span><b>${esc(x.RECORD_ID)}</b><span>${esc(x.OWNER||'')}</span><span>${Number(x.PENDING||0).toLocaleString('en-IN')} pending</span><strong>${Number(x.AGE_DAYS||0)}d</strong></div>`).join('')}</div></div>`:''}`;
+    $('#openExceptions')?.addEventListener('click',()=>go('reports').then(()=>setTimeout(()=>document.querySelector('[data-rpt="exceptions"]')?.click(),50)))
+  }catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}
+}
 const prefMem=new Map(),prefTimers=new Map();
 function prefLocalKey(page){return 'rrr_prod_pref_'+String(state.user?.userId||'anon')+'_'+page}
 
@@ -1414,25 +1435,43 @@ async function openMasterForm(type,row){
   $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;$('#masterForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.target),rec={entity:type};if(editing)rec[cfg.id]=row[cfg.id];for(const [k,t] of f){rec[k]=t==='check'?fd.has(k):(fd.get(k)||'')}try{await api('/api/data',{method:'POST',activity:'Saving '+cfg.label.replace(/s$/,'')+'…',success:cfg.label.replace(/s$/,'')+' saved',body:JSON.stringify({module:'master',record:rec,requestId})});dropCaches();closeModal();const d=await getCachedModule('masters',true);mastersCache=d.masters||{};drawMasterTable()}catch(err){toast(err.message,'bad',3500)}}
 }
 
+function auditDiffText(row){
+  let oldV={},newV={};try{oldV=JSON.parse(row.OLD_VALUE_JSON||'{}')}catch{}try{newV=JSON.parse(row.NEW_VALUE_JSON||'{}')}catch{}
+  const keys=[...new Set([...Object.keys(oldV||{}),...Object.keys(newV||{})])],parts=[];
+  for(const k of keys){const a=oldV?.[k],b=newV?.[k];if(JSON.stringify(a)!==JSON.stringify(b))parts.push(gridLabel(k)+': '+String(a??'—')+' → '+String(b??'—'))}
+  return parts.slice(0,8).join(' | ')||(row.ACTION||'Recorded action')
+}
+function showJsonChange(row){
+  $('#modalBody').innerHTML=`<div class="panel-head"><div><h3>Audit Change</h3><small>${esc(row.RECORD_ID||'')}</small></div><button class="btn ghost" id="closeModal">Close</button></div><div class="audit-detail"><div><b>Action</b><span>${esc(row.ACTION||'')}</span></div><div><b>User</b><span>${esc(row.USER_NAME||row.USER_ID||'')}</span></div><div><b>Time</b><span>${esc(fmtDate(row.TIMESTAMP,true))}</span></div><div class="wide"><b>Changes</b><span>${esc(auditDiffText(row))}</span></div><details class="wide"><summary>Technical before/after data</summary><pre>${esc(row.OLD_VALUE_JSON||'{}')}</pre><pre>${esc(row.NEW_VALUE_JSON||'{}')}</pre></details></div>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal
+}
+async function renderPagedSystemLog(type,host,offset=0){
+  const limit=100,d=await api('/api/data?module='+type+'&limit='+limit+'&offset='+offset,{activity:'Loading '+type+'…'}),items=d.items||[],total=Number(d.total||0);
+  if(type==='audit'){
+    const mapped=items.map(x=>({...x,CHANGES:auditDiffText(x),TIMESTAMP:fmtDate(x.TIMESTAMP,true)}));
+    host.innerHTML='<div id="logGrid"></div><div class="server-pager"></div>';
+    await mountDataGrid($('#logGrid'),{key:'reports:audit:'+offset,title:'Audit Trail',items:mapped,columns:['TIMESTAMP','USER_NAME','ACTION','MODULE','RECORD_ID','CHANGES','DEVICE_INFO','__ACTION'],filters:['USER_NAME','ACTION','MODULE'],selectable:false,actionRenderer:r=>'<button class="btn ghost audit-view" data-idx="'+r.__gridIndex+'">Details</button>',bindActions:(rows,h)=>h.querySelectorAll('.audit-view').forEach(b=>b.onclick=()=>showJsonChange(items[Number(b.dataset.idx)]))});
+  }else{
+    host.innerHTML='<div id="logGrid"></div><div class="server-pager"></div>';
+    await mountDataGrid($('#logGrid'),{key:'reports:errors:'+offset,title:'Application Errors',items,columns:['TIMESTAMP','USER_ID','MODULE','MESSAGE','CONTEXT_JSON'],filters:['MODULE','USER_ID'],selectable:false})
+  }
+  const p=host.querySelector('.server-pager');p.innerHTML=`<button class="btn ghost log-prev" ${offset<=0?'disabled':''}>Previous 100</button><span>${total?offset+1:0}–${Math.min(total,offset+limit)} of ${total}</span><button class="btn ghost log-next" ${offset+limit>=total?'disabled':''}>Next 100</button>`;p.querySelector('.log-prev').onclick=()=>renderPagedSystemLog(type,host,Math.max(0,offset-limit));p.querySelector('.log-next').onclick=()=>renderPagedSystemLog(type,host,offset+limit)
+}
 async function renderReports(force=false){
-  $('#stage').innerHTML=`<section class="panel"><div class="panel-head"><h3>Reports</h3></div><div class="master-tabs" id="reportTabs"><button class="active" data-rpt="summary">Production Summary</button><button data-rpt="audit">Audit Trail</button></div><div id="reportBody">Loading…</div></section>`;
+  $('#stage').innerHTML=`<section class="panel"><div class="panel-head"><div><h3>Reports & Operations</h3><small>Production performance, exceptions and system audit</small></div></div><div class="master-tabs" id="reportTabs"><button class="active" data-rpt="summary">Summary</button><button data-rpt="exceptions">Exceptions</button><button data-rpt="vendors">Vendor Performance</button>${canAction('reports','audit')?'<button data-rpt="audit">Audit Trail</button><button data-rpt="errors">Errors</button>':''}</div><div id="reportBody"><div class="skeleton-grid"></div></div></section>`;
   const tabs=[...document.querySelectorAll('#reportTabs button')];
   async function show(tab){
-    tabs.forEach(b=>b.classList.toggle('active',b.dataset.rpt===tab));state.activeGridKey='';
-    const host=$('#reportBody');host.innerHTML='Loading…';
+    tabs.forEach(b=>b.classList.toggle('active',b.dataset.rpt===tab));state.activeGridKey='';const host=$('#reportBody');host.innerHTML='<div class="skeleton-grid"></div>';
     try{
-      if(tab==='summary'){
-        const d=await getCachedModule('reports',force),v=d.kpis||{};
-        host.innerHTML=`<div class="kpis">${Object.entries(v).map(([k,x])=>`<div class="kpi"><span>${gridLabel(k)}</span><strong>${moneyless(x)}</strong></div>`).join('')}</div>`
-      }else{
-        const d=await getCachedModule('audit',force),items=d.items||[];
-        await mountDataGrid(host,{key:'reports:audit',title:'Audit Trail',items,columns:['TIMESTAMP','USER_NAME','USER_ID','ACTION','MODULE','RECORD_ID','OLD_VALUE_JSON','NEW_VALUE_JSON'],filters:['USER_NAME','ACTION','MODULE']})
-      }
+      if(tab==='audit'||tab==='errors')return renderPagedSystemLog(tab,host,0);
+      const d=await getCachedModule('reports',force),v=d.kpis||{},a=d.analytics||{},rates=a.rates||{};
+      if(tab==='summary')host.innerHTML=`<div class="kpis report-kpis">${Object.entries(v).map(([k,x])=>`<div class="kpi"><span>${gridLabel(k)}</span><strong>${moneyless(x)}</strong></div>`).join('')}</div><div class="mini-metrics"><div><span>Dye Defect %</span><b>${Number(rates.dyeDefectPct||0).toFixed(2)}%</b></div><div><span>QC Pass %</span><b>${Number(rates.qcPassPct||0).toFixed(2)}%</b></div><div><span>QC Rework %</span><b>${Number(rates.qcReworkPct||0).toFixed(2)}%</b></div><div><span>QC Reject %</span><b>${Number(rates.qcRejectPct||0).toFixed(2)}%</b></div></div>`;
+      if(tab==='exceptions')await mountDataGrid(host,{key:'reports:exceptions',title:'Production Exceptions',items:a.exceptions||[],columns:['TYPE','RECORD_ID','OWNER','AGE_DAYS','PENDING','MESSAGE'],filters:['TYPE','OWNER']});
+      if(tab==='vendors')host.innerHTML='<div class="report-split"><div><h4>Dye Vendors</h4><div id="dyeVendorGrid"></div></div><div><h4>Stitching Vendors</h4><div id="stitchVendorGrid"></div></div></div>',await mountDataGrid($('#dyeVendorGrid'),{key:'reports:dyevendors',title:'Dye Vendor Performance',items:a.dyeVendors||[],columns:['VENDOR','BATCHES','ISSUED_MTR','RECEIVED_MTR','DEFECT_MTR','PENDING_MTR','OLDEST_AGE_DAYS'],filters:['VENDOR']}),await mountDataGrid($('#stitchVendorGrid'),{key:'reports:stitchvendors',title:'Stitching Vendor Performance',items:a.stitchVendors||[],columns:['VENDOR','CHALLANS','ISSUED_QTY','RECEIVED_QTY','PENDING_QTY','OLDEST_AGE_DAYS'],filters:['VENDOR']})
     }catch(e){host.innerHTML='';toast(e.message,'bad',4200)}
   }
   tabs.forEach(b=>b.onclick=()=>show(b.dataset.rpt));await show('summary')
 }
-
 async function renderUsers(force=false){
   $('#stage').innerHTML='<section class="panel"><div class="panel-head"><div><h3>User Management</h3><small>Module + action-level permissions</small></div><button class="btn teal" id="addUserBtn">+ Add User</button></div><div id="usersGrid"><div class="skeleton-grid"></div></div></section>';
   $('#addUserBtn').onclick=()=>openUserForm(null);
