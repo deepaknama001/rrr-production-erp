@@ -1,4 +1,4 @@
-const APP_BUILD='0.12';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.13';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0};
@@ -46,6 +46,79 @@ function isTrue(v){return v===true||String(v).toLowerCase()==='true'||v===1}
 function todayLocal(){const d=new Date();return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')}
 function moneyless(n){const x=Number(n||0);return Number.isFinite(x)?x.toLocaleString('en-IN',{minimumFractionDigits:0,maximumFractionDigits:2}):'0'}
 function displayCell(k,v){if(v===null||v===undefined)return'';if(/(?:MTR|METER|VARIANCE)/i.test(String(k))&&v!==''&&!Number.isNaN(Number(v)))return moneyless(v);return esc(v)}
+
+function safeFileName(s){return String(s||'report').replace(/[^a-z0-9-_]+/gi,'-').replace(/^-+|-+$/g,'').toLowerCase()||'report'}
+function exportStamp(){const d=new Date();return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')}
+function currentPageLabel(){return NAV.find(x=>x[0]===state.current)?.[2]||$('#pageTitle')?.textContent||'Report'}
+function htmlText(el){return String(el?.textContent||'').replace(/\s+/g,' ').trim()}
+function getVisibleExportData(){
+  const title=currentPageLabel();
+  const tables=[...document.querySelectorAll('#stage table.data')].filter(t=>t.offsetParent!==null);
+  if(tables.length){
+    const table=tables[0],headers=[...table.querySelectorAll('thead th')].map(th=>htmlText(th));
+    const keep=headers.map((h,i)=>({h,i})).filter(x=>!/^(ACTION|__ACTION)$/i.test(x.h));
+    const rows=[...table.querySelectorAll('tbody tr')].filter(tr=>tr.offsetParent!==null).map(tr=>{
+      const cells=[...tr.querySelectorAll('td')];
+      if(!cells.length||cells.length===1&&/no records|loading/i.test(htmlText(cells[0])))return null;
+      return keep.map(x=>htmlText(cells[x.i]));
+    }).filter(Boolean);
+    return{title,headers:keep.map(x=>x.h),rows};
+  }
+  const kpis=[...document.querySelectorAll('#stage .kpi')].filter(x=>x.offsetParent!==null).map(x=>[htmlText(x.querySelector('span')),htmlText(x.querySelector('strong'))]).filter(x=>x[0]);
+  if(kpis.length)return{title,headers:['Metric','Value'],rows:kpis};
+  return{title,headers:['Message'],rows:[['No exportable data on this page.']]};
+}
+function loadScriptOnce(src,test){
+  if(test())return Promise.resolve();
+  return new Promise((resolve,reject)=>{
+    const existing=[...document.scripts].find(s=>s.src===src);
+    if(existing){existing.addEventListener('load',resolve,{once:true});existing.addEventListener('error',reject,{once:true});return}
+    const s=document.createElement('script');s.src=src;s.async=true;s.onload=resolve;s.onerror=()=>reject(new Error('Export library failed to load.'));document.head.appendChild(s)
+  })
+}
+async function ensureExcelLib(){
+  await loadScriptOnce('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',()=>!!window.XLSX);
+}
+async function ensurePdfLib(){
+  await loadScriptOnce('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js',()=>!!window.jspdf?.jsPDF);
+  await loadScriptOnce('https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js',()=>!!window.jspdf?.jsPDF?.API?.autoTable);
+}
+async function exportExcel(){
+  const btn=$('#exportExcelBtn'),data=getVisibleExportData(),slow=activityStart('Preparing Excel export…',btn);
+  try{
+    await ensureExcelLib();
+    const aoa=[[data.title],['Generated',new Date().toLocaleString()],[],data.headers,...data.rows];
+    const ws=XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols']=data.headers.map((h,i)=>({wch:Math.min(40,Math.max(String(h).length+3,...data.rows.map(r=>String(r[i]??'').length+2)))}));
+    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Report');
+    XLSX.writeFile(wb,'rrr-'+safeFileName(data.title)+'-'+exportStamp()+'.xlsx');
+    activityEnd(slow,btn,true,'Excel exported');
+  }catch(e){activityEnd(slow,btn,false,e.message||'Excel export failed')}
+}
+async function exportPdf(){
+  const btn=$('#exportPdfBtn'),data=getVisibleExportData(),slow=activityStart('Preparing PDF export…',btn);
+  try{
+    await ensurePdfLib();
+    const {jsPDF}=window.jspdf;
+    const landscape=data.headers.length>6;
+    const doc=new jsPDF({orientation:landscape?'landscape':'portrait',unit:'pt',format:'a4'});
+    const pageWidth=doc.internal.pageSize.getWidth();
+    doc.setFontSize(14);doc.text('RRR Production ERP',40,36);
+    doc.setFontSize(11);doc.text(data.title,40,54);
+    doc.setFontSize(8);doc.text('Generated: '+new Date().toLocaleString(),40,68);
+    doc.autoTable({
+      head:[data.headers],body:data.rows,startY:82,theme:'grid',
+      styles:{fontSize:7,cellPadding:3,overflow:'linebreak'},
+      headStyles:{fontStyle:'bold'},
+      margin:{left:32,right:32},
+      tableWidth:'auto',
+      didDrawPage:hook=>{const n=doc.internal.getNumberOfPages();doc.setFontSize(7);doc.text('Page '+n,pageWidth-62,doc.internal.pageSize.getHeight()-18)}
+    });
+    doc.save('rrr-'+safeFileName(data.title)+'-'+exportStamp()+'.pdf');
+    activityEnd(slow,btn,true,'PDF exported');
+  }catch(e){activityEnd(slow,btn,false,e.message||'PDF export failed')}
+}
+
 function vendorOptions(vendors,role){return (vendors||[]).filter(v=>isTrue(v.ACTIVE)&&(!role||isTrue(v[role]))).map(v=>`<option value="${esc(v.VENDOR_ID)}">${esc(v.VENDOR_NAME)}${role?'':''}</option>`).join('')}
 function colorOptions(colors){return (colors||[]).filter(x=>isTrue(x.ACTIVE)).map(x=>`<option value="${esc(x.COLOR_ID)}">${esc(x.COLOR_NAME)}${x.COLOR_CODE?' · '+esc(x.COLOR_CODE):''}</option>`).join('')}
 function styleOptions(styles){return (styles||[]).filter(x=>isTrue(x.ACTIVE)).map(x=>`<option value="${esc(x.STYLE_ID)}">${esc(x.STYLE_NAME)}${x.STYLE_CODE?' · '+esc(x.STYLE_CODE):''}</option>`).join('')}
@@ -437,6 +510,8 @@ function newUser(){const requestId=newRequestId(),f=['userId','name','pin','role
 $('#loginForm').onsubmit=async e=>{e.preventDefault();$('#loginError').textContent='';try{const d=await api('/api/login',{method:'POST',activity:'Logging in…',success:'Login successful',body:JSON.stringify({userId:$('#userId').value,pin:$('#pin').value})});state.token=d.token;state.user=d.user;localStorage.setItem('rrr_prod_token',d.token);localStorage.setItem('rrr_prod_user',JSON.stringify(d.user));dropCaches();if(d.kpis)writeCache('dashboard',{user:d.user,kpis:d.kpis});showApp()}catch(err){$('#loginError').textContent=err.message}}
 $('#logoutBtn').onclick=()=>{localStorage.removeItem('rrr_prod_token');localStorage.removeItem('rrr_prod_user');sessionStorage.clear();location.reload()};async function refreshCurrent(){if(state.refreshing)return;state.refreshing=true;const b=$('#refreshBtn');b?.classList.add('spinning');setStatus('↻ Refreshing…','busy');try{dropCaches();await go(state.current,true);setStatus('● Updated just now','ok')}catch(e){setStatus('● Refresh failed','bad');if(e.status===401){localStorage.removeItem('rrr_prod_token');localStorage.removeItem('rrr_prod_user');location.reload()}else toast(e.message,'bad',3500)}finally{state.refreshing=false;b?.classList.remove('spinning')}}
 $('#refreshBtn')?.addEventListener('click',refreshCurrent);
+$('#exportExcelBtn')?.addEventListener('click',exportExcel);
+$('#exportPdfBtn')?.addEventListener('click',exportPdf);
 window.addEventListener('online',()=>setStatus('● Online','ok'));window.addEventListener('offline',()=>setStatus('● Offline','bad'));
-window.ERP={quick:m=>go(m).then(()=>setTimeout(()=>$('#newBtn')?.click(),50)),newUser,refresh:refreshCurrent};
+window.ERP={quick:m=>go(m).then(()=>setTimeout(()=>$('#newBtn')?.click(),50)),newUser,refresh:refreshCurrent,exportExcel,exportPdf};
 if(state.token&&state.user){showApp();setStatus(navigator.onLine?'● Ready':'● Offline',navigator.onLine?'ok':'bad')}else if(state.token&&!state.user){localStorage.removeItem('rrr_prod_token')}
