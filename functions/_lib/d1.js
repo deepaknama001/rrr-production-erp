@@ -23,6 +23,47 @@ function kolkataStamp(){const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'A
 async function digestHex(text){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}
 function safeEq(a,b){a=String(a||'');b=String(b||'');if(a.length!==b.length)return false;let x=0;for(let i=0;i<a.length;i++)x|=a.charCodeAt(i)^b.charCodeAt(i);return x===0}
 
+let schemaReadyPromise=null;
+async function ensureSchema(env){
+  if(!env?.DB)return;
+  if(!schemaReadyPromise)schemaReadyPromise=env.DB.exec(D1_SCHEMA).catch(e=>{schemaReadyPromise=null;throw e});
+  await schemaReadyPromise
+}
+function intQty(v,label='Quantity',allowZero=true){
+  const x=Number(v);
+  if(!Number.isFinite(x)||!Number.isInteger(x)||(allowZero?x<0:x<=0))throw err(label+' must be a whole number'+(allowZero?' 0 or greater.':' greater than 0.'),400);
+  return x
+}
+const LEGACY_SIZE_COL={M:'M',L:'L',XL:'XL','2XL':'2XL','3XL':'3XL',OTHER:'OTHER'};
+async function actionPerms(db,userId){
+  const rs=await rows(db,'SELECT * FROM user_action_permissions WHERE USER_ID=?',String(userId||'').toUpperCase()),o={};
+  for(const r of rs)o[String(r.MODULE||'')]={
+    view:truth(r.CAN_VIEW),create:truth(r.CAN_CREATE),edit:truth(r.CAN_EDIT),
+    cancel:truth(r.CAN_CANCEL),export:truth(r.CAN_EXPORT),audit:truth(r.CAN_AUDIT)
+  };
+  return o
+}
+async function requireAction(db,user,module,action){
+  if(user.admin)return true;
+  if(module&&!user.permissions?.[module])throw err('Permission denied.',403);
+  const r=await row(db,'SELECT * FROM user_action_permissions WHERE USER_ID=? AND MODULE=?',String(user.userId).toUpperCase(),String(module));
+  if(!r)return true;
+  const col={view:'CAN_VIEW',create:'CAN_CREATE',edit:'CAN_EDIT',cancel:'CAN_CANCEL',export:'CAN_EXPORT',audit:'CAN_AUDIT'}[action];
+  if(col&&!truth(r[col]))throw err('You do not have '+action+' permission for this module.',403);
+  return true
+}
+async function acquireLock(db,key,requestId=''){
+  const cutoff=new Date(Date.now()-30000).toISOString();
+  await db.prepare('DELETE FROM resource_locks WHERE ACQUIRED_AT<?').bind(cutoff).run();
+  const r=await db.prepare('INSERT OR IGNORE INTO resource_locks(RESOURCE_KEY,REQUEST_ID,ACQUIRED_AT) VALUES(?,?,?)').bind(String(key),String(requestId||''),now()).run();
+  if((r.meta?.changes||0)<1)throw err('Another user is updating this stock right now. Please retry in a moment.',409)
+}
+async function releaseLock(db,key){try{await db.prepare('DELETE FROM resource_locks WHERE RESOURCE_KEY=?').bind(String(key)).run()}catch{}}
+async function logError(db,userId,module,e,context={}){
+  try{await db.prepare('INSERT INTO app_errors(ERROR_ID,TIMESTAMP,USER_ID,MODULE,MESSAGE,STACK,CONTEXT_JSON) VALUES(?,?,?,?,?,?,?)')
+    .bind(uuid(),now(),String(userId||''),String(module||''),String(e?.message||e||''),String(e?.stack||''),JSON.stringify(context||{})).run()}catch{}
+}
+
 export function hasD1(env){return !!env?.DB}
 export async function d1Ready(env){
   if(!hasD1(env))return false;
@@ -98,13 +139,13 @@ async function pinSalt(db){const r=await row(db,"SELECT value FROM system_meta W
 async function hashPin(db,id,pin){return digestHex(String(id).toUpperCase()+'|'+String(pin)+'|'+await pinSalt(db))}
 
 export async function loginD1(env,{userId,pin}){
-  const db=env.DB,id=String(userId||'').trim().toUpperCase();if(!id||!pin)throw err('Employee ID and PIN required.',400);
+  await ensureSchema(env);const db=env.DB,id=String(userId||'').trim().toUpperCase();if(!id||!pin)throw err('Employee ID and PIN required.',400);
   const u=await userRow(db,id);if(!u||!truth(u.ACTIVE))throw err('Invalid Employee ID or PIN.',401);
   if(u.LOCKED_UNTIL&&new Date(u.LOCKED_UNTIL).getTime()>Date.now())throw err('Too many failed attempts. Try again later.',429);
   const ok=safeEq(await hashPin(db,id,pin),u.PIN_HASH);
   if(!ok){let attempts=n(u.FAILED_ATTEMPTS)+1,locked='';if(attempts>=5){locked=new Date(Date.now()+10*60*1000).toISOString();attempts=0}await db.prepare('UPDATE users SET FAILED_ATTEMPTS=?,LOCKED_UNTIL=?,UPDATED_AT=? WHERE USER_ID=?').bind(attempts,locked,now(),id).run();throw err(locked?'Login locked for 10 minutes.':'Invalid Employee ID or PIN.',locked?429:401)}
   await db.prepare('UPDATE users SET FAILED_ATTEMPTS=0,LOCKED_UNTIL=?,LAST_LOGIN=?,UPDATED_AT=? WHERE USER_ID=?').bind('',now(),now(),id).run();
-  return{user:publicUser(u),kpis:await kpisD1(db)}
+  const pu=publicUser(await userRow(db,id));pu.actions=await actionPerms(db,id);return{user:pu,kpis:await kpisD1(db)}
 }
 
 async function nextSeq(db,prefix){
@@ -523,8 +564,8 @@ async function traceRecord(db,type,id){
   }
 }
 export async function getDataD1(env,{module,actorUserId,id='',type=''}){
-  const db=env.DB,m=String(module||'dashboard'),trailPerm=m==='trail'?({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[String(type||'').toLowerCase()]||null):null,perm=trailPerm||({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc',reports:'reports'}[m]||null),a=await actor(db,actorUserId,perm,false);
-  if(m==='dashboard')return{user:a,kpis:await kpisD1(db)};if(m==='trail')return{trail:await traceRecord(db,type,id)};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db)};if(m==='audit'){await actor(db,actorUserId,'reports',false);return{items:await rows(db,'SELECT AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON FROM audit_log ORDER BY TIMESTAMP DESC LIMIT 2000')}};if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
+  await ensureSchema(env);const db=env.DB,m=String(module||'dashboard'),trailPerm=m==='trail'?({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[String(type||'').toLowerCase()]||null):null,perm=trailPerm||({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc',reports:'reports'}[m]||null),a=await actor(db,actorUserId,perm,false);
+  if(m==='dashboard'){a.actions=await actionPerms(db,a.userId);return{user:a,kpis:await kpisD1(db)}};if(m==='trail')return{trail:await traceRecord(db,type,id)};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db)};if(m==='audit'){await actor(db,actorUserId,'reports',false);return{items:await rows(db,'SELECT AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON FROM audit_log ORDER BY TIMESTAMP DESC LIMIT 2000')}};if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
 }
 
 async function saveMaster(db,r,a){
@@ -751,6 +792,6 @@ async function completeRequest(db,id,result){if(id)await db.prepare('UPDATE requ
 async function failRequest(db,id){if(id)await db.prepare("DELETE FROM request_log WHERE request_id=? AND result_json='__PENDING__'").bind(id).run()}
 
 export async function saveRecordD1(env,p){
-  const db=env.DB,m=String(p.module||''),perm={raw:'raw',raw_bulk:'raw',raw_edit:'raw',raw_cancel:'raw',dye:'dye',dye_bulk:'dye',dye_plan:'dye',dye_receive:'dye',dye_edit_batch:'dye',dye_edit_receipt:'dye',dye_cancel_batch:'dye',production:'production',production_cancel:'production',stitching:'stitching',stitching_cancel:'stitching',qc:'qc',qc_cancel:'qc',handover:'qc',handover_cancel:'qc'}[m]||null,a=await actor(db,p.actorUserId,perm,false),req=String(p.requestId||''),reservation=await reserveRequest(db,req,m);if(!reservation.owner)return reservation.result;
+  await ensureSchema(env);const db=env.DB,m=String(p.module||''),perm={raw:'raw',raw_bulk:'raw',raw_edit:'raw',raw_cancel:'raw',dye:'dye',dye_bulk:'dye',dye_plan:'dye',dye_receive:'dye',dye_edit_batch:'dye',dye_edit_receipt:'dye',dye_cancel_batch:'dye',production:'production',production_cancel:'production',stitching:'stitching',stitching_cancel:'stitching',qc:'qc',qc_cancel:'qc',handover:'qc',handover_cancel:'qc'}[m]||null,a=await actor(db,p.actorUserId,perm,false),req=String(p.requestId||''),reservation=await reserveRequest(db,req,m);if(!reservation.owner)return reservation.result;
   try{let record;if(m==='raw_bulk')record=await saveRawBulk(db,p.record||{},a);else if(m==='raw_edit')record=await editRaw(db,p.record||{},a);else if(m==='raw_cancel')record=await cancelRaw(db,p.record||{},a);else if(m==='dye')record=await saveDyeSingle(db,p.record||{},a);else if(m==='dye_bulk')record=await saveDyeBulk(db,p.record||{},a);else if(m==='dye_plan')record=await saveDyePlan(db,p.record||{},a);else if(m==='dye_receive')record=await saveDyeReceive(db,p.record||{},a);else if(m==='dye_edit_batch')record=await editDyeBatch(db,p.record||{},a);else if(m==='dye_edit_receipt')record=await editDyeReceipt(db,p.record||{},a);else if(m==='dye_cancel_batch')record=await cancelDyeBatch(db,p.record||{},a);else if(m==='production')record=await saveProduction(db,p.record||{},a);else if(m==='production_cancel')record=await cancelProduction(db,p.record||{},a);else if(m==='stitching')record=await saveStitching(db,p.record||{},a);else if(m==='stitching_cancel')record=await cancelStitching(db,p.record||{},a);else if(m==='qc')record=await saveQc(db,p.record||{},a);else if(m==='qc_cancel')record=await cancelQc(db,p.record||{},a);else if(m==='handover')record=await saveHandover(db,p.record||{},a);else if(m==='handover_cancel')record=await cancelHandover(db,p.record||{},a);else if(m==='master'){await actor(db,p.actorUserId,null,true);record=await saveMaster(db,p.record||{},a)}else if(m==='raw'){record=await saveRawBulk(db,{...p.record,items:[{FABRIC_ID:p.record?.FABRIC_ID,VENDOR_ROLL_NO:p.record?.VENDOR_ROLL_NO,INWARD_MTR:p.record?.INWARD_MTR,NOTES:p.record?.NOTES}]},a)}else throw err('This legacy transaction type is not available in D1 mode.',404);const result={saved:true,record};await completeRequest(db,req,result);return result}catch(e){await failRequest(db,req);throw e}
 }
