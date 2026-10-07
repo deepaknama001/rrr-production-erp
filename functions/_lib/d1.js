@@ -1097,10 +1097,10 @@ async function getStitchingDetail(db,id){
     FROM stitching_jobs x LEFT JOIN vendors v ON v.VENDOR_ID=x.STITCHING_VENDOR_ID
     LEFT JOIN styles st ON st.STYLE_ID=x.STYLE_ID LEFT JOIN colors c ON c.COLOR_ID=x.COLOR_ID WHERE x.CHALLAN_ID=?`,id);
   if(!s)throw err('Stitching challan not found.',404);
-  const issueLines=await issueLinesForChallan(db,id),receivedLines=await receivedLinesForChallan(db,id),pendingLines=await stitchingPendingLines(db,id),qcPending=await qcPendingLines(db,id);
+  const issueLines=await issueLinesForChallan(db,id),receivedLines=await receivedLinesForChallan(db,id),pendingLines=await stitchingPendingLines(db,id),qcPending=await qcPendingLines(db,id),sizeBalances=await cutBalanceLines(db,s.PRODUCTION_BATCH_ID);
   const receipts=await rows(db,"SELECT * FROM stitching_receipts WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY RECEIPT_DATE,RECEIPT_ID",id);
   const qcCount=n((await row(db,"SELECT COUNT(*) c FROM qc_events WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
-  return{...s,issueLines,receivedLines,pendingLines,qcPendingLines:qcPending,receipts,qcCount}
+  return{...s,issueLines,receivedLines,pendingLines,qcPendingLines:qcPending,sizeBalances,receipts,qcCount}
 }
 async function getQcDetail(db,id){
   const q=await row(db,'SELECT * FROM qc_events WHERE QC_ID=?',id);if(!q)throw err('QC entry not found.',404);
