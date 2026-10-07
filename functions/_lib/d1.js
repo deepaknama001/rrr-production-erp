@@ -181,7 +181,22 @@ async function dyePlanSummary(db,plan){
   return{DYE_PLAN_ID:plan,ISSUE_MTR:issued,RECEIVED_MTR:received,USABLE_MTR:usable,DEFECT_MTR:defect,VARIANCE_MTR:received-issued,BATCH_COUNT:sums.length,CLOSED_BATCHES:closed,ALL_CLOSED:!!sums.length&&closed===sums.length}
 }
 
-async function viewRaw(db){return rows(db,`SELECT r.*,COALESCE(v.VENDOR_NAME,r.SUPPLIER_ID) SUPPLIER,COALESCE(f.FABRIC_NAME,r.FABRIC_ID) FABRIC FROM raw_inward r LEFT JOIN vendors v ON v.VENDOR_ID=r.SUPPLIER_ID LEFT JOIN fabrics f ON f.FABRIC_ID=r.FABRIC_ID WHERE COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY r.CREATED_AT DESC,r.ROLL_ID DESC`)}
+async function viewRaw(db){return rows(db,`
+  SELECT r.*,COALESCE(v.VENDOR_NAME,r.SUPPLIER_ID) SUPPLIER,COALESCE(f.FABRIC_NAME,r.FABRIC_ID) FABRIC,
+         COALESCE(d.ISSUED_MTR,0) ISSUED_MTR,
+         MAX(0,r.INWARD_MTR-COALESCE(d.ISSUED_MTR,0)) BALANCE_MTR,
+         CASE
+           WHEN COALESCE(r.STATUS,'') LIKE 'CANCELLED%' THEN 'CANCELLED'
+           WHEN COALESCE(d.ISSUED_MTR,0)<=0.0001 THEN 'AVAILABLE'
+           WHEN r.INWARD_MTR-COALESCE(d.ISSUED_MTR,0)<=0.0001 THEN 'FULLY ISSUED'
+           ELSE 'PARTIAL'
+         END STATUS
+  FROM raw_inward r
+  LEFT JOIN vendors v ON v.VENDOR_ID=r.SUPPLIER_ID
+  LEFT JOIN fabrics f ON f.FABRIC_ID=r.FABRIC_ID
+  LEFT JOIN (SELECT ROLL_ID,SUM(ISSUE_MTR) ISSUED_MTR FROM dye_jobs GROUP BY ROLL_ID)d ON d.ROLL_ID=r.ROLL_ID
+  WHERE COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%'
+  ORDER BY r.CREATED_AT DESC,r.ROLL_ID DESC`)}
 async function viewDye(db){
   return rows(db,`
     WITH j AS (
@@ -399,6 +414,59 @@ async function saveRawBulk(db,r,a){
   await db.batch(stmts);const result={INWARD_ID:inward,ROLL_COUNT:items.length,TOTAL_MTR:items.reduce((s,x)=>s+n(x.INWARD_MTR),0),ROLL_IDS:rolls};await audit(db,a,'CREATE_BULK','RAW',inward,'',JSON.stringify(result));return result
 }
 
+
+async function editRaw(db,r,a){
+  const roll=String(r.ROLL_ID||''),old=await row(db,'SELECT * FROM raw_inward WHERE ROLL_ID=?',roll);
+  if(!old)throw err('Raw roll not found.',404);
+  const issued=n((await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) q FROM dye_jobs WHERE ROLL_ID=?',roll))?.q);
+  const newQty=n(r.INWARD_MTR??old.INWARD_MTR);requirePos(newQty,'Inward meter');
+  if(newQty+0.0001<issued)throw err('Inward meter cannot be less than already-issued '+issued+' m.',409);
+  const newFabric=String(r.FABRIC_ID??old.FABRIC_ID);
+  if(issued>0.0001&&newFabric!==String(old.FABRIC_ID))throw err('Fabric type cannot be changed after this roll has been issued to dye.',409);
+  const supplier=String(r.SUPPLIER_ID??old.SUPPLIER_ID);
+  if(!await row(db,'SELECT 1 ok FROM vendors WHERE VENDOR_ID=? AND ACTIVE=1 AND FABRIC_SUPPLIER=1',supplier))throw err('Select a valid active Fabric Supplier.',400);
+  if(!await row(db,'SELECT 1 ok FROM fabrics WHERE FABRIC_ID=? AND ACTIVE=1',newFabric))throw err('Select a valid active fabric.',400);
+  const t=now();
+  await db.prepare(`UPDATE raw_inward SET INWARD_DATE=?,SUPPLIER_ID=?,VENDOR_ROLL_NO=?,FABRIC_ID=?,INWARD_MTR=?,INVOICE_CHALLAN=?,LOT_REF=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE ROLL_ID=?`)
+    .bind(dateOnly(r.INWARD_DATE||old.INWARD_DATE),supplier,String(r.VENDOR_ROLL_NO??old.VENDOR_ROLL_NO),newFabric,newQty,String(r.INVOICE_CHALLAN??old.INVOICE_CHALLAN),String(r.LOT_REF??old.LOT_REF),String(r.NOTES??old.NOTES),a.userId,t,roll).run();
+  const after=await row(db,'SELECT * FROM raw_inward WHERE ROLL_ID=?',roll);
+  await audit(db,a,'EDIT_RAW','RAW',roll,JSON.stringify(old),JSON.stringify(after));return after
+}
+async function cancelRaw(db,r,a){
+  const roll=String(r.ROLL_ID||''),old=await row(db,'SELECT * FROM raw_inward WHERE ROLL_ID=?',roll);if(!old)throw err('Raw roll not found.',404);
+  const issued=n((await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) q FROM dye_jobs WHERE ROLL_ID=?',roll))?.q);
+  if(issued>0.0001)throw err('This roll has already been issued to dye. Cancel/reverse downstream dye issue first.',409);
+  const t=now(),reason=String(r.REASON||'Mistaken entry');
+  await db.prepare("UPDATE raw_inward SET STATUS=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE ROLL_ID=?")
+    .bind('CANCELLED',String(old.NOTES||'')+(old.NOTES?' | ':'')+'Cancelled: '+reason,a.userId,t,roll).run();
+  await audit(db,a,'CANCEL_RAW','RAW',roll,JSON.stringify(old),JSON.stringify({cancelled:true,reason}));return{ROLL_ID:roll,cancelled:true}
+}
+async function cancelProduction(db,r,a){
+  const id=String(r.PRODUCTION_BATCH_ID||''),old=await row(db,'SELECT * FROM production_batches WHERE PRODUCTION_BATCH_ID=?',id);if(!old)throw err('Production batch not found.',404);
+  const downstream=n((await row(db,'SELECT COUNT(*) c FROM stitching_jobs WHERE PRODUCTION_BATCH_ID=?',id))?.c);
+  if(downstream)throw err('Production batch already has stitching challans. Reverse/cancel them first.',409);
+  await db.prepare('DELETE FROM production_batches WHERE PRODUCTION_BATCH_ID=?').bind(id).run();
+  await audit(db,a,'CANCEL_PRODUCTION','PRODUCTION',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason:String(r.REASON||'Mistaken entry')}));return{PRODUCTION_BATCH_ID:id,cancelled:true}
+}
+async function cancelStitching(db,r,a){
+  const id=String(r.CHALLAN_ID||''),old=await row(db,'SELECT * FROM stitching_jobs WHERE CHALLAN_ID=?',id);if(!old)throw err('Stitching challan not found.',404);
+  const downstream=n((await row(db,'SELECT COUNT(*) c FROM qc_events WHERE CHALLAN_ID=?',id))?.c);
+  if(downstream)throw err('This challan already has QC entries. Reverse/cancel QC first.',409);
+  await db.prepare('DELETE FROM stitching_jobs WHERE CHALLAN_ID=?').bind(id).run();
+  await audit(db,a,'CANCEL_STITCHING','STITCHING',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason:String(r.REASON||'Mistaken entry')}));return{CHALLAN_ID:id,cancelled:true}
+}
+async function cancelQc(db,r,a){
+  const id=String(r.QC_ID||''),old=await row(db,'SELECT * FROM qc_events WHERE QC_ID=?',id);if(!old)throw err('QC entry not found.',404);
+  const downstream=n((await row(db,`SELECT COUNT(*) c FROM warehouse_handover WHERE PRODUCTION_BATCH_ID=? AND STYLE_ID=? AND COLOR_ID=? AND SIZE=?`,old.PRODUCTION_BATCH_ID,old.STYLE_ID,old.COLOR_ID,old.SIZE))?.c);
+  if(downstream)throw err('This QC result has downstream warehouse handover. Reverse/cancel handover first.',409);
+  await db.prepare('DELETE FROM qc_events WHERE QC_ID=?').bind(id).run();
+  await audit(db,a,'CANCEL_QC','QC',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason:String(r.REASON||'Mistaken entry')}));return{QC_ID:id,cancelled:true}
+}
+async function cancelHandover(db,r,a){
+  const id=String(r.HANDOVER_ID||''),old=await row(db,'SELECT * FROM warehouse_handover WHERE HANDOVER_ID=?',id);if(!old)throw err('Handover entry not found.',404);
+  await db.prepare('DELETE FROM warehouse_handover WHERE HANDOVER_ID=?').bind(id).run();
+  await audit(db,a,'CANCEL_HANDOVER','HANDOVER',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason:String(r.REASON||'Mistaken entry')}));return{HANDOVER_ID:id,cancelled:true}
+}
 async function saveDyeSingle(db,r,a){
   const roll=String(r.ROLL_ID||''),issue=n(r.ISSUE_MTR);requirePos(issue,'Issue meter');
   const rr=await row(db,"SELECT * FROM raw_inward WHERE ROLL_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",roll);if(!rr)throw err('Raw roll not found.',400);
@@ -549,6 +617,6 @@ async function completeRequest(db,id,result){if(id)await db.prepare('UPDATE requ
 async function failRequest(db,id){if(id)await db.prepare("DELETE FROM request_log WHERE request_id=? AND result_json='__PENDING__'").bind(id).run()}
 
 export async function saveRecordD1(env,p){
-  const db=env.DB,m=String(p.module||''),perm={raw:'raw',raw_bulk:'raw',dye:'dye',dye_bulk:'dye',dye_plan:'dye',dye_receive:'dye',dye_edit_batch:'dye',dye_edit_receipt:'dye',dye_cancel_batch:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[m]||null,a=await actor(db,p.actorUserId,perm,false),req=String(p.requestId||''),reservation=await reserveRequest(db,req,m);if(!reservation.owner)return reservation.result;
-  try{let record;if(m==='raw_bulk')record=await saveRawBulk(db,p.record||{},a);else if(m==='dye')record=await saveDyeSingle(db,p.record||{},a);else if(m==='dye_bulk')record=await saveDyeBulk(db,p.record||{},a);else if(m==='dye_plan')record=await saveDyePlan(db,p.record||{},a);else if(m==='dye_receive')record=await saveDyeReceive(db,p.record||{},a);else if(m==='dye_edit_batch')record=await editDyeBatch(db,p.record||{},a);else if(m==='dye_edit_receipt')record=await editDyeReceipt(db,p.record||{},a);else if(m==='dye_cancel_batch')record=await cancelDyeBatch(db,p.record||{},a);else if(m==='production')record=await saveProduction(db,p.record||{},a);else if(m==='stitching')record=await saveStitching(db,p.record||{},a);else if(m==='qc')record=await saveQc(db,p.record||{},a);else if(m==='handover')record=await saveHandover(db,p.record||{},a);else if(m==='master'){await actor(db,p.actorUserId,null,true);record=await saveMaster(db,p.record||{},a)}else if(m==='raw'){record=await saveRawBulk(db,{...p.record,items:[{FABRIC_ID:p.record?.FABRIC_ID,VENDOR_ROLL_NO:p.record?.VENDOR_ROLL_NO,INWARD_MTR:p.record?.INWARD_MTR,NOTES:p.record?.NOTES}]},a)}else throw err('This legacy transaction type is not available in D1 mode.',404);const result={saved:true,record};await completeRequest(db,req,result);return result}catch(e){await failRequest(db,req);throw e}
+  const db=env.DB,m=String(p.module||''),perm={raw:'raw',raw_bulk:'raw',raw_edit:'raw',raw_cancel:'raw',dye:'dye',dye_bulk:'dye',dye_plan:'dye',dye_receive:'dye',dye_edit_batch:'dye',dye_edit_receipt:'dye',dye_cancel_batch:'dye',production:'production',production_cancel:'production',stitching:'stitching',stitching_cancel:'stitching',qc:'qc',qc_cancel:'qc',handover:'qc',handover_cancel:'qc'}[m]||null,a=await actor(db,p.actorUserId,perm,false),req=String(p.requestId||''),reservation=await reserveRequest(db,req,m);if(!reservation.owner)return reservation.result;
+  try{let record;if(m==='raw_bulk')record=await saveRawBulk(db,p.record||{},a);else if(m==='raw_edit')record=await editRaw(db,p.record||{},a);else if(m==='raw_cancel')record=await cancelRaw(db,p.record||{},a);else if(m==='dye')record=await saveDyeSingle(db,p.record||{},a);else if(m==='dye_bulk')record=await saveDyeBulk(db,p.record||{},a);else if(m==='dye_plan')record=await saveDyePlan(db,p.record||{},a);else if(m==='dye_receive')record=await saveDyeReceive(db,p.record||{},a);else if(m==='dye_edit_batch')record=await editDyeBatch(db,p.record||{},a);else if(m==='dye_edit_receipt')record=await editDyeReceipt(db,p.record||{},a);else if(m==='dye_cancel_batch')record=await cancelDyeBatch(db,p.record||{},a);else if(m==='production')record=await saveProduction(db,p.record||{},a);else if(m==='production_cancel')record=await cancelProduction(db,p.record||{},a);else if(m==='stitching')record=await saveStitching(db,p.record||{},a);else if(m==='stitching_cancel')record=await cancelStitching(db,p.record||{},a);else if(m==='qc')record=await saveQc(db,p.record||{},a);else if(m==='qc_cancel')record=await cancelQc(db,p.record||{},a);else if(m==='handover')record=await saveHandover(db,p.record||{},a);else if(m==='handover_cancel')record=await cancelHandover(db,p.record||{},a);else if(m==='master'){await actor(db,p.actorUserId,null,true);record=await saveMaster(db,p.record||{},a)}else if(m==='raw'){record=await saveRawBulk(db,{...p.record,items:[{FABRIC_ID:p.record?.FABRIC_ID,VENDOR_ROLL_NO:p.record?.VENDOR_ROLL_NO,INWARD_MTR:p.record?.INWARD_MTR,NOTES:p.record?.NOTES}]},a)}else throw err('This legacy transaction type is not available in D1 mode.',404);const result={saved:true,record};await completeRequest(db,req,result);return result}catch(e){await failRequest(db,req);throw e}
 }
