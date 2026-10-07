@@ -39,8 +39,8 @@ function fmtDate(v,withTime=false){
 function isQtyKey(k){return /(?:QTY|COUNT|PIECES|_CUT$|_ISSUED$|_RECEIVED$|PENDING)/i.test(String(k))}
 function syncShell(){if($('#appVersion'))$('#appVersion').textContent='v'+APP_BUILD;const exp=document.querySelector('.export-menu-wrap');if(exp){const ok=state.current==='dashboard'?canAction('reports','export'):((state.current==='masters'||state.current==='users')?!!state.user?.admin:canAction(state.current,'export'));exp.classList.toggle('hidden',!ok)}}
 let notificationTimer=null;
-function setExceptionBadge(n){const b=$('#notificationBtn'),c=$('#notificationCount');if(!b||!c)return;const x=Math.max(0,Number(n||0));c.textContent=x>99?'99+':String(x);b.classList.toggle('hidden',x===0)}
-async function refreshExceptionBadge(){if(!state.token)return;try{const r=await fetch('/api/data?module=dashboard',{headers:{authorization:'Bearer '+state.token}});if(!r.ok)return;const d=await r.json();setExceptionBadge(d.alerts?.exceptionCount||0)}catch{}}
+function setExceptionBadge(n){const b=$('#notificationBtn'),c=$('#notificationCount');if(!b||!c)return;const permitted=canAction('reports','view'),x=permitted?Math.max(0,Number(n||0)):0;c.textContent=x>99?'99+':String(x);b.classList.toggle('hidden',!permitted||x===0)}
+async function refreshExceptionBadge(){if(!state.token||!canAction('reports','view')){setExceptionBadge(0);return}try{const r=await fetch('/api/data?module=dashboard',{headers:{authorization:'Bearer '+state.token}});if(!r.ok)return;const d=await r.json();setExceptionBadge(d.alerts?.exceptionCount||0)}catch{}}
 function startNotificationPolling(){clearInterval(notificationTimer);refreshExceptionBadge();notificationTimer=setInterval(refreshExceptionBadge,5*60*1000)}
 function showApp(){$('#loginView').classList.add('hidden');$('#appView').classList.remove('hidden');$('#sideName').textContent=state.user.name;$('#sideRole').textContent=state.user.role;syncShell();renderNav();startNotificationPolling();go(allowed(state.current)?state.current:'dashboard')}
 function setMobileNav(open){document.body.classList.toggle('nav-open',!!open);$('#navOverlay')?.classList.toggle('hidden',!open)}
