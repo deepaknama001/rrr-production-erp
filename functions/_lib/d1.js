@@ -523,7 +523,7 @@ async function traceRecord(db,type,id){
   }
 }
 export async function getDataD1(env,{module,actorUserId,id='',type=''}){
-  const db=env.DB,m=String(module||'dashboard'),perm={raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc',reports:'reports'}[m]||null,a=await actor(db,actorUserId,perm,false);
+  const db=env.DB,m=String(module||'dashboard'),trailPerm=m==='trail'?({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[String(type||'').toLowerCase()]||null):null,perm=trailPerm||({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc',reports:'reports'}[m]||null),a=await actor(db,actorUserId,perm,false);
   if(m==='dashboard')return{user:a,kpis:await kpisD1(db)};if(m==='trail')return{trail:await traceRecord(db,type,id)};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db)};if(m==='audit'){await actor(db,actorUserId,'reports',false);return{items:await rows(db,'SELECT AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON FROM audit_log ORDER BY TIMESTAMP DESC LIMIT 2000')}};if(m==='masters'){await actor(db,actorUserId,null,true);return{masters:await masterData(db)}}throw err('Unknown module.',404)
 }
 
