@@ -39,8 +39,9 @@ function fmtDate(v,withTime=false){
 function isQtyKey(k){return /(?:QTY|COUNT|PIECES|_CUT$|_ISSUED$|_RECEIVED$|PENDING)/i.test(String(k))}
 function syncShell(){if($('#appVersion'))$('#appVersion').textContent='v'+APP_BUILD;const exp=document.querySelector('.export-menu-wrap');if(exp){const ok=state.current==='dashboard'?canAction('reports','export'):((state.current==='masters'||state.current==='users')?!!state.user?.admin:canAction(state.current,'export'));exp.classList.toggle('hidden',!ok)}}
 function showApp(){$('#loginView').classList.add('hidden');$('#appView').classList.remove('hidden');$('#sideName').textContent=state.user.name;$('#sideRole').textContent=state.user.role;syncShell();renderNav();go(allowed(state.current)?state.current:'dashboard')}
-function renderNav(){$('#nav').innerHTML=NAV.filter(x=>allowed(x[0])).map(([m,i,l])=>`<button data-m="${m}">${i} &nbsp; ${l}</button>`).join('');$('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>go(b.dataset.m))}
-async function go(m,force=false){if(!allowed(m))return;state.activeGridKey='';setStatus('↻ Opening '+(NAV.find(x=>x[0]===m)?.[2]||m)+'…','busy');state.current=m;sessionStorage.setItem('rrr_prod_page',m);syncShell();document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.m===m));$('#pageTitle').textContent=NAV.find(x=>x[0]===m)?.[2]||m;if(m==='dashboard')return renderDashboard(force);if(m==='reports')return renderReports(force);if(m==='masters')return renderMasters(force);if(m==='users')return renderUsers(force);return renderModule(m,force)}
+function setMobileNav(open){document.body.classList.toggle('nav-open',!!open);$('#navOverlay')?.classList.toggle('hidden',!open)}
+function renderNav(){$('#nav').innerHTML=NAV.filter(x=>allowed(x[0])).map(([m,i,l])=>`<button data-m="${m}">${i} &nbsp; ${l}</button>`).join('');$('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>{setMobileNav(false);go(b.dataset.m)})}
+async function go(m,force=false){if(!allowed(m))return;state.activeGridKey='';setStatus('↻ Opening '+(NAV.find(x=>x[0]===m)?.[2]||m)+'…','busy');state.current=m;sessionStorage.setItem('rrr_prod_page',m);syncShell();setMobileNav(false);document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.m===m));$('#pageTitle').textContent=NAV.find(x=>x[0]===m)?.[2]||m;if(m==='dashboard')return renderDashboard(force);if(m==='reports')return renderReports(force);if(m==='masters')return renderMasters(force);if(m==='users')return renderUsers(force);return renderModule(m,force)}
 async function renderDashboard(force=false){
   const s=$('#stage');
   s.innerHTML=`<section class="hero"><div><h2>Production Control</h2><p>Raw fabric to warehouse handover — one traceable workflow.</p></div><div>${fmtDate(todayLocal())}</div></section>
@@ -1521,6 +1522,8 @@ function openUserForm(row){
   }
 }
 function newUser(){openUserForm(null)}
+$('#mobileMenuBtn')?.addEventListener('click',()=>setMobileNav(!document.body.classList.contains('nav-open')));
+$('#navOverlay')?.addEventListener('click',()=>setMobileNav(false));
 document.addEventListener('input',e=>{if(e.target.closest?.('#modal form'))$('#modal').dataset.dirty='1'},true);
 document.addEventListener('change',e=>{if(e.target.closest?.('#modal form'))$('#modal').dataset.dirty='1'},true);
 document.addEventListener('keydown',e=>{
