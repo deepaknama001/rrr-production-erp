@@ -1,4 +1,4 @@
-const APP_BUILD='0.31';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.33';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -485,13 +485,19 @@ async function renderModule(m,force=false){
   try{
     const d=await getCachedModule(m,force),items=d.items||[],summaries=summaryForModule(m,items);
     let current='summary',selectedTrail=null;
-    try{const pr=await api('/api/preferences?page='+encodeURIComponent(m+':view'));current=['summary','detail','trail'].includes(pr?.prefs?.view)?pr.prefs.view:'summary'}catch{}
-    async function setView(view,trailIdentity=null){
+    try{const lv=localStorage.getItem(prefLocalKey(m+':view'));if(['summary','detail','trail'].includes(lv))current=lv}catch{}
+    fetch('/api/preferences?page='+encodeURIComponent(m+':view'),{headers:{authorization:'Bearer '+state.token}})
+      .then(r=>r.ok?r.json():null).then(pr=>{const v=pr?.prefs?.view;if(['summary','detail','trail'].includes(v))try{localStorage.setItem(prefLocalKey(m+':view'),v)}catch{}}).catch(()=>{});
+    async function setView(view,trailIdentity=null,persist=true){
       current=view;if(trailIdentity)selectedTrail=trailIdentity;
       document.querySelectorAll('#moduleViewTabs button').forEach(b=>b.classList.toggle('active',b.dataset.view===current));
-      fetch('/api/preferences',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+state.token},body:JSON.stringify({page:m+':view',prefs:{view:current}})}).catch(()=>{});
+      try{localStorage.setItem(prefLocalKey(m+':view'),current)}catch{}
+      if(persist)fetch('/api/preferences',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+state.token},body:JSON.stringify({page:m+':view',prefs:{view:current}})}).catch(()=>{});
       const host=$('#gridHost');
-      if(current==='trail')return renderTrailView(host,selectedTrail);
+      if(current==='trail'){
+        if(!selectedTrail&&items.length){const seed=moduleRecordIdentity(m,items[0]);if(seed?.id)selectedTrail=seed}
+        return renderTrailView(host,selectedTrail)
+      }
       if(current==='summary'){
         return mountDataGrid(host,{
           key:'module:'+m+':summary',title:cfg.title+' - Summary',items:summaries,columns:summaryColumns(m),filters:[],
@@ -519,7 +525,7 @@ async function renderModule(m,force=false){
       })
     }
     document.querySelectorAll('#moduleViewTabs button').forEach(b=>b.onclick=()=>setView(b.dataset.view));
-    await setView(current)
+    await setView(current,null,false)
   }catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}
 }
 
@@ -578,22 +584,22 @@ async function renderDyeModule(force=false){
   try{
     const d=await getCachedModule('dye',force),items=d.items||[];
     let view='plan',selectedTrail=null;
-    try{
-      const pr=await api('/api/preferences?page='+encodeURIComponent('dye:view'));
-      view=['plan','batch','trail'].includes(pr?.prefs?.view)?pr.prefs.view:'plan'
-    }catch{
-      const lv=localStorage.getItem(prefLocalKey('dye:view'));view=['plan','batch','trail'].includes(lv)?lv:'plan'
-    }
-    async function setView(next,trailIdentity=null){
+    try{const lv=localStorage.getItem(prefLocalKey('dye:view'));if(['plan','batch','trail'].includes(lv))view=lv}catch{}
+    fetch('/api/preferences?page='+encodeURIComponent('dye:view'),{headers:{authorization:'Bearer '+state.token}})
+      .then(r=>r.ok?r.json():null).then(pr=>{const v=pr?.prefs?.view;if(['plan','batch','trail'].includes(v))try{localStorage.setItem(prefLocalKey('dye:view'),v)}catch{}}).catch(()=>{});
+    async function setView(next,trailIdentity=null,persist=true){
       view=next;if(trailIdentity)selectedTrail=trailIdentity;
       document.querySelectorAll('#dyeViewTabs button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
       try{localStorage.setItem(prefLocalKey('dye:view'),view)}catch{}
-      fetch('/api/preferences',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+state.token},body:JSON.stringify({page:'dye:view',prefs:{view}})}).catch(()=>{});
-      if(view==='trail')return renderTrailView($('#gridHost'),selectedTrail);
+      if(persist)fetch('/api/preferences',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+state.token},body:JSON.stringify({page:'dye:view',prefs:{view}})}).catch(()=>{});
+      if(view==='trail'){
+        if(!selectedTrail){const first=items.find(x=>x?.DYE_BATCH_ID);if(first)selectedTrail={type:'dye',id:String(first.DYE_BATCH_ID),label:String(first.DYE_BATCH_ID)}}
+        return renderTrailView($('#gridHost'),selectedTrail)
+      }
       if(view==='plan')await renderDyePlanGrid(items,id=>setView('trail',id));else await renderDyeBatchGrid(items,id=>setView('trail',id))
     }
     document.querySelectorAll('#dyeViewTabs button').forEach(b=>b.onclick=()=>setView(b.dataset.view));
-    await setView(view)
+    await setView(view,null,false)
   }catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}
 }
 
