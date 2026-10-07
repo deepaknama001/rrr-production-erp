@@ -727,12 +727,13 @@ function loadScriptOnce(src,test){
     const s=document.createElement('script');s.src=src;s.async=true;s.onload=resolve;s.onerror=()=>reject(new Error('Export library failed to load.'));document.head.appendChild(s)
   })
 }
+async function loadScriptFallback(urls,test){let last;for(const u of urls){try{await loadScriptOnce(u,test);if(test())return}catch(e){last=e}}throw last||new Error('Export library failed to load.')}
 async function ensureExcelLib(){
-  await loadScriptOnce('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',()=>!!window.XLSX);
+  await loadScriptFallback(['https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js','https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'],()=>!!window.XLSX);
 }
 async function ensurePdfLib(){
-  await loadScriptOnce('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js',()=>!!window.jspdf?.jsPDF);
-  await loadScriptOnce('https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js',()=>!!window.jspdf?.jsPDF?.API?.autoTable);
+  await loadScriptFallback(['https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js','https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'],()=>!!window.jspdf?.jsPDF);
+  await loadScriptFallback(['https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js','https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js'],()=>!!window.jspdf?.jsPDF?.API?.autoTable);
 }
 async function exportExcel(){
   const btn=$('#exportExcelBtn'),data=getVisibleExportData(),slow=activityStart('Preparing Excel export…',btn);
