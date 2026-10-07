@@ -1169,7 +1169,7 @@ async function openDyeManage(batchRow){
     detail=d.detail;l=look;
   }catch(e){return toast(e.message,'bad',4200)}
   const downstream=Number(detail.downstreamCount||0),receipts=detail.receipts||[],lines=detail.lines||[];
-  const canEditIssue=downstream===0&&receipts.length===0,canCorrectReceipt=downstream===0&&receipts.length>0,canCancel=downstream===0;
+  const canEditIssue=downstream===0&&receipts.length===0&&canAction('dye','edit'),canCorrectReceipt=downstream===0&&receipts.length>0&&canAction('dye','edit'),canCancel=downstream===0&&canAction('dye','cancel');
   const vendors=(l.vendors||[]).filter(v=>isTrue(v.ACTIVE)&&isTrue(v.DYE_VENDOR));
   const colors=(l.colors||[]).filter(x=>isTrue(x.ACTIVE));
   const defects=(l.defects||[]).filter(d=>!d.STAGE||/dye/i.test(String(d.STAGE)));
@@ -1209,9 +1209,9 @@ async function openDyeManage(batchRow){
     ${receiptHtml}
     ${canCancel?`<div class="danger-zone"><div><b>Cancel this dye batch</b><small>Removes this batch and its dye receipts, restores raw-fabric availability, and writes an audit entry.</small></div><button class="btn danger" id="cancelDyeBatchBtn">Cancel Batch</button></div>`:''}
   `;
-  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;mountAttachmentPanel('dye',batchId);
 
-  if(canEditIssue){
+  if(canEditIssue&&canAction('dye','edit')){
     $('#dyeIssueEditForm').onsubmit=async e=>{
       e.preventDefault();const fd=new FormData(e.target),items=[...document.querySelectorAll('#dyeIssueEditForm tbody tr')].map(tr=>({ROLL_ID:tr.querySelector('.edit-roll-id').value,ISSUE_MTR:tr.querySelector('.edit-roll-qty').value}));
       try{await api('/api/data',{method:'POST',activity:'Saving dye issue correction…',success:'Dye issue corrected',body:JSON.stringify({module:'dye_edit_batch',record:{DYE_BATCH_ID:batchId,ISSUE_DATE:fd.get('ISSUE_DATE'),DYE_VENDOR_ID:fd.get('DYE_VENDOR_ID'),COLOR_ID:fd.get('COLOR_ID'),NOTES:fd.get('NOTES'),items},requestId:newRequestId()})});dropCaches();closeModal();go('dye',true)}catch(err){toast(err.message,'bad',5000)}
