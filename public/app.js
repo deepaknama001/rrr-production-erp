@@ -1,4 +1,4 @@
-const APP_BUILD='0.21';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.22';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -280,7 +280,7 @@ document.addEventListener('click',e=>{
 });
 const configs={
 raw:{title:'Raw Fabric',columns:['ROLL_ID','INWARD_DATE','SUPPLIER','VENDOR_ROLL_NO','FABRIC','INWARD_MTR','ISSUED_MTR','BALANCE_MTR','STATUS','__ACTION'],filters:['SUPPLIER','FABRIC','STATUS'],action:'New Inward',fields:['INWARD_DATE','SUPPLIER_ID','VENDOR_ROLL_NO','FABRIC_ID','INWARD_MTR','INVOICE_CHALLAN','LOT_REF','NOTES']},
-dye:{title:'Dyeing',columns:['DYE_PLAN_ID','DYE_BATCH_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR','ROLL_COUNT','ISSUE_MTR','RECEIVED_MTR','VARIANCE_MTR','USABLE_MTR','PLAN_VARIANCE_MTR','STATUS','__ACTION'],filters:['DYE_VENDOR','FABRIC','COLOR','STATUS'],action:'New Dye Plan',fields:['ISSUE_DATE','DYE_VENDOR_ID','ROLL_ID','COLOR_ID','ISSUE_MTR','NOTES']},
+dye:{title:'Dyeing',columns:['DYE_PLAN_ID','DYE_BATCH_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR','ROLL_COUNT','ISSUE_MTR','RECEIVED_MTR','VARIANCE_MTR','USABLE_MTR','STATUS','__ACTION'],filters:['DYE_VENDOR','FABRIC','COLOR','STATUS'],action:'New Dye Plan',fields:['ISSUE_DATE','DYE_VENDOR_ID','ROLL_ID','COLOR_ID','ISSUE_MTR','NOTES']},
 production:{title:'Production / Cutting',columns:['PRODUCTION_BATCH_ID','PLAN_DATE','STYLE','DYE_BATCH_ID','PLANNED_QTY','ALLOCATED_MTR','TOTAL_CUT','STATUS','__ACTION'],filters:['STYLE','DYE_BATCH_ID','STATUS'],action:'New Production Batch',fields:['PLAN_DATE','DYE_BATCH_ID','STYLE_ID','PLANNED_QTY','ALLOCATED_MTR','NOTES']},
 stitching:{title:'Stitching',columns:['CHALLAN_ID','ISSUE_DATE','STITCHING_VENDOR','PRODUCTION_BATCH_ID','TOTAL_ISSUED','TOTAL_RECEIVED','PENDING_QTY','STATUS','__ACTION'],filters:['STITCHING_VENDOR','PRODUCTION_BATCH_ID','STATUS'],action:'New Challan',fields:['ISSUE_DATE','STITCHING_VENDOR_ID','PRODUCTION_BATCH_ID','M_ISSUED','L_ISSUED','XL_ISSUED','2XL_ISSUED','3XL_ISSUED','OTHER_ISSUED','NOTES']},
 qc:{title:'QC & Rework',columns:['QC_ID','QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','STATUS','__ACTION'],filters:['SIZE','CHALLAN_ID','STATUS'],action:'New QC Entry',fields:['QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','DEFECT_REASON','NOTES']},
@@ -288,6 +288,7 @@ handover:{title:'Warehouse Handover',columns:['HANDOVER_ID','HANDOVER_DATE','PRO
 };
 async function renderModule(m,force=false){
   const cfg=configs[m],s=$('#stage');
+  if(m==='dye')return renderDyeModule(force);
   s.innerHTML=`<section class="panel"><div class="panel-head"><h3>${cfg.title}</h3><button class="btn teal" id="newBtn">+ ${cfg.action}</button></div><div id="gridHost">Loading…</div></section>`;
   $('#newBtn').onclick=()=>openActionForm(m);
   try{
@@ -295,18 +296,140 @@ async function renderModule(m,force=false){
     await mountDataGrid($('#gridHost'),{
       key:'module:'+m,title:cfg.title,items,columns:cfg.columns,filters:cfg.filters||[],
       actionRenderer:(r=>{
-        if(m==='dye')return '<div class="row-actions">'+(!/^RECEIVED/.test(String(r.STATUS))?'<button class="btn ghost dye-receive-btn" data-idx="'+r.__gridIndex+'">Receive</button>':'')+'<button class="btn ghost dye-manage-btn" data-idx="'+r.__gridIndex+'">Manage</button></div>';
         if(m==='raw')return '<button class="btn ghost raw-manage-btn" data-idx="'+r.__gridIndex+'">Manage</button>';
         if(['production','stitching','qc','handover'].includes(m))return '<button class="btn ghost txn-cancel-btn" data-idx="'+r.__gridIndex+'">Manage</button>';
         return '—'
       }),
       bindActions:(pageRows,host)=>{
-        if(m==='dye'){host.querySelectorAll('.dye-receive-btn').forEach(b=>b.onclick=()=>openDyeReceive(items[Number(b.dataset.idx)]));host.querySelectorAll('.dye-manage-btn').forEach(b=>b.onclick=()=>openDyeManage(items[Number(b.dataset.idx)]))}
         if(m==='raw')host.querySelectorAll('.raw-manage-btn').forEach(b=>b.onclick=()=>openRawManage(items[Number(b.dataset.idx)]));
         if(['production','stitching','qc','handover'].includes(m))host.querySelectorAll('.txn-cancel-btn').forEach(b=>b.onclick=()=>openTxnManage(m,items[Number(b.dataset.idx)]));
       }
     });
   }catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}
+}
+
+function buildDyePlans(items){
+  const map=new Map();
+  for(const r of items||[]){
+    const id=String(r.DYE_PLAN_ID||'UNPLANNED');
+    let p=map.get(id);
+    if(!p){
+      p={DYE_PLAN_ID:id,ISSUE_DATE:r.ISSUE_DATE||'',vendors:new Set(),fabrics:new Set(),colors:new Set(),BATCH_COUNT:0,ISSUE_MTR:0,RECEIVED_MTR:0,PENDING_MTR:0,USABLE_MTR:0,OPEN_BATCHES:0,batches:[]};
+      map.set(id,p)
+    }
+    if(r.DYE_VENDOR)p.vendors.add(String(r.DYE_VENDOR));
+    if(r.FABRIC)p.fabrics.add(String(r.FABRIC));
+    if(r.COLOR)p.colors.add(String(r.COLOR));
+    p.BATCH_COUNT++;
+    p.ISSUE_MTR+=Number(r.ISSUE_MTR||0);
+    p.RECEIVED_MTR+=Number(r.RECEIVED_MTR||0);
+    p.PENDING_MTR+=Number(r.PENDING_MTR||0);
+    p.USABLE_MTR+=Number(r.USABLE_MTR||0);
+    if(!isTrue(r.CLOSED))p.OPEN_BATCHES++;
+    p.batches.push(r)
+  }
+  return [...map.values()].map(p=>{
+    const complete=p.OPEN_BATCHES===0;
+    const variance=complete?p.RECEIVED_MTR-p.ISSUE_MTR:null;
+    let status;
+    if(complete)status=variance>0.0001?'COMPLETE EXCESS':variance<-0.0001?'COMPLETE SHORT':'COMPLETE EXACT';
+    else status=p.RECEIVED_MTR>0?'PARTIAL RECEIVED':'AT DYE VENDOR';
+    return{
+      DYE_PLAN_ID:p.DYE_PLAN_ID,ISSUE_DATE:p.ISSUE_DATE,
+      DYE_VENDOR:[...p.vendors].join(', '),FABRIC:[...p.fabrics].join(', '),
+      COLOR_COUNT:p.colors.size,BATCH_COUNT:p.BATCH_COUNT,OPEN_BATCHES:p.OPEN_BATCHES,
+      ISSUE_MTR:p.ISSUE_MTR,RECEIVED_MTR:p.RECEIVED_MTR,PENDING_MTR:p.PENDING_MTR,
+      USABLE_MTR:p.USABLE_MTR,FINAL_NET_VARIANCE_MTR:complete?variance:'',PLAN_STATUS:status,
+      __batches:p.batches
+    }
+  }).sort((a,b)=>String(b.ISSUE_DATE).localeCompare(String(a.ISSUE_DATE))||String(b.DYE_PLAN_ID).localeCompare(String(a.DYE_PLAN_ID)))
+}
+
+async function renderDyeModule(force=false){
+  const s=$('#stage');
+  s.innerHTML=`<section class="panel">
+    <div class="panel-head">
+      <div><h3>Dyeing</h3><small>Plan-level control with color/batch drill-down</small></div>
+      <button class="btn teal" id="newBtn">+ New Dye Plan</button>
+    </div>
+    <div class="master-tabs dye-view-tabs" id="dyeViewTabs">
+      <button data-view="plan">Plan View</button>
+      <button data-view="batch">Batch View</button>
+    </div>
+    <div id="gridHost">Loading…</div>
+  </section>`;
+  $('#newBtn').onclick=()=>openActionForm('dye');
+  try{
+    const d=await getCachedModule('dye',force),items=d.items||[];
+    let view='plan';
+    try{
+      const pr=await api('/api/preferences?page='+encodeURIComponent('dye:view'));
+      view=pr?.prefs?.view==='batch'?'batch':'plan'
+    }catch{
+      view=localStorage.getItem(prefLocalKey('dye:view'))==='batch'?'batch':'plan'
+    }
+    async function setView(next){
+      view=next;
+      document.querySelectorAll('#dyeViewTabs button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
+      try{localStorage.setItem(prefLocalKey('dye:view'),view)}catch{}
+      fetch('/api/preferences',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+state.token},body:JSON.stringify({page:'dye:view',prefs:{view}})}).catch(()=>{});
+      if(view==='plan')await renderDyePlanGrid(items);else await renderDyeBatchGrid(items)
+    }
+    document.querySelectorAll('#dyeViewTabs button').forEach(b=>b.onclick=()=>setView(b.dataset.view));
+    await setView(view)
+  }catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}
+}
+
+async function renderDyeBatchGrid(items){
+  await mountDataGrid($('#gridHost'),{
+    key:'module:dye:batch',title:'Dyeing - Batch View',items,columns:configs.dye.columns,filters:configs.dye.filters||[],
+    actionRenderer:r=>'<div class="row-actions">'+(!/^RECEIVED/.test(String(r.STATUS))?'<button class="btn ghost dye-receive-btn" data-idx="'+r.__gridIndex+'">Receive</button>':'')+'<button class="btn ghost dye-manage-btn" data-idx="'+r.__gridIndex+'">Manage</button></div>',
+    bindActions:(pageRows,host)=>{
+      host.querySelectorAll('.dye-receive-btn').forEach(b=>b.onclick=()=>openDyeReceive(items[Number(b.dataset.idx)]));
+      host.querySelectorAll('.dye-manage-btn').forEach(b=>b.onclick=()=>openDyeManage(items[Number(b.dataset.idx)]))
+    }
+  })
+}
+
+async function renderDyePlanGrid(batchItems){
+  const plans=buildDyePlans(batchItems);
+  await mountDataGrid($('#gridHost'),{
+    key:'module:dye:plan',title:'Dyeing - Plan View',items:plans,
+    columns:['DYE_PLAN_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR_COUNT','BATCH_COUNT','OPEN_BATCHES','ISSUE_MTR','RECEIVED_MTR','PENDING_MTR','USABLE_MTR','FINAL_NET_VARIANCE_MTR','PLAN_STATUS','__ACTION'],
+    filters:['DYE_VENDOR','FABRIC','PLAN_STATUS'],
+    actionRenderer:r=>'<button class="btn ghost dye-plan-detail-btn" data-idx="'+r.__gridIndex+'">View Details</button>',
+    bindActions:(pageRows,host)=>host.querySelectorAll('.dye-plan-detail-btn').forEach(b=>b.onclick=()=>openDyePlanDetails(plans[Number(b.dataset.idx)]))
+  })
+}
+
+function openDyePlanDetails(plan){
+  const batches=plan.__batches||[],complete=Number(plan.OPEN_BATCHES||0)===0;
+  $('#modalBody').innerHTML=`
+    <div class="panel-head">
+      <div><h3>Dye Plan ${esc(plan.DYE_PLAN_ID)}</h3><small>${esc(plan.FABRIC||'')} · ${esc(plan.DYE_VENDOR||'')}</small></div>
+      <button class="btn ghost" id="closeModal">Close</button>
+    </div>
+    <div class="plan-summary-kpis">
+      <div><span>Total Issued</span><strong>${moneyless(plan.ISSUE_MTR)} m</strong></div>
+      <div><span>Total Received</span><strong>${moneyless(plan.RECEIVED_MTR)} m</strong></div>
+      <div><span>Pending</span><strong>${moneyless(plan.PENDING_MTR)} m</strong></div>
+      <div><span>Usable</span><strong>${moneyless(plan.USABLE_MTR)} m</strong></div>
+      <div><span>Open Batches</span><strong>${esc(plan.OPEN_BATCHES)}</strong></div>
+      <div><span>Final Net Variance</span><strong>${complete?moneyless(plan.FINAL_NET_VARIANCE_MTR)+' m':'Pending'}</strong></div>
+    </div>
+    <div class="smart-note"><b>Plan Status:</b> ${badge(plan.PLAN_STATUS)} ${complete?'All color batches are final. Net variance is now meaningful.':'Net variance will be finalized only after every color batch is closed.'}</div>
+    <div class="table-wrap plan-detail-table"><table class="data">
+      <thead><tr><th>Batch ID</th><th>Color</th><th>Issued Mtr</th><th>Received Mtr</th><th>Variance Mtr</th><th>Usable Mtr</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>${batches.map((r,i)=>`<tr>
+        <td>${esc(r.DYE_BATCH_ID)}</td><td>${esc(r.COLOR||'')}</td><td>${moneyless(r.ISSUE_MTR)}</td><td>${moneyless(r.RECEIVED_MTR)}</td>
+        <td>${moneyless(r.VARIANCE_MTR)}</td><td>${moneyless(r.USABLE_MTR)}</td><td>${badge(r.STATUS)}</td>
+        <td><div class="row-actions">${!/^RECEIVED/.test(String(r.STATUS))?`<button class="btn ghost plan-receive" data-i="${i}">Receive</button>`:''}<button class="btn ghost plan-manage" data-i="${i}">Manage</button></div></td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+  `;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;
+  document.querySelectorAll('.plan-receive').forEach(b=>b.onclick=()=>{const r=batches[Number(b.dataset.i)];closeModal();openDyeReceive(r)});
+  document.querySelectorAll('.plan-manage').forEach(b=>b.onclick=()=>{const r=batches[Number(b.dataset.i)];closeModal();openDyeManage(r)})
 }
 function badge(v){
   const s=String(v||'').trim(),x=s.toUpperCase();let cl='neutral';
