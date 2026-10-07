@@ -193,17 +193,17 @@ async function colorName(db,id){return (await row(db,'SELECT COLOR_NAME FROM col
 async function styleName(db,id){return (await row(db,'SELECT STYLE_NAME FROM styles WHERE STYLE_ID=?',id))?.STYLE_NAME||id||''}
 
 async function rawBalance(db,roll){
-  const r=await row(db,`SELECT MAX(0,COALESCE((SELECT SUM(INWARD_MTR) FROM raw_inward WHERE ROLL_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'),0)-COALESCE((SELECT SUM(ISSUE_MTR) FROM dye_jobs WHERE ROLL_ID=?),0)) AS bal`,roll,roll);return n(r?.bal)
+  const r=await row(db,`SELECT MAX(0,COALESCE((SELECT SUM(INWARD_MTR) FROM raw_inward WHERE ROLL_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'),0)-COALESCE((SELECT SUM(ISSUE_MTR) FROM dye_jobs WHERE ROLL_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'),0)) AS bal`,roll,roll);return n(r?.bal)
 }
 async function dyeBalance(db,batch){
-  const r=await row(db,`SELECT MAX(0,COALESCE((SELECT SUM(USABLE_MTR) FROM dye_receipts WHERE DYE_BATCH_ID=?),0)-COALESCE((SELECT SUM(ALLOCATED_MTR) FROM production_batches WHERE DYE_BATCH_ID=?),0)) AS bal`,batch,batch);return n(r?.bal)
+  const r=await row(db,`SELECT MAX(0,COALESCE((SELECT SUM(USABLE_MTR) FROM dye_receipts WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'),0)-COALESCE((SELECT SUM(ALLOCATED_MTR) FROM production_batches WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'),0)) AS bal`,batch,batch);return n(r?.bal)
 }
 async function cutSizeBalance(db,pb,size){
   const map={M:['M_CUT','M_ISSUED'],L:['L_CUT','L_ISSUED'],XL:['XL_CUT','XL_ISSUED'],'2XL':['2XL_CUT','2XL_ISSUED'],'3XL':['3XL_CUT','3XL_ISSUED'],OTHER:['OTHER_CUT','OTHER_ISSUED']},p=map[String(size||'').toUpperCase()];if(!p)return 0;
-  const r=await row(db,`SELECT MAX(0,COALESCE((SELECT "${p[0]}" FROM production_batches WHERE PRODUCTION_BATCH_ID=?),0)-COALESCE((SELECT SUM("${p[1]}") FROM stitching_jobs WHERE PRODUCTION_BATCH_ID=?),0)) AS bal`,pb,pb);return n(r?.bal)
+  const r=await row(db,`SELECT MAX(0,COALESCE((SELECT "${p[0]}" FROM production_batches WHERE PRODUCTION_BATCH_ID=?),0)-COALESCE((SELECT SUM("${p[1]}") FROM stitching_jobs WHERE PRODUCTION_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'),0)) AS bal`,pb,pb);return n(r?.bal)
 }
 async function cutBalance(db,pb){
-  const r=await row(db,`SELECT MAX(0,COALESCE((SELECT CASE WHEN TOTAL_CUT>0 THEN TOTAL_CUT ELSE M_CUT+L_CUT+XL_CUT+"2XL_CUT"+"3XL_CUT"+OTHER_CUT END FROM production_batches WHERE PRODUCTION_BATCH_ID=?),0)-COALESCE((SELECT SUM(TOTAL_ISSUED) FROM stitching_jobs WHERE PRODUCTION_BATCH_ID=?),0)) AS bal`,pb,pb);return n(r?.bal)
+  const r=await row(db,`SELECT MAX(0,COALESCE((SELECT CASE WHEN TOTAL_CUT>0 THEN TOTAL_CUT ELSE M_CUT+L_CUT+XL_CUT+"2XL_CUT"+"3XL_CUT"+OTHER_CUT END FROM production_batches WHERE PRODUCTION_BATCH_ID=?),0)-COALESCE((SELECT SUM(TOTAL_ISSUED) FROM stitching_jobs WHERE PRODUCTION_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'),0)) AS bal`,pb,pb);return n(r?.bal)
 }
 async function qcSizePending(db,challan,size){
   const col={M:'M_RECEIVED',L:'L_RECEIVED',XL:'XL_RECEIVED','2XL':'2XL_RECEIVED','3XL':'3XL_RECEIVED',OTHER:'OTHER_RECEIVED'}[String(size||'').toUpperCase()];if(!col)return 0;
@@ -282,13 +282,13 @@ async function stitchingPendingLines(db,challan){
 }
 
 async function dyeBatchSummary(db,batch){
-  const r=await row(db,`WITH j AS (SELECT DYE_BATCH_ID,MAX(DYE_PLAN_ID) DYE_PLAN_ID,MAX(ISSUE_DATE) ISSUE_DATE,MAX(DYE_VENDOR_ID) DYE_VENDOR_ID,MAX(FABRIC_ID) FABRIC_ID,MAX(COLOR_ID) COLOR_ID,SUM(ISSUE_MTR) ISSUE_MTR,COUNT(*) ROLL_COUNT FROM dye_jobs WHERE DYE_BATCH_ID=?),
-  d AS (SELECT COALESCE(SUM(RECEIVED_MTR),0) RECEIVED_MTR,COALESCE(SUM(DEFECT_MTR),0) DEFECT_MTR,COALESCE(SUM(USABLE_MTR),0) USABLE_MTR,MAX(FINAL_RECEIPT) CLOSED FROM dye_receipts WHERE DYE_BATCH_ID=?)
+  const r=await row(db,`WITH j AS (SELECT DYE_BATCH_ID,MAX(DYE_PLAN_ID) DYE_PLAN_ID,MAX(ISSUE_DATE) ISSUE_DATE,MAX(DYE_VENDOR_ID) DYE_VENDOR_ID,MAX(FABRIC_ID) FABRIC_ID,MAX(COLOR_ID) COLOR_ID,SUM(ISSUE_MTR) ISSUE_MTR,COUNT(*) ROLL_COUNT FROM dye_jobs WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'),
+  d AS (SELECT COALESCE(SUM(RECEIVED_MTR),0) RECEIVED_MTR,COALESCE(SUM(DEFECT_MTR),0) DEFECT_MTR,COALESCE(SUM(USABLE_MTR),0) USABLE_MTR,MAX(FINAL_RECEIPT) CLOSED FROM dye_receipts WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%')
   SELECT j.*,d.RECEIVED_MTR,d.DEFECT_MTR,d.USABLE_MTR,d.CLOSED FROM j CROSS JOIN d`,batch,batch);
   if(!r?.DYE_BATCH_ID)return null;const variance=truth(r.CLOSED)?n(r.RECEIVED_MTR)-n(r.ISSUE_MTR):0;return{...r,VARIANCE_MTR:variance,PENDING_MTR:truth(r.CLOSED)?0:Math.max(0,n(r.ISSUE_MTR)-n(r.RECEIVED_MTR)),CLOSED:truth(r.CLOSED),STATUS:truth(r.CLOSED)?(variance>0.0001?'RECEIVED EXCESS':variance<-0.0001?'RECEIVED SHORT':'RECEIVED EXACT'):(n(r.RECEIVED_MTR)>0?'PARTIAL RECEIVED':'AT DYE VENDOR')}
 }
 async function dyePlanSummary(db,plan){
-  const bs=await rows(db,'SELECT DISTINCT DYE_BATCH_ID FROM dye_jobs WHERE DYE_PLAN_ID=?',plan),sums=[];for(const b of bs){const s=await dyeBatchSummary(db,b.DYE_BATCH_ID);if(s)sums.push(s)}
+  const bs=await rows(db,'SELECT DISTINCT DYE_BATCH_ID FROM dye_jobs WHERE DYE_PLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'',plan),sums=[];for(const b of bs){const s=await dyeBatchSummary(db,b.DYE_BATCH_ID);if(s)sums.push(s)}
   const issued=sums.reduce((s,x)=>s+n(x.ISSUE_MTR),0),received=sums.reduce((s,x)=>s+n(x.RECEIVED_MTR),0),usable=sums.reduce((s,x)=>s+n(x.USABLE_MTR),0),defect=sums.reduce((s,x)=>s+n(x.DEFECT_MTR),0),closed=sums.filter(x=>x.CLOSED).length;
   return{DYE_PLAN_ID:plan,ISSUE_MTR:issued,RECEIVED_MTR:received,USABLE_MTR:usable,DEFECT_MTR:defect,VARIANCE_MTR:received-issued,BATCH_COUNT:sums.length,CLOSED_BATCHES:closed,ALL_CLOSED:!!sums.length&&closed===sums.length}
 }
@@ -306,7 +306,7 @@ async function viewRaw(db){return rows(db,`
   FROM raw_inward r
   LEFT JOIN vendors v ON v.VENDOR_ID=r.SUPPLIER_ID
   LEFT JOIN fabrics f ON f.FABRIC_ID=r.FABRIC_ID
-  LEFT JOIN (SELECT ROLL_ID,SUM(ISSUE_MTR) ISSUED_MTR FROM dye_jobs GROUP BY ROLL_ID)d ON d.ROLL_ID=r.ROLL_ID
+  LEFT JOIN (SELECT ROLL_ID,SUM(ISSUE_MTR) ISSUED_MTR FROM dye_jobs WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY ROLL_ID)d ON d.ROLL_ID=r.ROLL_ID
   WHERE COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%'
   ORDER BY r.CREATED_AT DESC,r.ROLL_ID DESC`)}
 async function viewDye(db){
@@ -314,13 +314,13 @@ async function viewDye(db){
     WITH j AS (
       SELECT DYE_PLAN_ID,DYE_BATCH_ID,MAX(ISSUE_DATE) ISSUE_DATE,MAX(DYE_VENDOR_ID) DYE_VENDOR_ID,
              MAX(FABRIC_ID) FABRIC_ID,MAX(COLOR_ID) COLOR_ID,SUM(ISSUE_MTR) ISSUE_MTR,COUNT(*) ROLL_COUNT
-      FROM dye_jobs GROUP BY DYE_BATCH_ID
+      FROM dye_jobs WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY DYE_BATCH_ID
     ),
     r AS (
       SELECT DYE_BATCH_ID,COALESCE(SUM(RECEIVED_MTR),0) RECEIVED_MTR,
              COALESCE(SUM(DEFECT_MTR),0) DEFECT_MTR,COALESCE(SUM(USABLE_MTR),0) USABLE_MTR,
              MAX(FINAL_RECEIPT) CLOSED
-      FROM dye_receipts GROUP BY DYE_BATCH_ID
+      FROM dye_receipts WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY DYE_BATCH_ID
     ),
     b AS (
       SELECT j.*,COALESCE(r.RECEIVED_MTR,0) RECEIVED_MTR,COALESCE(r.DEFECT_MTR,0) DEFECT_MTR,
@@ -505,7 +505,7 @@ async function lookupData(db){
            COALESCE(v.VENDOR_NAME,r.SUPPLIER_ID) SUPPLIER_NAME,
            MAX(0,r.INWARD_MTR-COALESCE(d.issued,0)) BALANCE_MTR
     FROM raw_inward r
-    LEFT JOIN (SELECT ROLL_ID,SUM(ISSUE_MTR) issued FROM dye_jobs GROUP BY ROLL_ID)d ON d.ROLL_ID=r.ROLL_ID
+    LEFT JOIN (SELECT ROLL_ID,SUM(ISSUE_MTR) issued FROM dye_jobs WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY ROLL_ID)d ON d.ROLL_ID=r.ROLL_ID
     LEFT JOIN fabrics f ON f.FABRIC_ID=r.FABRIC_ID
     LEFT JOIN vendors v ON v.VENDOR_ID=r.SUPPLIER_ID
     WHERE COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%'
@@ -522,14 +522,14 @@ async function lookupData(db){
     WITH j AS (
       SELECT DYE_PLAN_ID,DYE_BATCH_ID,MAX(ISSUE_DATE) ISSUE_DATE,MAX(DYE_VENDOR_ID) DYE_VENDOR_ID,
              MAX(FABRIC_ID) FABRIC_ID,MAX(COLOR_ID) COLOR_ID,SUM(ISSUE_MTR) ISSUE_MTR,COUNT(*) ROLL_COUNT
-      FROM dye_jobs GROUP BY DYE_BATCH_ID
+      FROM dye_jobs WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY DYE_BATCH_ID
     ),
     r AS (
       SELECT DYE_BATCH_ID,SUM(RECEIVED_MTR) RECEIVED_MTR,SUM(DEFECT_MTR) DEFECT_MTR,
              SUM(USABLE_MTR) USABLE_MTR,MAX(FINAL_RECEIPT) CLOSED
-      FROM dye_receipts GROUP BY DYE_BATCH_ID
+      FROM dye_receipts WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY DYE_BATCH_ID
     ),
-    a AS (SELECT DYE_BATCH_ID,SUM(ALLOCATED_MTR) ALLOCATED_MTR FROM production_batches GROUP BY DYE_BATCH_ID)
+    a AS (SELECT DYE_BATCH_ID,SUM(ALLOCATED_MTR) ALLOCATED_MTR FROM production_batches WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY DYE_BATCH_ID)
     SELECT j.*,COALESCE(r.RECEIVED_MTR,0) RECEIVED_MTR,COALESCE(r.DEFECT_MTR,0) DEFECT_MTR,
            COALESCE(r.USABLE_MTR,0) USABLE_MTR,COALESCE(r.CLOSED,0) CLOSED,
            MAX(0,COALESCE(r.USABLE_MTR,0)-COALESCE(a.ALLOCATED_MTR,0)) BALANCE_MTR,
@@ -868,7 +868,7 @@ async function saveDyeBulk(db,r,a){
 async function saveDyePlan(db,r,a){
   const fabric=String(r.FABRIC_ID||''),items=Array.isArray(r.items)?r.items:[],d=dateOnly(r.ISSUE_DATE),notes=String(r.NOTES||'');if(!fabric)throw err('Fabric is required.',400);const fr=await row(db,'SELECT * FROM fabrics WHERE FABRIC_ID=? AND ACTIVE=1',fabric);if(!fr)throw err('Selected fabric is not active.',400);if(!items.length)throw err('Add at least one dye color.',400);
   const seen=new Set();let need=0;for(let i=0;i<items.length;i++){const x=items[i],c=String(x.COLOR_ID||''),v=String(x.DYE_VENDOR_ID||'');if(!c)throw err('Color is required on line '+(i+1)+'.',400);if(seen.has(c))throw err('Same color cannot appear twice in one dye plan.',409);seen.add(c);if(!await row(db,'SELECT 1 ok FROM colors WHERE COLOR_ID=? AND ACTIVE=1',c))throw err('Color on line '+(i+1)+' is not active.',400);if(!await row(db,'SELECT 1 ok FROM vendors WHERE VENDOR_ID=? AND ACTIVE=1 AND DYE_VENDOR=1',v))throw err('Select a valid active Dye Vendor on line '+(i+1)+'.',400);requirePos(x.ISSUE_MTR,'Issue meter on line '+(i+1));need+=n(x.ISSUE_MTR)}
-  const src=await rows(db,`SELECT r.*,MAX(0,r.INWARD_MTR-COALESCE(d.issued,0)) BALANCE_MTR FROM raw_inward r LEFT JOIN(SELECT ROLL_ID,SUM(ISSUE_MTR) issued FROM dye_jobs GROUP BY ROLL_ID)d ON d.ROLL_ID=r.ROLL_ID WHERE r.FABRIC_ID=? AND COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%' AND r.INWARD_MTR-COALESCE(d.issued,0)>0.0001 ORDER BY r.INWARD_DATE,r.CREATED_AT,r.ROLL_ID`,fabric);const available=src.reduce((s,x)=>s+n(x.BALANCE_MTR),0);if(need>available+0.0001)throw err('Dye plan total '+need+' m exceeds available '+available+' m for '+await fabricName(db,fabric)+'.',409);
+  const src=await rows(db,`SELECT r.*,MAX(0,r.INWARD_MTR-COALESCE(d.issued,0)) BALANCE_MTR FROM raw_inward r LEFT JOIN(SELECT ROLL_ID,SUM(ISSUE_MTR) issued FROM dye_jobs WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY ROLL_ID)d ON d.ROLL_ID=r.ROLL_ID WHERE r.FABRIC_ID=? AND COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%' AND r.INWARD_MTR-COALESCE(d.issued,0)>0.0001 ORDER BY r.INWARD_DATE,r.CREATED_AT,r.ROLL_ID`,fabric);const available=src.reduce((s,x)=>s+n(x.BALANCE_MTR),0);if(need>available+0.0001)throw err('Dye plan total '+need+' m exceeds available '+available+' m for '+await fabricName(db,fabric)+'.',409);
   const plan=await nextId(db,'DP'),t=now(),stmts=[],batches=[];let cursor=0;for(const item of items){const batch=await nextId(db,'DB'),qty=n(item.ISSUE_MTR),vendor=String(item.DYE_VENDOR_ID),color=String(item.COLOR_ID);let left=qty,lines=0;while(left>0.0001){while(cursor<src.length&&n(src[cursor].BALANCE_MTR)<=0.0001)cursor++;if(cursor>=src.length)throw err('Unexpected allocation shortage while creating dye plan.',500);const rr=src[cursor],take=Math.min(left,n(rr.BALANCE_MTR));stmts.push(db.prepare('INSERT INTO dye_jobs(ROW_ID,DYE_BATCH_ID,ISSUE_DATE,DYE_VENDOR_ID,ROLL_ID,VENDOR_ROLL_NO,FABRIC_ID,COLOR_ID,ISSUE_MTR,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT,DYE_PLAN_ID) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(uuid(),batch,d,vendor,rr.ROLL_ID,rr.VENDOR_ROLL_NO||'',fabric,color,take,'AT DYE VENDOR',String(item.NOTES||notes),a.userId,t,a.userId,t,plan));rr.BALANCE_MTR=n(rr.BALANCE_MTR)-take;left-=take;lines++}batches.push({DYE_BATCH_ID:batch,COLOR_ID:color,DYE_VENDOR_ID:vendor,ISSUE_MTR:qty,ROLL_LINES:lines})}
   await db.batch(stmts);const result={DYE_PLAN_ID:plan,FABRIC_ID:fabric,TOTAL_MTR:need,BATCH_COUNT:batches.length,BATCHES:batches};await audit(db,a,'CREATE_DYE_PLAN','DYE',plan,'',JSON.stringify(result));return result
 }
@@ -880,7 +880,7 @@ async function saveDyeReceive(db,r,a){
 }
 
 async function dyeDownstreamCount(db,batch){
-  const r=await row(db,'SELECT COUNT(*) c FROM production_batches WHERE DYE_BATCH_ID=?',batch);
+  const r=await row(db,'SELECT COUNT(*) c FROM production_batches WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'',batch);
   return n(r?.c);
 }
 async function getDyeBatchDetail(db,batch){
@@ -888,7 +888,7 @@ async function getDyeBatchDetail(db,batch){
     SELECT j.DYE_BATCH_ID,j.DYE_PLAN_ID,MAX(j.ISSUE_DATE) ISSUE_DATE,MAX(j.DYE_VENDOR_ID) DYE_VENDOR_ID,
            MAX(j.FABRIC_ID) FABRIC_ID,MAX(j.COLOR_ID) COLOR_ID,SUM(j.ISSUE_MTR) ISSUE_MTR,
            MAX(j.NOTES) NOTES
-    FROM dye_jobs j WHERE j.DYE_BATCH_ID=? GROUP BY j.DYE_BATCH_ID,j.DYE_PLAN_ID`,batch);
+    FROM dye_jobs j WHERE j.DYE_BATCH_ID=? AND COALESCE(j.STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY j.DYE_BATCH_ID,j.DYE_PLAN_ID`,batch);
   if(!head)throw err('Dye batch not found.',404);
   const lines=await rows(db,`
     SELECT j.ROW_ID,j.ROLL_ID,j.VENDOR_ROLL_NO,j.ISSUE_MTR,
@@ -898,8 +898,8 @@ async function getDyeBatchDetail(db,batch){
     LEFT JOIN (
       SELECT ROLL_ID,SUM(ISSUE_MTR) other_issued FROM dye_jobs WHERE DYE_BATCH_ID<>? GROUP BY ROLL_ID
     ) x ON x.ROLL_ID=j.ROLL_ID
-    WHERE j.DYE_BATCH_ID=? ORDER BY j.ROW_ID`,batch,batch);
-  const receipts=await rows(db,'SELECT * FROM dye_receipts WHERE DYE_BATCH_ID=? ORDER BY CREATED_AT,RECEIPT_ID',batch);
+    WHERE j.DYE_BATCH_ID=? AND COALESCE(j.STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY j.ROW_ID`,batch,batch);
+  const receipts=await rows(db,'SELECT * FROM dye_receipts WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY CREATED_AT,RECEIPT_ID',batch);
   return{...head,lines,receipts,downstreamCount:await dyeDownstreamCount(db,batch)}
 }
 async function editDyeBatch(db,r,a){
@@ -923,7 +923,7 @@ async function editDyeBatch(db,r,a){
     requirePos(qty,'Issue meter on line '+(i+1));
     const rr=await row(db,'SELECT * FROM raw_inward WHERE ROLL_ID=?',roll);if(!rr)throw err('Raw roll '+roll+' not found.',404);
     if(String(rr.FABRIC_ID)!==String(old.FABRIC_ID))throw err('All rolls must be of the same original batch fabric.',409);
-    const other=await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) q FROM dye_jobs WHERE ROLL_ID=? AND DYE_BATCH_ID<>?',roll,batch);
+    const other=await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) q FROM dye_jobs WHERE ROLL_ID=? AND DYE_BATCH_ID<>? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'',roll,batch);
     const max=n(rr.INWARD_MTR)-n(other?.q);
     if(qty>max+0.0001)throw err('Issue exceeds available meter for roll '+(rr.VENDOR_ROLL_NO||roll)+'. Available: '+max,409);
     resolved.push({rr,qty});
@@ -947,8 +947,8 @@ async function editDyeReceipt(db,r,a){
   const received=n(r.RECEIVED_MTR),defect=n(r.DEFECT_MTR),final=truth(r.FINAL_RECEIPT);
   requirePos(received,'Received meter');if(defect<0||defect>received)throw err('Defect meter must be between 0 and received meter.',409);
   const usable=received-defect,t=now();
-  const other=await row(db,'SELECT COALESCE(SUM(RECEIVED_MTR),0) received FROM dye_receipts WHERE DYE_BATCH_ID=? AND RECEIPT_ID<>?',receipt.DYE_BATCH_ID,receiptId);
-  const issued=await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) issued FROM dye_jobs WHERE DYE_BATCH_ID=?',receipt.DYE_BATCH_ID);
+  const other=await row(db,'SELECT COALESCE(SUM(RECEIVED_MTR),0) received FROM dye_receipts WHERE DYE_BATCH_ID=? AND RECEIPT_ID<>? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'',receipt.DYE_BATCH_ID,receiptId);
+  const issued=await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) issued FROM dye_jobs WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'',receipt.DYE_BATCH_ID);
   const cumulative=n(other?.received)+received,variance=final?cumulative-n(issued?.issued):0;
   const status=final?(variance>0.0001?'CLOSED EXCESS':variance<-0.0001?'CLOSED SHORT':'CLOSED EXACT'):'PARTIAL';
   await db.prepare(`UPDATE dye_receipts SET RECEIPT_DATE=?,RECEIVED_MTR=?,DEFECT_MTR=?,USABLE_MTR=?,VARIANCE_MTR=?,FINAL_RECEIPT=?,STATUS=?,DEFECT_REASON=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE RECEIPT_ID=?`)
