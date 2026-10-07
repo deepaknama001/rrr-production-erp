@@ -771,6 +771,26 @@ async function exportPdf(){
   }catch(e){activityEnd(slow,btn,false,e.message||'PDF export failed')}
 }
 
+function fileSizeLabel(n){const x=Number(n||0);return x<1024?x+' B':x<1048576?(x/1024).toFixed(1)+' KB':(x/1048576).toFixed(1)+' MB'}
+async function mountAttachmentPanel(module,recordId){
+  const body=$('#modalBody');if(!body||!module||!recordId)return;
+  const old=body.querySelector('.attachment-panel');if(old)old.remove();
+  const host=document.createElement('section');host.className='subsection attachment-panel';host.innerHTML='<h4>Attachments</h4><div class="attachment-body"><div class="skeleton-line"></div></div>';body.appendChild(host);
+  const target=host.querySelector('.attachment-body');
+  async function load(){
+    try{
+      const d=await api('/api/attachments?module='+encodeURIComponent(module)+'&recordId='+encodeURIComponent(recordId),{activity:'Loading attachments…'});
+      if(!d.configured){target.innerHTML='<div class="attachment-off">Attachment storage is ready in code but R2 binding <b>ATTACHMENTS</b> is not configured yet.</div>';return}
+      const items=d.items||[];
+      target.innerHTML=`<div class="attachment-list">${items.length?items.map(x=>`<div><span><b>${esc(x.FILE_NAME)}</b><small>${fileSizeLabel(x.SIZE_BYTES)} · ${esc(fmtDate(x.CREATED_AT,true))}</small></span><span><button class="link-action att-view" data-id="${esc(x.FILE_ID)}">View</button>${canAction(module,'edit')?`<button class="link-danger att-delete" data-id="${esc(x.FILE_ID)}">Delete</button>`:''}</span></div>`).join(''):'<div class="attachment-empty">No files attached.</div>'}</div>
+        ${canAction(module,'edit')?'<label class="attachment-upload"><input type="file" class="att-file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"><span>+ Attach file</span><small>Max 10 MB</small></label>':''}`;
+      target.querySelectorAll('.att-view').forEach(b=>b.onclick=async()=>{const slow=activityStart('Opening attachment…',b);try{const r=await fetch('/api/attachments?fileId='+encodeURIComponent(b.dataset.id)+'&module='+encodeURIComponent(module),{headers:{authorization:'Bearer '+state.token}});if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||'Unable to open file')}const blob=await r.blob(),url=URL.createObjectURL(blob);window.open(url,'_blank','noopener');setTimeout(()=>URL.revokeObjectURL(url),60000);activityEnd(slow,b,true)}catch(e){activityEnd(slow,b,false,e.message)}});
+      target.querySelectorAll('.att-delete').forEach(b=>b.onclick=async()=>{if(!confirm('Delete this attachment?'))return;try{await api('/api/attachments?fileId='+encodeURIComponent(b.dataset.id),{method:'DELETE',activity:'Deleting attachment…',success:'Attachment deleted'});load()}catch(e){toast(e.message,'bad',3500)}});
+      const inp=target.querySelector('.att-file');if(inp)inp.onchange=async()=>{const file=inp.files?.[0];if(!file)return;const fd=new FormData();fd.append('module',module);fd.append('recordId',recordId);fd.append('file',file);const slow=activityStart('Uploading '+file.name+'…');try{const r=await fetch('/api/attachments',{method:'POST',headers:{authorization:'Bearer '+state.token},body:fd});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Upload failed');activityEnd(slow,null,true,'File attached');load()}catch(e){activityEnd(slow,null,false,e.message)}}
+    }catch(e){target.innerHTML='<div class="attachment-off">'+esc(e.message)+'</div>'}
+  }
+  load()
+}
 function vendorOptions(vendors,role){return (vendors||[]).filter(v=>isTrue(v.ACTIVE)&&(!role||isTrue(v[role]))).map(v=>`<option value="${esc(v.VENDOR_ID)}">${esc(v.VENDOR_NAME)}${role?'':''}</option>`).join('')}
 function colorOptions(colors){return (colors||[]).filter(x=>isTrue(x.ACTIVE)).map(x=>`<option value="${esc(x.COLOR_ID)}">${esc(x.COLOR_NAME)}${x.COLOR_CODE?' · '+esc(x.COLOR_CODE):''}</option>`).join('')}
 function styleOptions(styles){return (styles||[]).filter(x=>isTrue(x.ACTIVE)).map(x=>`<option value="${esc(x.STYLE_ID)}">${esc(x.STYLE_NAME)}${x.STYLE_CODE?' · '+esc(x.STYLE_CODE):''}</option>`).join('')}
@@ -811,7 +831,7 @@ async function openRawManage(row){
     <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary">Save Correction</button></div></form>
     ${!locked?'<div class="danger-zone"><div><b>Cancel mistaken inward</b><small>Removes this roll from usable stock while preserving audit history.</small></div><button class="btn danger" id="cancelRawBtn">Cancel Inward</button></div>':''}
   `;
-  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;mountAttachmentPanel('raw',row.ROLL_ID);
   $('#rawManageForm').onsubmit=async e=>{
     e.preventDefault();const fd=new FormData(e.target);
     const rec={ROLL_ID:row.ROLL_ID,INWARD_DATE:fd.get('INWARD_DATE'),SUPPLIER_ID:fd.get('SUPPLIER_ID'),VENDOR_ROLL_NO:fd.get('VENDOR_ROLL_NO'),FABRIC_ID:locked?row.FABRIC_ID:fd.get('FABRIC_ID'),INWARD_MTR:fd.get('INWARD_MTR'),INVOICE_CHALLAN:fd.get('INVOICE_CHALLAN'),LOT_REF:fd.get('LOT_REF'),NOTES:fd.get('NOTES')};
@@ -869,7 +889,7 @@ async function openProductionManage(row){
     ${lines.length?`<div class="subsection"><h4>Size-wise Cut</h4><div class="mini-pills">${lines.map(x=>`<span>${esc(x.SIZE_NAME||x.SIZE_ID)} <b>${x.QTY}</b></span>`).join('')}</div></div>`:''}
     ${d.downstreamCount?'<div class="smart-note"><b>Dependency lock:</b> Production plan/cutting changes that affect issued stock may be blocked until downstream stitching is reversed.</div>':''}
   `;
-  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;mountAttachmentPanel('production',id);
   $('#editProd')?.addEventListener('click',()=>{closeModal();openProductionEdit(d)});
   $('#cutProd')?.addEventListener('click',()=>{closeModal();openCuttingActual(d)});
   $('#cancelProd')?.addEventListener('click',()=>cancelRecord('production_cancel',{PRODUCTION_BATCH_ID:id},'production batch','production'))
@@ -930,7 +950,7 @@ async function openStitchingManage(row){
     <div class="subsection"><h4>Size Balance</h4><div class="mini-pills">${(d.pendingLines||[]).map(x=>`<span>${esc(x.SIZE_NAME)} · Issued <b>${x.QTY}</b> · Rec. <b>${x.RECEIVED_QTY}</b> · Pending <b>${x.PENDING_QTY}</b></span>`).join('')||'—'}</div></div>
     ${(d.receipts||[]).length?`<div class="subsection"><h4>Receipt History</h4><div class="history-list">${d.receipts.map(x=>`<div><b>${esc(x.RECEIPT_ID)}</b><span>${fmtDate(x.RECEIPT_DATE)}</span>${d.qcCount===0&&canAction('stitching','cancel')?`<button class="link-danger cancel-stitch-receipt" data-id="${esc(x.RECEIPT_ID)}">Cancel</button>`:''}</div>`).join('')}</div></div>`:''}
   `;
-  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;mountAttachmentPanel('stitching',id);
   $('#editStitch')?.addEventListener('click',()=>{closeModal();openStitchingEdit(d)});
   $('#receiveStitch')?.addEventListener('click',()=>{closeModal();openStitchingReceipt(d)});
   $('#cancelStitch')?.addEventListener('click',()=>cancelRecord('stitching_cancel',{CHALLAN_ID:id},'stitching challan','stitching'));
@@ -975,7 +995,7 @@ async function openQcManage(row){
     </div>
     ${(d.reworks||[]).length?`<div class="subsection"><h4>Rework Jobs</h4><div class="history-list">${d.reworks.map(x=>{const p=Math.max(0,Number(x.ISSUE_QTY)-Number(x.RETURNED_QTY));return`<div><b>${esc(x.REWORK_ID)}</b><span>${esc(x.STATUS)} · ${p} pending</span>${p>0&&canAction('qc','edit')?`<button class="link-action receive-rework" data-id="${esc(x.REWORK_ID)}" data-pending="${p}">Receive</button>`:''}${Number(x.RETURNED_QTY||0)===0&&canAction('qc','cancel')?`<button class="link-danger cancel-rework" data-id="${esc(x.REWORK_ID)}">Cancel</button>`:''}</div>`}).join('')}</div></div>`:''}
   `;
-  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;mountAttachmentPanel('qc',id);
   $('#editQc')?.addEventListener('click',()=>{closeModal();openQcEdit(d,l)});
   $('#issueRework')?.addEventListener('click',()=>{closeModal();openReworkIssue(d,l,reworkAvail)});
   $('#cancelQc')?.addEventListener('click',()=>cancelRecord('qc_cancel',{QC_ID:id},'QC entry','qc'));
@@ -1025,7 +1045,7 @@ async function openHandoverManage(row){
     </div>
     ${(d.receipts||[]).length?`<div class="subsection"><h4>Receipt History</h4><div class="history-list">${d.receipts.map(x=>`<div><b>${esc(x.RECEIPT_ID)}</b><span>${fmtDate(x.RECEIPT_DATE)} · ${x.RECEIVED_QTY} pcs</span>${canAction('handover','cancel')?`<button class="link-danger cancel-wh-receipt" data-id="${esc(x.RECEIPT_ID)}">Cancel</button>`:''}</div>`).join('')}</div></div>`:''}
   `;
-  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;mountAttachmentPanel('handover',id);
   $('#editWh')?.addEventListener('click',()=>{closeModal();openHandoverEdit(d)});
   $('#receiveWh')?.addEventListener('click',()=>{closeModal();openWarehouseReceipt(d)});
   $('#cancelWh')?.addEventListener('click',()=>cancelRecord('handover_cancel',{HANDOVER_ID:id},'warehouse handover','handover'));
