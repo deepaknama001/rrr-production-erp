@@ -161,23 +161,24 @@ function buildHeaderFilterPopup(k,items,prefs){
     </div>`
 }
 async function mountDataGrid(container,opt){
-  const key=opt.key,columns=opt.columns||[],items=(opt.items||[]).map((r,i)=>({...r,__gridIndex:i}));
+  const key=opt.key,columns=opt.columns||[],dataCols=columns.filter(x=>x!=='__ACTION'),items=(opt.items||[]).map((r,i)=>({...r,__gridIndex:i}));
   let prefs=await loadGridPrefs(key,columns);
-  prefs.visibleColumns=(prefs.visibleColumns||columns.filter(x=>x!=='__ACTION')).filter(x=>columns.includes(x)&&x!=='__ACTION');
-  if(!prefs.visibleColumns.length)prefs.visibleColumns=columns.filter(x=>x!=='__ACTION');
+  prefs.columnOrder=(prefs.columnOrder||[]).filter(x=>dataCols.includes(x));for(const x of dataCols)if(!prefs.columnOrder.includes(x))prefs.columnOrder.push(x);
+  prefs.visibleColumns=(prefs.visibleColumns||dataCols).filter(x=>dataCols.includes(x));if(!prefs.visibleColumns.length)prefs.visibleColumns=[...dataCols];
   prefs.pageSize=[10,25,50,100].includes(Number(prefs.pageSize))?Number(prefs.pageSize):25;
-  prefs.sortKey=columns.includes(prefs.sortKey)?prefs.sortKey:'';
-  prefs.sortDir=prefs.sortDir==='desc'?'desc':'asc';
-  const rt={key,opt,items,prefs,filtered:[],pageRows:[]};state.grids[key]=rt;state.activeGridKey=key;
+  prefs.sortKey=dataCols.includes(prefs.sortKey)?prefs.sortKey:'';prefs.sortDir=prefs.sortDir==='desc'?'desc':'asc';
+  prefs.density=['compact','comfortable'].includes(prefs.density)?prefs.density:'comfortable';prefs.columnWidths=prefs.columnWidths||{};prefs.namedViews=prefs.namedViews||{};prefs.exportScope=['filtered','page','selected'].includes(prefs.exportScope)?prefs.exportScope:'filtered';
+  const selected=new Set(),rt={key,opt,items,prefs,filtered:[],pageRows:[],selected};state.grids[key]=rt;state.activeGridKey=key;
 
   function headerCell(k){
     const sorted=prefs.sortKey===k,arrow=sorted?(prefs.sortDir==='asc'?'▲':'▼'):'↕';
-    const dateCol=isDateColumn(k,items),filterOn=filterIsActive(prefs.filters?.[k],dateCol);
-    return `<th>
+    const dateCol=isDateColumn(k,items),filterOn=filterIsActive(prefs.filters?.[k],dateCol),w=Number(prefs.columnWidths[k]||0);
+    return `<th data-col-key="${esc(k)}" ${w?`style="width:${w}px;min-width:${w}px;max-width:${w}px"`:''}>
       <div class="th-main">
         <button class="th-sort" data-sort="${esc(k)}"><span>${gridLabel(k)}</span><i>${arrow}</i></button>
         <button class="th-filter-btn ${filterOn?'active':''}" data-filter-menu="${esc(k)}" title="Filter ${gridLabel(k)}">⏷</button>
       </div>
+      <span class="col-resizer" data-resize="${esc(k)}"></span>
       ${buildHeaderFilterPopup(k,items,prefs)}
     </th>`
   }
