@@ -114,7 +114,7 @@ async function dyePayload(db,planId){
     SELECT d.DYE_PLAN_ID,d.DYE_BATCH_ID,d.ISSUE_DATE,d.DYE_VENDOR_ID,
       COALESCE(v.VENDOR_NAME,d.DYE_VENDOR_ID) VENDOR,
       COALESCE(v.ADDRESS,'') VENDOR_ADDRESS,COALESCE(v.PHONE,'') VENDOR_PHONE,COALESCE(v.GST_REF,'') VENDOR_GST,
-      d.ROLL_ID,d.VENDOR_ROLL_NO,
+      d.ROLL_ID,COALESCE(NULLIF(d.VENDOR_ROLL_NO,''),r.VENDOR_ROLL_NO,'') VENDOR_ROLL_NO,
       COALESCE(f.FABRIC_NAME,d.FABRIC_ID) FABRIC,
       COALESCE(c.COLOR_NAME,d.COLOR_ID) COLOR,d.ISSUE_MTR,
       COALESCE(r.INWARD_MTR,0) ROLL_MTR
@@ -152,6 +152,7 @@ async function dyePayload(db,planId){
 async function stitchOne(db,id){
   const h=await db.prepare(`
     SELECT s.*,COALESCE(v.VENDOR_NAME,s.STITCHING_VENDOR_ID) VENDOR,
+      COALESCE(v.ADDRESS,'') VENDOR_ADDRESS,COALESCE(v.PHONE,'') VENDOR_PHONE,COALESCE(v.GST_REF,'') VENDOR_GST,
       COALESCE(st.STYLE_NAME,s.STYLE_ID) STYLE,COALESCE(c.COLOR_NAME,s.COLOR_ID) COLOR,
       COALESCE(f.FABRIC_NAME,p.FABRIC_ID) FABRIC,
       COALESCE(ca.CONSUMED_MTR,p.CONSUMED_MTR,p.ALLOCATED_MTR,0) FABRIC_QTY
@@ -175,7 +176,7 @@ async function stitchOne(db,id){
       .filter(([,q])=>Number(q||0)>0).map(([SIZE,QTY])=>({SIZE,QTY}))
   }
   return{
-    sourceId:id,vendorId:h.STITCHING_VENDOR_ID,vendor:h.VENDOR,date:h.ISSUE_DATE,
+    sourceId:id,vendorId:h.STITCHING_VENDOR_ID,vendor:h.VENDOR,vendorAddress:h.VENDOR_ADDRESS||'',vendorPhone:h.VENDOR_PHONE||'',vendorGst:h.VENDOR_GST||'',date:h.ISSUE_DATE,
     productionBatchId:h.PRODUCTION_BATCH_ID,style:h.STYLE,color:h.COLOR,fabric:h.FABRIC,
     fabricQty:Number(h.FABRIC_QTY||0),sizes:sizes.map(x=>({size:x.SIZE,qty:Number(x.QTY||0)})),
     totalPcs:sizes.reduce((s,x)=>s+Number(x.QTY||0),0),notes:h.NOTES||''
