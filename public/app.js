@@ -1,4 +1,4 @@
-const APP_BUILD='0.34';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.35';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -61,9 +61,28 @@ async function go(m,force=false){if(!allowed(m))return;state.activeGridKey='';se
 
 function docsTypeLabel(t){return t==='DYE_CHALLAN'?'Dye Challan':t==='STITCHING_CHALLAN'?'Stitching Challan':'Sticker Sheet'}
 function docsNum(v){const n=Number(v||0);return Number.isFinite(n)?n.toLocaleString('en-IN',{maximumFractionDigits:2}):'0'}
+function docsPartyBlock(title,name,address,phone,gst,email=''){
+  return '<div class="party"><div class="party-title">'+esc(title)+'</div><div class="party-name">'+esc(name||'—')+'</div>'+
+    (address?'<div>'+esc(address)+'</div>':'')+
+    '<div class="party-grid">'+
+      (phone?'<span><b>Phone</b> '+esc(phone)+'</span>':'')+
+      (gst?'<span><b>GST</b> '+esc(gst)+'</span>':'')+
+      (email?'<span><b>Email</b> '+esc(email)+'</span>':'')+
+    '</div></div>'
+}
+function docsHeader(p,doc,title){
+  const company=p.company||{};
+  return '<div class="challan-head"><div class="company-block"><div class="company-name">'+esc(company.name||'RARE RICH RIGHT (RRR)')+'</div>'+
+    (company.address?'<div class="company-address">'+esc(company.address)+'</div>':'')+
+    '<div class="company-contact">'+
+      (company.phone?'<span><b>Phone:</b> '+esc(company.phone)+'</span>':'')+
+      (company.gst?'<span><b>GST:</b> '+esc(company.gst)+'</span>':'')+
+      (company.email?'<span><b>Email:</b> '+esc(company.email)+'</span>':'')+
+    '</div></div><div class="challan-title"><small>JOB WORK / MATERIAL MOVEMENT</small><h1>'+esc(title)+'</h1><div><b>No.</b> '+esc(doc.DOC_NO)+'</div><div><b>Date</b> '+esc(fmtDate(doc.DOC_DATE))+'</div></div></div>'
+}
 function docsPrintBase(title,body){
   return '<!doctype html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+
-  '@page{size:A4;margin:9mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#111;margin:0;font-size:11px}.doc{width:100%}.doc-head{display:flex;justify-content:space-between;gap:20px;border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:10px}.brand{font-size:18px;font-weight:800}.doc-title{text-align:right;font-size:17px;font-weight:800}.meta{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:10px 0}.meta div{border:1px solid #222;padding:6px}.meta b{display:inline-block;min-width:90px}table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border:1px solid #222;padding:6px;text-align:left}th{background:#f2f2f2}.tot{text-align:right;font-weight:800}.sign{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:34px}.sign div{border-top:1px solid #222;padding-top:5px}.stickers{display:grid;grid-template-columns:1fr 1fr;gap:10mm 4mm}.sticker{height:125mm;border:2px solid #111;break-inside:avoid;display:grid;grid-template-rows:auto 1fr auto}.st-title{text-align:center;font-size:16px;font-weight:800;padding:8px;border-bottom:2px solid #111}.st-main{display:grid;grid-template-columns:1fr 82px}.st-info{display:grid}.st-row{display:grid;grid-template-columns:105px 1fr;border-bottom:1px solid #222}.st-row b,.st-row span{padding:6px}.st-row b{border-right:1px solid #222}.sizes{border-left:1px solid #222}.size-row{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #222}.size-row b,.size-row span{padding:6px;text-align:center}.st-notes{min-height:24mm;border-top:1px solid #222;padding:6px}.page-break{break-after:page}.no-print{position:fixed;right:12px;top:12px}@media print{.no-print{display:none}}'+
+  '@page{size:A4;margin:10mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#111;margin:0;font-size:10.5px}.doc{width:100%}.challan-head{display:grid;grid-template-columns:1.5fr .8fr;gap:12px;border:2px solid #111;padding:10px;margin-bottom:10px}.company-name{font-size:21px;font-weight:900;letter-spacing:.02em}.company-address{margin-top:4px;line-height:1.35}.company-contact{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px;font-size:9px}.challan-title{text-align:right;border-left:1px solid #222;padding-left:12px}.challan-title small{font-size:8px;letter-spacing:.08em}.challan-title h1{font-size:18px;margin:5px 0 8px}.challan-title div{margin-top:3px}.party-grid-wrap{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}.party{border:1px solid #222;padding:8px;min-height:74px}.party-title{font-size:8px;font-weight:800;text-transform:uppercase;color:#555;margin-bottom:4px}.party-name{font-size:13px;font-weight:800;margin-bottom:3px}.party-grid{display:flex;gap:12px;flex-wrap:wrap;margin-top:5px;font-size:9px}.doc-section{margin-top:10px}.doc-section h3{font-size:11px;margin:0;padding:6px 8px;background:#111;color:#fff;text-transform:uppercase;letter-spacing:.04em}table{width:100%;border-collapse:collapse}th,td{border:1px solid #222;padding:5px 6px;text-align:left}th{background:#efefef;font-size:9px}.right{text-align:right}.tot{font-weight:800}.summary-strip{display:grid;grid-template-columns:1fr 1fr;border:1px solid #222;border-top:0}.summary-strip div{padding:6px 8px}.summary-strip div+div{border-left:1px solid #222}.notes{border:1px solid #222;margin-top:10px;padding:7px;min-height:38px}.footer-note{margin-top:8px;font-size:9px;color:#444}.sign{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:34px}.sign div{border-top:1px solid #222;padding-top:5px}.stickers{display:grid;grid-template-columns:1fr 1fr;gap:10mm 4mm}.sticker{height:125mm;border:2px solid #111;break-inside:avoid;display:grid;grid-template-rows:auto 1fr auto}.st-title{text-align:center;font-size:16px;font-weight:800;padding:8px;border-bottom:2px solid #111}.st-main{display:grid;grid-template-columns:1fr 82px}.st-info{display:grid}.st-row{display:grid;grid-template-columns:105px 1fr;border-bottom:1px solid #222}.st-row b,.st-row span{padding:6px}.st-row b{border-right:1px solid #222}.sizes{border-left:1px solid #222}.size-row{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #222}.size-row b,.size-row span{padding:6px;text-align:center}.st-notes{min-height:24mm;border-top:1px solid #222;padding:6px}.page-break{break-after:page}.no-print{position:fixed;right:12px;top:12px}@media print{.no-print{display:none}}'+
   '</style></head><body><button class="no-print" onclick="window.print()">Print</button>'+body+'<script>setTimeout(()=>window.print(),250)<\/script></body></html>'
 }
 function docsWritePrint(win,html,docId){
@@ -72,20 +91,32 @@ function docsWritePrint(win,html,docId){
   if(docId)fetch('/api/docs',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+state.token},body:JSON.stringify({action:'printed',docId})}).catch(()=>{})
 }
 function dyePrintHtml(doc){
-  const p=doc.payload||{},lines=p.lines||[];
-  const rows=lines.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(x.rollId||'')+'</td><td>'+esc(x.vendorRollNo||'')+'</td><td>'+esc(x.fabric||'')+'</td><td>'+esc(x.color||'')+'</td><td>'+esc(x.batchId||'')+'</td><td style="text-align:right">'+docsNum(x.mtr)+'</td></tr>').join('');
-  const body='<div class="doc"><div class="doc-head"><div><div class="brand">RRR Production</div><small>Vendor Movement Document</small></div><div class="doc-title">DYE PROCESS CHALLAN</div></div>'+
-  '<div class="meta"><div><b>Challan No.</b>'+esc(doc.DOC_NO)+'</div><div><b>Date</b>'+esc(fmtDate(doc.DOC_DATE))+'</div><div><b>Dye Vendor</b>'+esc(p.vendor||'')+'</div><div><b>Dye Plan</b>'+esc(p.sourceId||'')+'</div></div>'+
-  '<table><thead><tr><th>#</th><th>Roll ID</th><th>Vendor Roll</th><th>Fabric</th><th>Colour</th><th>Batch</th><th>Mtr</th></tr></thead><tbody>'+rows+'<tr><td colspan="6" class="tot">Total Meter</td><td class="tot">'+docsNum(p.totalMtr)+'</td></tr></tbody></table>'+
-  '<p><b>Notes:</b> '+esc(p.notes||'')+'</p><div class="sign"><div>Issued By</div><div>Received By / Vendor Sign</div></div></div>';
+  const p=doc.payload||{},rolls=p.rolls||[],plan=p.plan||[],company=p.company||{};
+  const rollRows=rolls.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(x.vendorRollNo||'')+'</td><td>'+esc(x.fabric||'')+'</td><td class="right">'+docsNum(x.rollMtr)+'</td></tr>').join('');
+  const planRows=plan.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(x.fabric||'')+'</td><td>'+esc(x.color||'')+'</td><td class="right">'+docsNum(x.mtr)+'</td></tr>').join('');
+  const body='<div class="doc">'+docsHeader(p,doc,'DYE PROCESS CHALLAN')+
+    '<div class="party-grid-wrap">'+
+      docsPartyBlock('Issued By',company.name||'RARE RICH RIGHT (RRR)',company.address||'',company.phone||'',company.gst||'',company.email||'')+
+      docsPartyBlock('Dye Vendor',p.vendor||'',p.vendorAddress||'',p.vendorPhone||'',p.vendorGst||'')+
+    '</div>'+
+    '<div class="summary-strip"><div><b>Dye Plan:</b> '+esc(p.sourceId||'')+'</div><div><b>Purpose:</b> Fabric sent for dyeing / job work</div></div>'+
+    '<div class="doc-section"><h3>A. Fabric Rolls Handed Over</h3><table><thead><tr><th style="width:34px">#</th><th>Roll No.</th><th>Fabric</th><th class="right" style="width:110px">Roll Meter</th></tr></thead><tbody>'+rollRows+'<tr><td colspan="3" class="right tot">Total Fabric Meter</td><td class="right tot">'+docsNum(p.totalRollMtr)+'</td></tr></tbody></table></div>'+
+    '<div class="doc-section"><h3>B. Dye Plan</h3><table><thead><tr><th style="width:34px">#</th><th>Fabric</th><th>Colour</th><th class="right" style="width:130px">Meter to Dye</th></tr></thead><tbody>'+planRows+'<tr><td colspan="3" class="right tot">Total Planned Meter</td><td class="right tot">'+docsNum(p.totalPlanMtr)+'</td></tr></tbody></table></div>'+
+    '<div class="notes"><b>Notes / Instructions:</b><br>'+esc(p.notes||'')+'</div>'+
+    '<div class="footer-note">'+esc(company.footer||'Material issued for processing / job work only.')+'</div>'+
+    '<div class="sign"><div>Authorised Signatory / Issued By</div><div>Received By / Dye Vendor</div></div></div>';
   return docsPrintBase(doc.DOC_NO,body)
 }
 function stitchPrintHtml(doc){
-  const p=doc.payload||{},sizes=p.sizes||[];
-  const body='<div class="doc"><div class="doc-head"><div><div class="brand">RRR Production</div><small>Vendor Movement Document</small></div><div class="doc-title">STITCHING ISSUE CHALLAN</div></div>'+
-  '<div class="meta"><div><b>Challan No.</b>'+esc(doc.DOC_NO)+'</div><div><b>Date</b>'+esc(fmtDate(doc.DOC_DATE))+'</div><div><b>Vendor</b>'+esc(p.vendor||'')+'</div><div><b>Source</b>'+esc(p.sourceId||'')+'</div><div><b>Item / Style</b>'+esc(p.style||'')+'</div><div><b>Colour</b>'+esc(p.color||'')+'</div><div><b>Fabric</b>'+esc(p.fabric||'')+'</div><div><b>Fabric Qty.</b>'+docsNum(p.fabricQty)+' Mtr</div></div>'+
-  '<table><thead><tr><th>Size</th><th style="text-align:right">Pieces</th></tr></thead><tbody>'+sizes.map(x=>'<tr><td>'+esc(x.size)+'</td><td style="text-align:right">'+docsNum(x.qty)+'</td></tr>').join('')+'<tr><td class="tot">Total Pieces</td><td class="tot">'+docsNum(p.totalPcs)+'</td></tr></tbody></table>'+
-  '<p><b>Notes:</b> '+esc(p.notes||'')+'</p><div class="sign"><div>Issued By</div><div>Received By / Vendor Sign</div></div></div>';
+  const p=doc.payload||{},sizes=p.sizes||[],company=p.company||{};
+  const body='<div class="doc">'+docsHeader(p,doc,'STITCHING ISSUE CHALLAN')+
+    '<div class="party-grid-wrap">'+
+      docsPartyBlock('Issued By',company.name||'RARE RICH RIGHT (RRR)',company.address||'',company.phone||'',company.gst||'',company.email||'')+
+      docsPartyBlock('Stitching Vendor',p.vendor||'','','','')+
+    '</div>'+
+    '<div class="meta"><div><b>Source</b>'+esc(p.sourceId||'')+'</div><div><b>Item / Style</b>'+esc(p.style||'')+'</div><div><b>Colour</b>'+esc(p.color||'')+'</div><div><b>Fabric</b>'+esc(p.fabric||'')+'</div><div><b>Fabric Qty.</b>'+docsNum(p.fabricQty)+' Mtr</div></div>'+
+    '<div class="doc-section"><h3>Size-wise Issue</h3><table><thead><tr><th>Size</th><th class="right">Pieces</th></tr></thead><tbody>'+sizes.map(x=>'<tr><td>'+esc(x.size)+'</td><td class="right">'+docsNum(x.qty)+'</td></tr>').join('')+'<tr><td class="right tot">Total Pieces</td><td class="right tot">'+docsNum(p.totalPcs)+'</td></tr></tbody></table></div>'+
+    '<div class="notes"><b>Notes:</b><br>'+esc(p.notes||'')+'</div><div class="footer-note">'+esc(company.footer||'Material issued for processing / job work only.')+'</div><div class="sign"><div>Authorised Signatory / Issued By</div><div>Received By / Vendor</div></div></div>';
   return docsPrintBase(doc.DOC_NO,body)
 }
 function stickerPrintHtml(doc){
@@ -127,7 +158,7 @@ async function generateDocAndPrint(docType,sourceIds,extra={}){
 }
 async function renderDocsMaker(force=false){
   const s=$('#stage');
-  s.innerHTML='<section class="panel docs-maker"><div class="panel-head"><div><h3>Docs Maker</h3><small>Vendor challans and production fabric stickers from existing ERP records</small></div></div><div class="master-tabs" id="docsTabs"><button data-doc-tab="dye">Dye Challan</button><button data-doc-tab="stitch">Stitching Challan</button><button data-doc-tab="stickers">Sticker Sheet</button><button data-doc-tab="history">History</button></div><div id="docsBody"><div class="trail-loading">Loading document sources…</div></div></section>';
+  s.innerHTML='<section class="panel docs-maker"><div class="panel-head"><div><h3>Docs Maker</h3><small>Vendor challans and production fabric stickers from existing ERP records</small></div></div><div class="master-tabs" id="docsTabs"><button data-doc-tab="dye">Dye Challan</button><button data-doc-tab="stitch">Stitching Challan</button><button data-doc-tab="stickers">Sticker Sheet</button><button data-doc-tab="history">History</button>'+(state.user?.admin?'<button data-doc-tab="settings">Settings</button>':'')+'</div><div id="docsBody"><div class="trail-loading">Loading document sources…</div></div></section>';
   try{
     const d=await api('/api/docs',{activity:'Loading Docs Maker…'}),body=$('#docsBody');
     let tab='dye';try{tab=localStorage.getItem(prefLocalKey('docs:tab'))||'dye'}catch{}
@@ -146,6 +177,17 @@ async function renderDocsMaker(force=false){
         body.innerHTML='<div class="docs-sticker-tools"><div><h4>Select Stitching Challans</h4><small>4 stickers will print per A4 page.</small></div><input id="stickerSearch" placeholder="Search challan / style / vendor"></div><div class="docs-select-list" id="stickerList">'+rows.map((x,i)=>'<label data-text="'+esc((x.CHALLAN_ID+' '+x.STYLE+' '+x.COLOR+' '+x.VENDOR).toLowerCase())+'"><input type="checkbox" value="'+esc(x.CHALLAN_ID)+'"> <span><b>'+esc(x.STYLE||'')+'</b><small>'+esc(x.CHALLAN_ID)+' · '+esc(x.COLOR||'')+' · '+esc(x.FABRIC||'')+' · '+esc(x.VENDOR||'')+'</small></span><em>'+docsNum(x.TOTAL_PCS)+' pcs</em></label>').join('')+'</div><div class="form-actions"><button class="btn teal" id="makeStickers">Generate & Print Selected Stickers</button></div>';
         $('#stickerSearch').oninput=e=>{const q=e.target.value.trim().toLowerCase();document.querySelectorAll('#stickerList label').forEach(x=>x.classList.toggle('hidden',q&&!x.dataset.text.includes(q)))};
         $('#makeStickers').onclick=()=>{const ids=[...document.querySelectorAll('#stickerList input:checked')].map(x=>x.value);if(!ids.length)return toast('Select at least one challan.','bad');generateDocAndPrint('STICKER_SHEET',ids)}
+      }else if(tab==='settings'){
+        const x=d.company||{};
+        body.innerHTML='<div class="docs-settings"><div class="form-grid">'+
+          '<div class="field"><label>Company / Brand Name</label><input id="docCompanyName" value="'+esc(x.name||'')+'" placeholder="RARE RICH RIGHT (RRR)"></div>'+
+          '<div class="field"><label>Phone</label><input id="docCompanyPhone" value="'+esc(x.phone||'')+'"></div>'+
+          '<div class="field wide"><label>Address</label><input id="docCompanyAddress" value="'+esc(x.address||'')+'" placeholder="Full challan address"></div>'+
+          '<div class="field"><label>GSTIN</label><input id="docCompanyGst" value="'+esc(x.gst||'')+'"></div>'+
+          '<div class="field"><label>Email</label><input id="docCompanyEmail" value="'+esc(x.email||'')+'"></div>'+
+          '<div class="field wide"><label>Footer Note</label><input id="docCompanyFooter" value="'+esc(x.footer||'')+'"></div>'+
+          '</div><div class="smart-note"><b>Used on challan header:</b> Save once; future generated documents will snapshot these details. Old saved documents remain unchanged.</div><div class="form-actions"><button class="btn teal" id="saveDocSettings">Save Challan Settings</button></div></div>';
+        $('#saveDocSettings').onclick=async()=>{try{const r=await api('/api/docs',{method:'POST',body:JSON.stringify({action:'save_settings',company:{name:$('#docCompanyName').value,address:$('#docCompanyAddress').value,phone:$('#docCompanyPhone').value,gst:$('#docCompanyGst').value,email:$('#docCompanyEmail').value,footer:$('#docCompanyFooter').value}}),activity:'Saving challan settings…'});d.company=r.company;toast('Challan settings saved')}catch(e){toast(e.message,'bad',4000)}}
       }else{
         const rows=d.history||[];
         body.innerHTML=rows.length?'<div class="table-wrap"><table class="data"><thead><tr><th>Doc No.</th><th>Type</th><th>Date</th><th>Source</th><th>Status</th><th>Prints</th><th>Action</th></tr></thead><tbody>'+rows.map((x,i)=>'<tr><td>'+esc(x.DOC_NO)+'</td><td>'+esc(docsTypeLabel(x.DOC_TYPE))+'</td><td>'+esc(fmtDate(x.DOC_DATE))+'</td><td>'+esc((()=>{try{return JSON.parse(x.SOURCE_IDS||'[]').join(', ')}catch{return''}})())+'</td><td>'+badge(x.STATUS)+'</td><td>'+Number(x.PRINT_COUNT||0)+'</td><td><button class="btn ghost docs-reprint" data-id="'+esc(x.DOC_ID)+'">Reprint</button></td></tr>').join('')+'</tbody></table></div>':'<div class="smart-empty"><b>No documents generated yet</b><span>Generated challans and sticker sheets will appear here.</span></div>';
@@ -153,7 +195,7 @@ async function renderDocsMaker(force=false){
       }
     };
     document.querySelectorAll('#docsTabs button').forEach(b=>b.onclick=()=>{tab=b.dataset.docTab;try{localStorage.setItem(prefLocalKey('docs:tab'),tab)}catch{}render()});
-    if(!['dye','stitch','stickers','history'].includes(tab))tab='dye';render()
+    if(!['dye','stitch','stickers','history','settings'].includes(tab)||(tab==='settings'&&!state.user?.admin))tab='dye';render()
   }catch(e){toast(e.message,'bad',4500);$('#docsBody').innerHTML='<div class="smart-empty"><b>Docs Maker could not load</b><span>'+esc(e.message)+'</span></div>'}finally{setStatus('● Ready','ok')}
 }
 
