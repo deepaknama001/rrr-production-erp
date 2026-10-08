@@ -36,6 +36,32 @@ async function can(context,user,perm,action='view'){
 function now(){return new Date().toISOString()}
 function ymd(v){return String(v||now()).slice(0,10)}
 function uuid(){return crypto.randomUUID()}
+const DOC_SETTINGS_KEY='DOCS:COMPANY';
+async function getCompany(db){
+  const r=await db.prepare('SELECT VALUE FROM settings WHERE KEY=?').bind(DOC_SETTINGS_KEY).first();
+  let x={};try{x=JSON.parse(r?.VALUE||'{}')}catch{}
+  return{
+    name:String(x.name||'RARE RICH RIGHT (RRR)'),
+    address:String(x.address||''),
+    phone:String(x.phone||''),
+    gst:String(x.gst||''),
+    email:String(x.email||''),
+    footer:String(x.footer||'Material issued for processing / job work only.')
+  }
+}
+async function saveCompany(db,x){
+  const v={
+    name:String(x?.name||'').slice(0,120),
+    address:String(x?.address||'').slice(0,300),
+    phone:String(x?.phone||'').slice(0,80),
+    gst:String(x?.gst||'').slice(0,80),
+    email:String(x?.email||'').slice(0,120),
+    footer:String(x?.footer||'').slice(0,250)
+  };
+  await db.prepare("INSERT INTO settings(KEY,VALUE,UPDATED_AT) VALUES(?,?,?) ON CONFLICT(KEY) DO UPDATE SET VALUE=excluded.VALUE,UPDATED_AT=excluded.UPDATED_AT")
+    .bind(DOC_SETTINGS_KEY,JSON.stringify(v),now()).run();
+  return v
+}
 async function nextDocNo(db,prefix){
   const r=await db.batch([
     db.prepare('INSERT OR IGNORE INTO sequences(prefix,value) VALUES(?,0)').bind(prefix),
@@ -85,22 +111,42 @@ async function listSources(db){
 }
 async function dyePayload(db,planId){
   const rows=(await db.prepare(`
-    SELECT d.DYE_PLAN_ID,d.DYE_BATCH_ID,d.ISSUE_DATE,d.DYE_VENDOR_ID,COALESCE(v.VENDOR_NAME,d.DYE_VENDOR_ID) VENDOR,
-      d.ROLL_ID,d.VENDOR_ROLL_NO,COALESCE(f.FABRIC_NAME,d.FABRIC_ID) FABRIC,COALESCE(c.COLOR_NAME,d.COLOR_ID) COLOR,d.ISSUE_MTR
+    SELECT d.DYE_PLAN_ID,d.DYE_BATCH_ID,d.ISSUE_DATE,d.DYE_VENDOR_ID,
+      COALESCE(v.VENDOR_NAME,d.DYE_VENDOR_ID) VENDOR,
+      COALESCE(v.ADDRESS,'') VENDOR_ADDRESS,COALESCE(v.PHONE,'') VENDOR_PHONE,COALESCE(v.GST_REF,'') VENDOR_GST,
+      d.ROLL_ID,d.VENDOR_ROLL_NO,
+      COALESCE(f.FABRIC_NAME,d.FABRIC_ID) FABRIC,
+      COALESCE(c.COLOR_NAME,d.COLOR_ID) COLOR,d.ISSUE_MTR,
+      COALESCE(r.INWARD_MTR,0) ROLL_MTR
     FROM dye_jobs d
     LEFT JOIN vendors v ON v.VENDOR_ID=d.DYE_VENDOR_ID
     LEFT JOIN fabrics f ON f.FABRIC_ID=d.FABRIC_ID
     LEFT JOIN colors c ON c.COLOR_ID=d.COLOR_ID
+    LEFT JOIN raw_inward r ON r.ROLL_ID=d.ROLL_ID
     WHERE d.DYE_PLAN_ID=? AND COALESCE(d.STATUS,'') NOT LIKE 'CANCELLED%'
-    ORDER BY d.DYE_BATCH_ID,d.ROLL_ID
+    ORDER BY d.ROLL_ID,d.DYE_BATCH_ID
   `).bind(planId).all()).results||[];
   if(!rows.length)throw Object.assign(new Error('Dye plan not found.'),{status:404});
-  const h=rows[0];
+  const h=rows[0],rollMap=new Map(),planMap=new Map();
+  for(const x of rows){
+    const rk=String(x.ROLL_ID||x.VENDOR_ROLL_NO||'');
+    if(!rollMap.has(rk))rollMap.set(rk,{
+      vendorRollNo:String(x.VENDOR_ROLL_NO||''),
+      fabric:String(x.FABRIC||''),
+      rollMtr:Number(x.ROLL_MTR||0)
+    });
+    const pk=String(x.FABRIC||'')+'|'+String(x.COLOR||'');
+    const old=planMap.get(pk)||{fabric:String(x.FABRIC||''),color:String(x.COLOR||''),mtr:0};
+    old.mtr+=Number(x.ISSUE_MTR||0);planMap.set(pk,old)
+  }
+  const rolls=[...rollMap.values()],plan=[...planMap.values()].sort((a,b)=>a.fabric.localeCompare(b.fabric)||a.color.localeCompare(b.color));
   return{
-    sourceId:planId,vendorId:h.DYE_VENDOR_ID,vendor:h.VENDOR,date:h.ISSUE_DATE,
-    title:'Dye Process Challan',
-    lines:rows.map(x=>({batchId:x.DYE_BATCH_ID,rollId:x.ROLL_ID,vendorRollNo:x.VENDOR_ROLL_NO,fabric:x.FABRIC,color:x.COLOR,mtr:Number(x.ISSUE_MTR||0)})),
-    totalMtr:rows.reduce((s,x)=>s+Number(x.ISSUE_MTR||0),0)
+    sourceId:planId,vendorId:h.DYE_VENDOR_ID,vendor:h.VENDOR,
+    vendorAddress:h.VENDOR_ADDRESS||'',vendorPhone:h.VENDOR_PHONE||'',vendorGst:h.VENDOR_GST||'',
+    date:h.ISSUE_DATE,title:'Dye Process Challan',
+    rolls,plan,
+    totalRollMtr:rolls.reduce((s,x)=>s+Number(x.rollMtr||0),0),
+    totalPlanMtr:plan.reduce((s,x)=>s+Number(x.mtr||0),0)
   }
 }
 async function stitchOne(db,id){
@@ -158,6 +204,7 @@ export async function onRequestGet(context){
     const user=await requireAuth(context);if(!context.env.DB)return json({error:'D1 unavailable.'},503);
     await ensureDocs(context.env.DB);
     const u=new URL(context.request.url),action=u.searchParams.get('action')||'home';
+    if(action==='settings')return json({company:await getCompany(context.env.DB)});
     if(action==='document'){
       const id=u.searchParams.get('id')||'';
       const r=await context.env.DB.prepare("SELECT * FROM docs_documents WHERE DOC_ID=?").bind(id).first();
@@ -165,7 +212,7 @@ export async function onRequestGet(context){
       const perm=typePerm(r.DOC_TYPE);if(!await can(context,user,perm,'view'))return json({error:'Permission denied.'},403);
       return json({document:{...r,payload:JSON.parse(r.PAYLOAD_JSON||'{}')}})
     }
-    const out={sources:{dye:[],stitching:[]},history:[]};
+    const out={sources:{dye:[],stitching:[]},history:[],company:await getCompany(context.env.DB)};
     const src=await listSources(context.env.DB);
     if(await can(context,user,'dye','view'))out.sources.dye=src.dye;
     if(await can(context,user,'stitching','view'))out.sources.stitching=src.stitching;
@@ -179,6 +226,12 @@ export async function onRequestPost(context){
     const user=await requireAuth(context);if(!context.env.DB)return json({error:'D1 unavailable.'},503);
     await ensureDocs(context.env.DB);
     const b=await readJson(context.request),action=String(b.action||'generate');
+    if(action==='save_settings'){
+      if(!user.admin)return json({error:'Admin permission required.'},403);
+      const company=await saveCompany(context.env.DB,b.company||{});
+      await audit(context,user,'SAVE_DOC_SETTINGS','DOCS:COMPANY',company);
+      return json({saved:true,company})
+    }
     if(action==='cancel'){
       const old=await context.env.DB.prepare("SELECT * FROM docs_documents WHERE DOC_ID=?").bind(String(b.docId||'')).first();
       if(!old)return json({error:'Document not found.'},404);
@@ -202,7 +255,7 @@ export async function onRequestPost(context){
     const prefix=type==='DYE_CHALLAN'?'DYC':type==='STITCHING_CHALLAN'?'STC':'STK';
     const docNo=await nextDocNo(context.env.DB,prefix),docId=uuid(),t=now(),docDate=ymd(b.docDate||payload.date),notes=String(b.notes||payload.notes||'').slice(0,500);
     const vendorId=type==='STICKER_SHEET'?'':String(payload.vendorId||'');
-    const snapshot={...payload,docNo,docDate,notes};
+    const snapshot={...payload,company:await getCompany(context.env.DB),docNo,docDate,notes};
     await context.env.DB.prepare("INSERT INTO docs_documents(DOC_ID,DOC_NO,DOC_TYPE,SOURCE_IDS,VENDOR_ID,DOC_DATE,NOTES,PAYLOAD_JSON,STATUS,PRINT_COUNT,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
       .bind(docId,docNo,type,JSON.stringify(sourceIds),vendorId,docDate,notes,JSON.stringify(snapshot),'ACTIVE',0,user.uid,t,user.uid,t).run();
     await audit(context,user,'CREATE_DOC',docId,{docNo,type,sourceIds});
