@@ -236,7 +236,10 @@ async function rawBalance(db,roll){
   const r=await row(db,`SELECT MAX(0,COALESCE((SELECT SUM(INWARD_MTR) FROM raw_inward WHERE ROLL_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'),0)-COALESCE((SELECT SUM(ISSUE_MTR) FROM dye_jobs WHERE ROLL_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'),0)) AS bal`,roll,roll);return n(r?.bal)
 }
 async function dyeBalance(db,batch){
-  const r=await row(db,`SELECT MAX(0,COALESCE((SELECT SUM(USABLE_MTR) FROM dye_receipts WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'),0)-COALESCE((SELECT SUM(ALLOCATED_MTR) FROM production_batches WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'),0)) AS bal`,batch,batch);return n(r?.bal)
+  const r=await row(db,`SELECT MAX(0,
+    COALESCE((SELECT SUM(USABLE_MTR) FROM dye_receipts WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'),0)-
+    COALESCE((SELECT SUM(ALLOCATED_MTR) FROM production_batches WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' AND UPPER(COALESCE(STATUS,''))<>'PLANNED'),0)
+  ) AS bal`,batch,batch);return n(r?.bal)
 }
 async function cutSizeBalance(db,pb,size){
   const map={M:['M_CUT','M_ISSUED'],L:['L_CUT','L_ISSUED'],XL:['XL_CUT','XL_ISSUED'],'2XL':['2XL_CUT','2XL_ISSUED'],'3XL':['3XL_CUT','3XL_ISSUED'],OTHER:['OTHER_CUT','OTHER_ISSUED']},p=map[String(size||'').toUpperCase()];if(!p)return 0;
@@ -433,6 +436,7 @@ async function viewStitch(db){
     )
     SELECT s.*,COALESCE(v.VENDOR_NAME,s.STITCHING_VENDOR_ID) STITCHING_VENDOR,
       COALESCE(st.STYLE_NAME,s.STYLE_ID) STYLE,COALESCE(c.COLOR_NAME,s.COLOR_ID) COLOR,
+      p.DYE_BATCH_ID,p.ALLOCATED_MTR,COALESCE(f.FABRIC_NAME,p.FABRIC_ID) FABRIC,
       e.EXPECTED_DATE,
       CASE WHEN e.EXPECTED_DATE<>'' AND MAX(0,(CASE WHEN il.CHALLAN_ID IS NOT NULL THEN il.ISSUE_QTY ELSE s.TOTAL_ISSUED END)-(CASE WHEN rl.CHALLAN_ID IS NOT NULL THEN rl.RECEIVED_QTY ELSE s.TOTAL_RECEIVED END))>0 AND date(e.EXPECTED_DATE)<date('now') THEN CAST(julianday('now')-julianday(e.EXPECTED_DATE) AS INTEGER) ELSE 0 END OVERDUE_DAYS,
       CASE WHEN il.CHALLAN_ID IS NOT NULL THEN il.ISSUE_QTY ELSE s.TOTAL_ISSUED END ACTUAL_ISSUED,
@@ -444,6 +448,8 @@ async function viewStitch(db){
     LEFT JOIN vendors v ON v.VENDOR_ID=s.STITCHING_VENDOR_ID
     LEFT JOIN styles st ON st.STYLE_ID=s.STYLE_ID
     LEFT JOIN colors c ON c.COLOR_ID=s.COLOR_ID
+    LEFT JOIN production_batches p ON p.PRODUCTION_BATCH_ID=s.PRODUCTION_BATCH_ID
+    LEFT JOIN fabrics f ON f.FABRIC_ID=p.FABRIC_ID
     LEFT JOIN il ON il.CHALLAN_ID=s.CHALLAN_ID
     LEFT JOIN rl ON rl.CHALLAN_ID=s.CHALLAN_ID
     LEFT JOIN record_expectations e ON e.MODULE='STITCHING' AND e.RECORD_ID=s.CHALLAN_ID
@@ -509,7 +515,7 @@ async function kpisD1(db){
     (SELECT COALESCE(SUM(RECEIVED_MTR),0) FROM dye_receipts WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%')) v`);
   const dyed=await row(db,`SELECT MAX(0,
     (SELECT COALESCE(SUM(USABLE_MTR),0) FROM dye_receipts WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%')-
-    (SELECT COALESCE(SUM(ALLOCATED_MTR),0) FROM production_batches WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%')) v`);
+    (SELECT COALESCE(SUM(ALLOCATED_MTR),0) FROM production_batches WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' AND UPPER(COALESCE(STATUS,''))<>'PLANNED')) v`);
   const cut=await row(db,`WITH c AS (
       SELECT p.PRODUCTION_BATCH_ID,CASE WHEN EXISTS(SELECT 1 FROM production_cut_lines l WHERE l.PRODUCTION_BATCH_ID=p.PRODUCTION_BATCH_ID)
       THEN (SELECT COALESCE(SUM(QTY),0) FROM production_cut_lines l WHERE l.PRODUCTION_BATCH_ID=p.PRODUCTION_BATCH_ID) ELSE p.TOTAL_CUT END q
@@ -1204,6 +1210,65 @@ async function getHandoverDetail(db,id){
   const extra=receipts.reduce((s,x)=>s+intQty(x.RECEIVED_QTY,'Received quantity'),0);
   return{...h,receipts,TOTAL_RECEIVED:intQty(h.WAREHOUSE_RECEIVED_QTY||0,'Received quantity')+extra,PENDING_QTY:Math.max(0,intQty(h.ACCEPTED_QTY,'Accepted quantity')-intQty(h.WAREHOUSE_RECEIVED_QTY||0,'Received quantity')-extra)}
 }
+async function saveCutStitchBulk(db,r,a,req=''){
+  const vendor=String(r.STITCHING_VENDOR_ID||''),issueDate=dateOnly(r.ISSUE_DATE),expected=String(r.EXPECTED_DATE||''),notes=String(r.NOTES||''),items=Array.isArray(r.items)?r.items:[];
+  if(!await row(db,'SELECT 1 ok FROM vendors WHERE VENDOR_ID=? AND ACTIVE=1 AND STITCHING_VENDOR=1',vendor))throw err('Select a valid active Cutting & Stitching Vendor.',400);
+  if(!items.length)throw err('Add at least one cutting & stitching line.',400);
+  const sizeRows=await activeSizeRows(db),sizeMap=Object.fromEntries(sizeRows.map(x=>[String(x.SIZE_ID),x]));
+  const parsed=[],needByBatch={};
+  for(let i=0;i<items.length;i++){
+    const x=items[i],dyeBatch=String(x.DYE_BATCH_ID||''),styleId=String(x.STYLE_ID||''),allocated=n(x.ALLOCATED_MTR);
+    if(!dyeBatch)throw err('Dye batch is required on line '+(i+1)+'.',400);
+    if(!styleId)throw err('Style is required on line '+(i+1)+'.',400);
+    requirePos(allocated,'Fabric meter on line '+(i+1));
+    const source=await row(db,"SELECT FABRIC_ID,COLOR_ID FROM dye_jobs WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' LIMIT 1",dyeBatch);
+    if(!source)throw err('Dye batch on line '+(i+1)+' was not found.',404);
+    const style=await row(db,'SELECT * FROM styles WHERE STYLE_ID=? AND ACTIVE=1',styleId);
+    if(!style)throw err('Style on line '+(i+1)+' is not active.',400);
+    if(style.DEFAULT_FABRIC_ID&&String(style.DEFAULT_FABRIC_ID)!==String(source.FABRIC_ID))throw err('Style on line '+(i+1)+' is mapped to a different fabric.',409);
+    const rawSizes=Array.isArray(x.sizes)?x.sizes:[],seen=new Set(),sizes=[];
+    for(const z of rawSizes){
+      const sid=String(z.SIZE_ID||'');if(!sid)continue;
+      if(seen.has(sid))throw err('Same size cannot repeat on line '+(i+1)+'.',409);seen.add(sid);
+      if(!sizeMap[sid])throw err('Inactive/invalid size on line '+(i+1)+'.',400);
+      const qty=intQty(z.QTY,'Size quantity on line '+(i+1));if(qty>0)sizes.push({SIZE_ID:sid,QTY:qty})
+    }
+    const total=sizes.reduce((s,z)=>s+z.QTY,0);if(total<=0)throw err('Enter size-wise target pieces on line '+(i+1)+'.',400);
+    needByBatch[dyeBatch]=(needByBatch[dyeBatch]||0)+allocated;
+    parsed.push({dyeBatch,styleId,allocated,source,sizes,total,lineNotes:String(x.NOTES||'')})
+  }
+  const lockKeys=Object.keys(needByBatch).sort(),held=[];
+  try{
+    for(const batch of lockKeys){await acquireLock(db,'dye:'+batch,req);held.push(batch)}
+    for(const batch of lockKeys){
+      const available=await dyeBalance(db,batch),need=needByBatch[batch];
+      if(need>available+.0001)throw err('Total fabric issue for '+batch+' exceeds dyed usable balance. Available: '+available.toFixed(2)+' m.',409)
+    }
+    const t=now(),stmts=[],created=[];
+    for(const x of parsed){
+      const pb=await nextId(db,'PB'),challan=await nextId(db,'STC'),legacy={M:0,L:0,XL:0,'2XL':0,'3XL':0,OTHER:0};
+      for(const z of x.sizes){const nm=legacySizeName(sizeMap[z.SIZE_ID]?.SIZE_NAME||z.SIZE_ID);if(nm)legacy[nm]+=z.QTY}
+      stmts.push(
+        db.prepare('INSERT INTO production_batches(ROW_ID,PRODUCTION_BATCH_ID,PLAN_DATE,DYE_BATCH_ID,STYLE_ID,FABRIC_ID,COLOR_ID,PLANNED_QTY,ALLOCATED_MTR,CUT_DATE,CONSUMED_MTR,CUTTING_WASTE_MTR,DEFECT_MTR,M_CUT,L_CUT,XL_CUT,"2XL_CUT","3XL_CUT",OTHER_CUT,TOTAL_CUT,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+          .bind(uuid(),pb,issueDate,x.dyeBatch,x.styleId,x.source.FABRIC_ID,x.source.COLOR_ID,x.total,x.allocated,'',0,0,0,0,0,0,0,0,0,0,'AT CUTTING & STITCHING',String(x.lineNotes||notes),a.userId,t,a.userId,t),
+        db.prepare('INSERT INTO stitching_jobs(ROW_ID,CHALLAN_ID,ISSUE_DATE,STITCHING_VENDOR_ID,PRODUCTION_BATCH_ID,STYLE_ID,COLOR_ID,M_ISSUED,L_ISSUED,XL_ISSUED,"2XL_ISSUED","3XL_ISSUED",OTHER_ISSUED,M_RECEIVED,L_RECEIVED,XL_RECEIVED,"2XL_RECEIVED","3XL_RECEIVED",OTHER_RECEIVED,TOTAL_ISSUED,TOTAL_RECEIVED,PENDING_QTY,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+          .bind(uuid(),challan,issueDate,vendor,pb,x.styleId,x.source.COLOR_ID,legacy.M,legacy.L,legacy.XL,legacy['2XL'],legacy['3XL'],legacy.OTHER,0,0,0,0,0,0,x.total,0,x.total,'AT CUTTING & STITCHING',String(x.lineNotes||notes),a.userId,t,a.userId,t)
+      );
+      for(const z of x.sizes)stmts.push(db.prepare('INSERT INTO stitching_issue_lines(LINE_ID,CHALLAN_ID,SIZE_ID,QTY,CREATED_AT,UPDATED_AT) VALUES(?,?,?,?,?,?)').bind(uuid(),challan,z.SIZE_ID,z.QTY,t,t));
+      if(expected)stmts.push(expectationStmt(db,'STITCHING',challan,expected,a.userId,'Cutting & stitching expected return'));
+      stmts.push(
+        auditStmt(db,a,'CREATE_COMBINED','PRODUCTION',pb,'',JSON.stringify({dyeBatch:x.dyeBatch,styleId:x.styleId,allocated:x.allocated,total:x.total,vendor,challan})),
+        auditStmt(db,a,'CREATE_COMBINED','STITCHING',challan,'',JSON.stringify({productionBatchId:pb,dyeBatch:x.dyeBatch,styleId:x.styleId,allocated:x.allocated,total:x.total,vendor,sizes:x.sizes,expectedDate:expected}))
+      );
+      created.push({PRODUCTION_BATCH_ID:pb,CHALLAN_ID:challan,DYE_BATCH_ID:x.dyeBatch,ALLOCATED_MTR:x.allocated,TOTAL_QTY:x.total})
+    }
+    await db.batch(stmts);
+    return{ISSUE_COUNT:created.length,CHALLANS:created,TOTAL_MTR:created.reduce((s,x)=>s+x.ALLOCATED_MTR,0),TOTAL_QTY:created.reduce((s,x)=>s+x.TOTAL_QTY,0)}
+  }finally{
+    for(const batch of held.reverse())await releaseLock(db,'dye:'+batch)
+  }
+}
+
 async function saveProduction(db,r,a,req=''){
   const dyeBatch=String(r.DYE_BATCH_ID||''),styleId=String(r.STYLE_ID||''),planned=intQty(r.PLANNED_QTY,'Planned garment quantity'),allocated=n(r.ALLOCATED_MTR);
   if(!dyeBatch)throw err('Select a dye batch.',400);
@@ -1540,7 +1605,7 @@ export async function saveRecordD1(env,p){
     raw:'raw',raw_bulk:'raw',raw_edit:'raw',raw_cancel:'raw',
     dye:'dye',dye_bulk:'dye',dye_plan:'dye',dye_receive:'dye',dye_edit_batch:'dye',dye_edit_receipt:'dye',dye_cancel_batch:'dye',
     production:'production',production_edit:'production',cutting_complete:'production',production_cancel:'production',
-    stitching:'stitching',stitching_edit:'stitching',stitching_receive:'stitching',stitching_receipt_cancel:'stitching',stitching_cancel:'stitching',
+    cutstitch_bulk:'stitching',stitching:'stitching',stitching_edit:'stitching',stitching_receive:'stitching',stitching_receipt_cancel:'stitching',stitching_cancel:'stitching',
     qc:'qc',qc_edit:'qc',rework_issue:'qc',rework_receive:'qc',rework_cancel:'qc',qc_cancel:'qc',
     handover:'qc',handover_edit:'qc',warehouse_receive:'qc',warehouse_receipt_cancel:'qc',handover_cancel:'qc'
   },perm=moduleMap[m]||null,a=await actor(db,p.actorUserId,perm,false),req=String(p.requestId||'');a.auditMeta=p.auditMeta||{};
@@ -1548,7 +1613,7 @@ export async function saveRecordD1(env,p){
     raw:'create',raw_bulk:'create',raw_edit:'edit',raw_cancel:'cancel',
     dye:'create',dye_bulk:'create',dye_plan:'create',dye_receive:'create',dye_edit_batch:'edit',dye_edit_receipt:'edit',dye_cancel_batch:'cancel',
     production:'create',production_edit:'edit',cutting_complete:'edit',production_cancel:'cancel',
-    stitching:'create',stitching_edit:'edit',stitching_receive:'create',stitching_receipt_cancel:'cancel',stitching_cancel:'cancel',
+    cutstitch_bulk:'create',stitching:'create',stitching_edit:'edit',stitching_receive:'create',stitching_receipt_cancel:'cancel',stitching_cancel:'cancel',
     qc:'create',qc_edit:'edit',rework_issue:'create',rework_receive:'edit',rework_cancel:'cancel',qc_cancel:'cancel',
     handover:'create',handover_edit:'edit',warehouse_receive:'create',warehouse_receipt_cancel:'cancel',handover_cancel:'cancel'
   };
@@ -1567,6 +1632,7 @@ export async function saveRecordD1(env,p){
     else if(m==='dye_edit_batch')record=await editDyeBatch(db,p.record||{},a);
     else if(m==='dye_edit_receipt')record=await editDyeReceipt(db,p.record||{},a);
     else if(m==='dye_cancel_batch')record=await cancelDyeBatch(db,p.record||{},a);
+    else if(m==='cutstitch_bulk')record=await saveCutStitchBulk(db,p.record||{},a,req);
     else if(m==='production')record=await saveProduction(db,p.record||{},a,req);
     else if(m==='production_edit')record=await editProduction(db,p.record||{},a,req);
     else if(m==='cutting_complete')record=await saveCuttingActual(db,p.record||{},a,req);
