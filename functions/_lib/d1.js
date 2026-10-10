@@ -960,7 +960,7 @@ async function saveRawBulk(db,r,a,req=''){
 async function editRaw(db,r,a,req=''){
   const roll=String(r.ROLL_ID||''),old=await row(db,'SELECT * FROM raw_inward WHERE ROLL_ID=?',roll);
   if(!old)throw err('Raw roll not found.',404);
-  const issued=n((await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) q FROM dye_jobs WHERE ROLL_ID=?',roll))?.q);
+  const issued=n((await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) q FROM dye_jobs WHERE ROLL_ID=? AND COALESCE(STATUS,\'\') NOT LIKE \'CANCELLED%\'',roll))?.q);
   const newQty=n(r.INWARD_MTR??old.INWARD_MTR);requirePos(newQty,'Inward meter');
   if(newQty+0.0001<issued)throw err('Inward meter cannot be less than already-issued '+issued+' m.',409);
   const newFabric=String(r.FABRIC_ID??old.FABRIC_ID);
@@ -980,7 +980,7 @@ async function editRaw(db,r,a,req=''){
 }
 async function cancelRaw(db,r,a){
   const roll=String(r.ROLL_ID||''),old=await row(db,'SELECT * FROM raw_inward WHERE ROLL_ID=?',roll);if(!old)throw err('Raw roll not found.',404);
-  const issued=n((await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) q FROM dye_jobs WHERE ROLL_ID=?',roll))?.q);
+  const issued=n((await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) q FROM dye_jobs WHERE ROLL_ID=? AND COALESCE(STATUS,\'\') NOT LIKE \'CANCELLED%\'',roll))?.q);
   if(issued>0.0001)throw err('This roll has already been issued to dye. Cancel/reverse downstream dye issue first.',409);
   const t=now(),reason=String(r.REASON||'Mistaken entry');
   await db.batch([
@@ -1105,7 +1105,7 @@ async function getDyeBatchDetail(db,batch){
     FROM dye_jobs j
     JOIN raw_inward r ON r.ROLL_ID=j.ROLL_ID
     LEFT JOIN (
-      SELECT ROLL_ID,SUM(ISSUE_MTR) other_issued FROM dye_jobs WHERE DYE_BATCH_ID<>? GROUP BY ROLL_ID
+      SELECT ROLL_ID,SUM(ISSUE_MTR) other_issued FROM dye_jobs WHERE DYE_BATCH_ID<>? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY ROLL_ID
     ) x ON x.ROLL_ID=j.ROLL_ID
     WHERE j.DYE_BATCH_ID=? AND COALESCE(j.STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY j.ROW_ID`,batch,batch);
   const receipts=await rows(db,"SELECT * FROM dye_receipts WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY CREATED_AT,RECEIPT_ID",batch);
@@ -1132,7 +1132,7 @@ async function editDyeBatch(db,r,a){
     requirePos(qty,'Issue meter on line '+(i+1));
     const rr=await row(db,'SELECT * FROM raw_inward WHERE ROLL_ID=?',roll);if(!rr)throw err('Raw roll '+roll+' not found.',404);
     if(String(rr.FABRIC_ID)!==String(old.FABRIC_ID))throw err('All rolls must be of the same original batch fabric.',409);
-    const other=await row(db,"SELECT COALESCE(SUM(ISSUE_MTR),0) q FROM dye_jobs WHERE ROLL_ID=? AND DYE_BATCH_ID<>? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",roll,batch);
+    const other=await row(db,"SELECT COALESCE(SUM(ISSUE_MTR),0) q FROM dye_jobs WHERE ROLL_ID=? AND COALESCE(STATUS,\'\') NOT LIKE \'CANCELLED%\' AND DYE_BATCH_ID<>? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",roll,batch);
     const max=n(rr.INWARD_MTR)-n(other?.q);
     if(qty>max+0.0001)throw err('Issue exceeds available meter for roll '+(rr.VENDOR_ROLL_NO||roll)+'. Available: '+max,409);
     resolved.push({rr,qty});
