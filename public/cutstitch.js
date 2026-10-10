@@ -70,7 +70,6 @@ async function openBulkIssuePage(){
           '<div class="cs-defaults"><div class="cs-defaults-title"><b>Optional Defaults</b><small>Set once; every new line will auto-fill these values.</small></div>'+
             '<div class="field cs-default-fabric"><label>Default Fabric</label><select id="csDefaultFabric"><option value="">All fabrics</option>'+fabricOptions(fabrics)+'</select></div>'+
             '<div class="field cs-default-style"><label>Default Style</label><select id="csDefaultStyle"><option value="">No default</option>'+styleOptions(styles)+'</select></div>'+
-            sizes.map(function(s){return '<label class="cs-default-size"><span>'+esc(s.SIZE_NAME)+'</span><input id="csDef_'+esc(s.SIZE_ID)+'" data-default-size="'+esc(s.SIZE_ID)+'" type="number" min="0" step="1" value="0"></label>'}).join('')+
           '</div>'+
         '</section>'+
         '<section class="cs-lines-section"><div class="cs-lines-heading"><div><b>Issue Lines</b><small>Meter allows decimals; piece quantities are whole numbers.</small></div></div><div id="csRows" class="cs-rows"></div></section>'+
@@ -96,11 +95,6 @@ async function openBulkIssuePage(){
         return '<option value="'+esc(b.DYE_BATCH_ID)+'"'+(String(b.DYE_BATCH_ID)===String(selected||'')?' selected':'')+'>'+esc(b.DYE_BATCH_ID)+' · '+esc(b.COLOR_NAME||b.COLOR||b.COLOR_ID||'')+' · '+meter(b.BALANCE_MTR)+' m</option>'
       }).join('')
     }
-    function defaultSizes(){
-      const out={};
-      [].slice.call(document.querySelectorAll('[data-default-size]')).forEach(function(x){out[x.dataset.defaultSize]=Math.max(0,Math.trunc(num(x.value)))});
-      return out
-    }
     function lineTotal(row){
       return [].slice.call(row.querySelectorAll('.cs-size-input')).reduce(function(s,x){return s+Math.max(0,Math.trunc(num(x.value)))},0)
     }
@@ -116,8 +110,6 @@ async function openBulkIssuePage(){
       const comp=batch?compatible(batch):compatibleByFabric(selectedDefaultFabric());
       const style=row.querySelector('.cs-style');
       style.innerHTML='<option value="">Select style</option>'+styleOptions(comp,comp.some(function(s){return String(s.STYLE_ID)===String(preferred)})?preferred:'');
-      const ds=defaultSizes();
-      [].slice.call(row.querySelectorAll('.cs-size-input')).forEach(function(x){x.value=String(ds[x.dataset.size]||0)});
       totals()
     }
     function addRow(afterRow){
@@ -128,7 +120,7 @@ async function openBulkIssuePage(){
         '<div class="cs-row-source"><small>Fabric / Colour</small><b class="cs-source-name">—</b><span class="cs-source-meta">Select batch</span></div>'+
         '<div class="field cs-row-style"><label>Style</label><select class="cs-style"><option value="">Select style</option>'+styleOptions(compatibleByFabric(selectedDefaultFabric()),document.getElementById('csDefaultStyle').value)+'</select></div>'+
         '<div class="field cs-row-meter"><label>Meter</label><input class="cs-mtr" type="number" min="0.01" step="0.01" placeholder="0.00"></div>'+
-        '<div class="cs-row-sizes">'+sizes.map(function(s){return '<label><span>'+esc(s.SIZE_NAME)+'</span><input class="cs-size-input" data-size="'+esc(s.SIZE_ID)+'" type="number" min="0" step="1" value="'+Math.max(0,Math.trunc(num(document.getElementById('csDef_'+s.SIZE_ID)?.value)))+'"></label>'}).join('')+'</div>'+
+        '<div class="cs-row-sizes">'+sizes.map(function(s){return '<label><span>'+esc(s.SIZE_NAME)+'</span><input class="cs-size-input" data-size="'+esc(s.SIZE_ID)+'" type="number" min="0" step="1" value="0"></label>'}).join('')+'</div>'+
         '<div class="cs-row-total"><small>Total</small><b class="cs-total-pcs">0</b></div>'+
         '<div class="cs-row-actions"><button type="button" class="cs-add-after" title="Add line below">+ Line</button><button type="button" class="cs-remove" title="Remove">×</button></div>';
       if(afterRow&&afterRow.nextSibling)host.insertBefore(row,afterRow.nextSibling);else host.appendChild(row);
@@ -184,10 +176,6 @@ async function openBulkIssuePage(){
         style.innerHTML='<option value="">Select style</option>'+styleOptions(comp,comp.some(function(s){return String(s.STYLE_ID)===String(val)})?val:'')
       })
     };
-    [].slice.call(document.querySelectorAll('[data-default-size]')).forEach(function(x){
-      x.oninput=function(){x.value=String(Math.max(0,Math.trunc(num(x.value))))}
-    });
-
     addRow();
 
     document.getElementById('csPageForm').onsubmit=async function(e){
