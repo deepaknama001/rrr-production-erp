@@ -23,38 +23,12 @@ async function digestHex(text){const b=await crypto.subtle.digest('SHA-256',new 
 function safeEq(a,b){a=String(a||'');b=String(b||'');if(a.length!==b.length)return false;let x=0;for(let i=0;i<a.length;i++)x|=a.charCodeAt(i)^b.charCodeAt(i);return x===0}
 
 let schemaReadyPromise=null;
-async function ensureIssueIdModel(db){
+async function ensureIssueIdColumn(db){
   const info=(await db.prepare("PRAGMA table_info(stitching_jobs)").all()).results||[];
-  if(!info.some(x=>String(x.name).toUpperCase()==='ISSUE_ID'))await db.prepare('ALTER TABLE stitching_jobs ADD COLUMN ISSUE_ID TEXT').run();
-
-  const all=(await db.prepare("SELECT CHALLAN_ID,ISSUE_ID,ISSUE_DATE,CREATED_AT FROM stitching_jobs ORDER BY COALESCE(CREATED_AT,ISSUE_DATE,''),COALESCE(ISSUE_DATE,''),CHALLAN_ID").all()).results||[];
-  const used=new Set(),updates=[];let maxSeq=0,migrated=0,preserved=0;
-  const valid=/^CSI-(\d{6})-(\d+)$/;
-  for(const r of all){
-    const id=String(r.ISSUE_ID||''),m=valid.exec(id);
-    if(m&&!used.has(id)){used.add(id);maxSeq=Math.max(maxSeq,Number(m[2])||0);preserved++}
+  if(!info.some(x=>String(x.name).toUpperCase()==='ISSUE_ID')){
+    await db.prepare('ALTER TABLE stitching_jobs ADD COLUMN ISSUE_ID TEXT').run()
   }
-  const dateCode=v=>{
-    const s=String(v||'').slice(0,10),m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-    if(m)return m[1].slice(2)+m[2]+m[3];
-    return kolkataStamp()
-  };
-  for(const r of all){
-    const cur=String(r.ISSUE_ID||''),m=valid.exec(cur);
-    if(m&&used.has(cur))continue;
-    let next='';
-    do{maxSeq++;next='CSI-'+dateCode(r.ISSUE_DATE||r.CREATED_AT)+'-'+String(maxSeq).padStart(4,'0')}while(used.has(next));
-    used.add(next);updates.push(db.prepare('UPDATE stitching_jobs SET ISSUE_ID=? WHERE CHALLAN_ID=?').bind(next,String(r.CHALLAN_ID)));migrated++
-  }
-  for(let i=0;i<updates.length;i+=75)await db.batch(updates.slice(i,i+75));
-  await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_stitch_issue_id ON stitching_jobs(ISSUE_ID) WHERE ISSUE_ID IS NOT NULL AND ISSUE_ID<>''").run();
-  await db.prepare("INSERT INTO sequences(prefix,value) VALUES('CSI',?) ON CONFLICT(prefix) DO UPDATE SET value=MAX(value,excluded.value)").bind(maxSeq).run();
-  const missing=Number((await db.prepare("SELECT COUNT(*) c FROM stitching_jobs WHERE COALESCE(ISSUE_ID,'')=''").first())?.c||0);
-  const duplicate=Number((await db.prepare("SELECT COUNT(*) c FROM (SELECT ISSUE_ID FROM stitching_jobs WHERE COALESCE(ISSUE_ID,'')<>'' GROUP BY ISSUE_ID HAVING COUNT(*)>1)").first())?.c||0);
-  const report={rows:all.length,migrated,preserved,missing,duplicate,maxSeq,verified:missing===0&&duplicate===0,at:now()};
-  await db.prepare("INSERT INTO settings(KEY,VALUE,UPDATED_AT) VALUES('IDMODEL:STITCHING',?,?) ON CONFLICT(KEY) DO UPDATE SET VALUE=excluded.VALUE,UPDATED_AT=excluded.UPDATED_AT").bind(JSON.stringify(report),now()).run();
-  if(!report.verified)throw err('Cutting & Stitching Issue ID migration verification failed.',500);
-  return report
+  await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_stitch_issue_id ON stitching_jobs(ISSUE_ID) WHERE ISSUE_ID IS NOT NULL AND ISSUE_ID<>''").run()
 }
 
 export async function ensureSchema(env){
@@ -65,7 +39,7 @@ export async function ensureSchema(env){
       const exists=await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").first();
       if(!exists)throw err('D1 schema is not initialized. Run the database migrations first.',503)
     }
-    await ensureIssueIdModel(env.DB);
+    await ensureIssueIdColumn(env.DB);
     try{
       await env.DB.batch([
         env.DB.prepare("DELETE FROM request_log WHERE created_at < datetime('now','-7 day')"),
