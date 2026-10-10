@@ -720,3 +720,7 @@ button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justif
 .documents-master-tools b{display:block;font-size:11px}.documents-master-tools small{display:block;margin-top:2px;font-size:8px;color:var(--muted)}
 .doc-row-actions{display:flex;align-items:center;gap:6px;white-space:nowrap}
 @media(max-width:720px){.documents-master-tools{align-items:stretch;flex-direction:column}.documents-master-tools .btn{width:100%}.grid-selection-actions{display:flex;width:100%;margin:6px 0 0}.grid-selection-actions .btn{width:100%}}
+
+/* v0.52 Cutting & Stitching Size View */
+.size-view-legend{display:inline-flex;align-items:center;gap:5px;margin:0 0 8px;padding:7px 10px;border:1px solid var(--line);border-radius:9px;background:#f8fafc;font-size:9px;color:#677386}
+.size-view-legend b{color:#263244}
