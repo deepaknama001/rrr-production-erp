@@ -1028,7 +1028,7 @@ async function cancelRaw(db,r,a){
 async function cancelProduction(db,r,a){
   const id=String(r.PRODUCTION_BATCH_ID||''),old=await row(db,'SELECT * FROM production_batches WHERE PRODUCTION_BATCH_ID=?',id);if(!old)throw err('Production batch not found.',404);
   const downstream=n((await row(db,"SELECT COUNT(*) c FROM stitching_jobs WHERE PRODUCTION_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
-  if(downstream)throw err('Production batch already has active stitching challans. Reverse/cancel them first.',409);
+  if(downstream)throw err('Production batch already has active cutting & stitching issues. Reverse/cancel them first.',409);
   const reason=String(r.REASON||'Mistaken entry'),t=now();
   await db.batch([
     db.prepare("UPDATE production_batches SET STATUS='CANCELLED',NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE PRODUCTION_BATCH_ID=?").bind(String(old.NOTES||'')+(old.NOTES?' | ':'')+'Cancelled: '+reason,a.userId,t,id),
