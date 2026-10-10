@@ -1,4 +1,4 @@
-const APP_BUILD='0.47';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.48';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -1607,14 +1607,15 @@ const MASTER_CFG={
  color:{label:'Colors',id:'COLOR_ID',name:'COLOR_NAME',cols:['COLOR_ID','COLOR_NAME','COLOR_CODE','ACTIVE']},
  style:{label:'Styles',id:'STYLE_ID',name:'STYLE_NAME',cols:['STYLE_ID','STYLE_NAME','CATEGORY','STYLE_CODE','DEFAULT_FABRIC_ID','ACTIVE']},
  size:{label:'Sizes',id:'SIZE_ID',name:'SIZE_NAME',cols:['SIZE_ID','SIZE_NAME','SORT_ORDER','ACTIVE']},
- defect:{label:'Defect Reasons',id:'DEFECT_ID',name:'DEFECT_NAME',cols:['DEFECT_ID','DEFECT_NAME','STAGE','CATEGORY','ACTIVE']}
+ defect:{label:'Defect Reasons',id:'DEFECT_ID',name:'DEFECT_NAME',cols:['DEFECT_ID','DEFECT_NAME','STAGE','CATEGORY','ACTIVE']},
+ documents:{label:'Documents',id:'DOC_ID',name:'DOC_NO',cols:['DOC_NO','DOC_TYPE','DOC_DATE','VENDOR','STATUS','PRINT_COUNT','CREATED_BY','CREATED_AT']}
 };
 let mastersCache=null,masterTab='vendor';
 async function renderMasters(force=false){
-  const s=$('#stage');s.innerHTML='<section class="panel"><div class="panel-head"><div><h3>Masters</h3><small>Manage the database values used by production entry forms.</small></div><button class="btn teal" id="masterAdd">+ Add</button></div><div class="master-tabs" id="masterTabs"></div><div id="masterContent">Loading…</div></section>';
+  const s=$('#stage');s.innerHTML='<section class="panel"><div class="panel-head"><div><h3>Masters</h3><small>Manage master data and generated document archive.</small></div><button class="btn teal" id="masterAdd">+ Add</button></div><div class="master-tabs" id="masterTabs"></div><div id="masterContent">Loading…</div></section>';
   try{const d=await getCachedModule('masters',force);mastersCache=d.masters||{};drawMasterTabs();await drawMasterTable();$('#masterAdd').onclick=()=>openMasterForm(masterTab,null)}catch(e){toast(e.message,'bad',3500)}finally{setStatus('● Ready','ok')}
 }
-function drawMasterTabs(){$('#masterTabs').innerHTML=Object.entries(MASTER_CFG).map(([k,v])=>`<button class="${k===masterTab?'active':''}" data-k="${k}">${v.label}</button>`).join('');$('#masterTabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{masterTab=b.dataset.k;drawMasterTabs();drawMasterTable()})}
+function drawMasterTabs(){$('#masterTabs').innerHTML=Object.entries(MASTER_CFG).map(([k,v])=>`<button class="${k===masterTab?'active':''}" data-k="${k}">${v.label}</button>`).join('');$('#masterAdd')?.classList.toggle('hidden',masterTab==='documents');$('#masterTabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{masterTab=b.dataset.k;drawMasterTabs();drawMasterTable()})}
 function masterItems(type){const key={vendor:'vendors',fabric:'fabrics',color:'colors',style:'styles',size:'sizes',defect:'defects'}[type];return mastersCache?.[key]||[]}
 function boolText(v){return isTrue(v)?'Yes':'No'}
 const MASTER_FILTERS={
@@ -1622,13 +1623,45 @@ const MASTER_FILTERS={
   fabric:['UOM','ACTIVE'],color:['ACTIVE'],style:['CATEGORY','ACTIVE'],size:['ACTIVE'],defect:['STAGE','CATEGORY','ACTIVE']
 };
 async function drawMasterTable(){
-  const cfg=MASTER_CFG[masterTab],items=masterItems(masterTab),host=$('#masterContent');host.innerHTML='Loading…';
+  const cfg=MASTER_CFG[masterTab],host=$('#masterContent');host.innerHTML='Loading…';$('#masterAdd')?.classList.toggle('hidden',masterTab==='documents');
+  if(masterTab==='documents'){
+    try{
+      const d=await api('/api/docs?action=history',{activity:'Loading document archive…'}),items=(d.items||[]).map(x=>({...x,DOC_TYPE_LABEL:docsTypeLabel(x.DOC_TYPE)}));
+      host.innerHTML='<div class="documents-master-tools"><div><b>Generated Documents</b><small>Reprint saved challans or generate stickers from saved Stitching Challans.</small></div><button class="btn ghost" id="documentSettingsBtn">Challan Settings</button></div><div id="documentsGrid"></div>';
+      $('#documentSettingsBtn').onclick=openDocumentSettings;
+      await mountDataGrid($('#documentsGrid'),{
+        key:'masters:documents',title:'Generated Documents',items,
+        columns:['DOC_NO','DOC_TYPE_LABEL','DOC_DATE','VENDOR','STATUS','PRINT_COUNT','CREATED_BY','CREATED_AT','__ACTION'],
+        filters:['DOC_TYPE_LABEL','VENDOR','STATUS','CREATED_BY'],
+        renderSelectionActions:rows=>rows.length&&rows.every(r=>r.DOC_TYPE==='STITCHING_CHALLAN'&&String(r.STATUS||'').toUpperCase()!=='CANCELLED')?documentSelectionButton('Generate Stickers','docs-stickers-selected'):'',
+        bindSelectionActions:(rows,el)=>{const b=el.querySelector('.docs-stickers-selected');if(b)b.onclick=()=>generateStickersFromDocuments(rows)},
+        actionRenderer:r=>'<span class="doc-row-actions"><button class="btn ghost doc-reprint" data-idx="'+r.__gridIndex+'">Reprint</button>'+(r.DOC_TYPE==='STITCHING_CHALLAN'&&String(r.STATUS||'').toUpperCase()!=='CANCELLED'?'<button class="btn ghost doc-stickers" data-idx="'+r.__gridIndex+'">Stickers</button>':'')+'</span>',
+        bindActions:(pageRows,el)=>{el.querySelectorAll('.doc-reprint').forEach(b=>b.onclick=()=>reprintDocument(items[Number(b.dataset.idx)].DOC_ID));el.querySelectorAll('.doc-stickers').forEach(b=>b.onclick=()=>generateStickersFromDocuments([items[Number(b.dataset.idx)]]))}
+      })
+    }catch(e){host.innerHTML='';toast(e.message,'bad',4200)}
+    return
+  }
+  const items=masterItems(masterTab);
   await mountDataGrid(host,{
     key:'masters:'+masterTab,title:'Masters - '+cfg.label,items,
     columns:[...cfg.cols,'DEPENDENCY_COUNT','__ACTION'],filters:MASTER_FILTERS[masterTab]||[],
     actionRenderer:r=>'<button class="btn ghost master-edit" data-idx="'+r.__gridIndex+'">Edit</button>',
     bindActions:(pageRows,el)=>el.querySelectorAll('.master-edit').forEach(b=>b.onclick=()=>openMasterForm(masterTab,items[Number(b.dataset.idx)]))
   })
+}
+async function openDocumentSettings(){
+  try{
+    const d=await api('/api/docs?action=settings',{activity:'Loading challan settings…'}),x=d.company||{};
+    $('#modalBody').innerHTML='<div class="panel-head"><div><h3>Challan Settings</h3><small>Used by future generated challans.</small></div><button class="btn ghost" id="closeModal">Close</button></div><form id="documentSettingsForm"><div class="form-grid">'+
+      '<div class="field"><label>Company / Brand Name</label><input name="name" value="'+esc(x.name||'')+'"></div>'+
+      '<div class="field"><label>Phone</label><input name="phone" value="'+esc(x.phone||'')+'"></div>'+
+      '<div class="field wide"><label>Address</label><input name="address" value="'+esc(x.address||'')+'"></div>'+
+      '<div class="field"><label>GSTIN</label><input name="gst" value="'+esc(x.gst||'')+'"></div>'+
+      '<div class="field"><label>Email</label><input name="email" value="'+esc(x.email||'')+'"></div>'+
+      '<div class="field wide"><label>Footer Note</label><input name="footer" value="'+esc(x.footer||'')+'"></div></div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Cancel</button><button class="btn primary">Save Settings</button></div></form>';
+    $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+    $('#documentSettingsForm').onsubmit=async e=>{e.preventDefault();const f=Object.fromEntries(new FormData(e.target).entries());try{await api('/api/docs',{method:'POST',body:JSON.stringify({action:'save_settings',company:f}),activity:'Saving challan settings…',success:'Challan settings saved'});closeModal()}catch(err){toast(err.message,'bad',4200)}}
+  }catch(e){toast(e.message,'bad',4200)}
 }
 async function openMasterForm(type,row){
   const requestId=newRequestId(),cfg=MASTER_CFG[type],editing=!!row,l=await getLookups(false),f=[];
