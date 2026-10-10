@@ -1,4 +1,4 @@
-const APP_BUILD='0.46';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.47';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -200,46 +200,107 @@ async function renderDocsMaker(force=false){
         const rows=d.sources?.stitching||[];
         const groupKey=x=>String(x.CREATED_AT||x.ISSUE_DATE||'')+'|'+String(x.STITCHING_VENDOR_ID||x.VENDOR||'');
         const groups=new Map();
-        rows.forEach(x=>{const k=groupKey(x);if(!groups.has(k))groups.set(k,{key:k,date:x.ISSUE_DATE,createdAt:x.CREATED_AT,vendor:x.VENDOR||'',vendorId:x.STITCHING_VENDOR_ID||'',items:[]});groups.get(k).items.push(x)});
-        const list=[...groups.values()];
+        rows.forEach(x=>{
+          const k=groupKey(x);
+          if(!groups.has(k))groups.set(k,{key:k,date:x.ISSUE_DATE,createdAt:x.CREATED_AT,vendor:x.VENDOR||'',vendorId:x.STITCHING_VENDOR_ID||'',items:[]});
+          groups.get(k).items.push(x)
+        });
+        const list=[...groups.values()].map((g,i)=>({
+          ...g,index:i+1,
+          fabrics:[...new Set(g.items.map(x=>x.FABRIC).filter(Boolean))],
+          styles:[...new Set(g.items.map(x=>x.STYLE).filter(Boolean))],
+          colors:[...new Set(g.items.map(x=>x.COLOR).filter(Boolean))],
+          statuses:[...new Set(g.items.map(x=>x.STATUS).filter(Boolean))],
+          totalMtr:g.items.reduce((s,x)=>s+Number(x.FABRIC_QTY||0),0),
+          totalPcs:g.items.reduce((s,x)=>s+Number(x.TOTAL_PCS||0),0)
+        }));
+        const uniq=fn=>[...new Set(list.flatMap(fn).filter(Boolean))].sort();
+        const vendors=uniq(g=>[g.vendor]),fabrics=uniq(g=>g.fabrics),styles=uniq(g=>g.styles),colors=uniq(g=>g.colors),statuses=uniq(g=>g.statuses);
+
         body.innerHTML='<div class="docs-stitch-multi">'+
           '<div class="docs-stitch-top"><div><h4>Build Cutting & Stitching Challan</h4><small>Select one or more issue batches for the same vendor.</small></div><div class="field"><label>Document Date</label><input id="docDate" type="date" value="'+todayLocal()+'"></div></div>'+
-          '<div class="docs-stitch-batch-select" id="docStitchBatchList">'+
-            list.map((g,i)=>'<label class="docs-stitch-batch-option" data-vendor="'+esc(g.vendorId||g.vendor)+'"><input type="checkbox" value="'+i+'"><span><b>Issue Batch '+(i+1)+'</b><small>'+esc(fmtDate(g.date))+' · '+esc(g.vendor)+' · '+g.items.length+' line(s)</small></span><em>'+docsMeter(g.items.reduce((s,x)=>s+Number(x.FABRIC_QTY||0),0))+' m · '+docsNum(g.items.reduce((s,x)=>s+Number(x.TOTAL_PCS||0),0))+' pcs</em></label>').join('')+
+          '<div class="docs-stitch-filters">'+
+            '<input id="docStitchSearch" placeholder="Search batch / style / fabric / color / vendor">'+
+            '<select id="docStitchVendor"><option value="">All Vendors</option>'+vendors.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
+            '<select id="docStitchFabric"><option value="">All Fabrics</option>'+fabrics.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
+            '<select id="docStitchStyle"><option value="">All Styles</option>'+styles.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
+            '<select id="docStitchColor"><option value="">All Colors</option>'+colors.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
+            '<select id="docStitchStatus"><option value="">All Status</option>'+statuses.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
+            '<input id="docStitchFrom" type="date" title="From date"><input id="docStitchTo" type="date" title="To date">'+
+            '<select id="docStitchSort"><option value="date_desc">Newest First</option><option value="date_asc">Oldest First</option><option value="vendor_asc">Vendor A-Z</option><option value="meter_desc">Meter High-Low</option><option value="pcs_desc">Pieces High-Low</option><option value="lines_desc">Lines High-Low</option></select>'+
+            '<button type="button" class="btn ghost" id="docStitchClear">Clear</button>'+
           '</div>'+
+          '<div class="docs-stitch-actions"><div><button type="button" class="btn ghost" id="docStitchSelectVisible">Select All Visible</button><button type="button" class="btn ghost" id="docStitchClearSelection">Clear Selection</button></div><span id="docStitchVisibleCount"></span></div>'+
+          '<div class="docs-stitch-batch-select" id="docStitchBatchList"></div>'+
           '<div class="field"><label>Notes</label><input id="docNotes" placeholder="Optional vendor instruction"></div>'+
           '<div class="docs-stitch-preview" id="docStitchPreview"><div class="smart-empty"><b>Select issue batch(es)</b><span>Selected batches will combine into one vendor challan.</span></div></div>'+
           '<div class="docs-stitch-footer"><span id="docStitchSelected">0 batches selected</span><button class="btn teal" id="makeStitchDoc">Generate & Print Combined Challan</button></div>'+
         '</div>';
 
-        const selectedGroups=()=>[...document.querySelectorAll('#docStitchBatchList input:checked')].map(x=>list[Number(x.value)]).filter(Boolean);
+        let selectedKeys=new Set();
+
+        const selectedGroups=()=>list.filter(g=>selectedKeys.has(g.key));
+        const matches=(g)=>{
+          const q=$('#docStitchSearch').value.trim().toLowerCase(),v=$('#docStitchVendor').value,f=$('#docStitchFabric').value,s=$('#docStitchStyle').value,c=$('#docStitchColor').value,st=$('#docStitchStatus').value,from=$('#docStitchFrom').value,to=$('#docStitchTo').value;
+          const hay=('Issue Batch '+g.index+' '+g.vendor+' '+g.fabrics.join(' ')+' '+g.styles.join(' ')+' '+g.colors.join(' ')+' '+g.statuses.join(' ')+' '+g.items.map(x=>x.CHALLAN_ID+' '+(x.DYE_BATCH_ID||'')).join(' ')).toLowerCase();
+          return(!q||hay.includes(q))&&(!v||g.vendor===v)&&(!f||g.fabrics.includes(f))&&(!s||g.styles.includes(s))&&(!c||g.colors.includes(c))&&(!st||g.statuses.includes(st))&&(!from||String(g.date||'').slice(0,10)>=from)&&(!to||String(g.date||'').slice(0,10)<=to)
+        };
+        const sortedVisible=()=>{
+          const arr=list.filter(matches),sort=$('#docStitchSort').value;
+          arr.sort((a,b)=>{
+            if(sort==='date_asc')return String(a.date).localeCompare(String(b.date));
+            if(sort==='vendor_asc')return a.vendor.localeCompare(b.vendor);
+            if(sort==='meter_desc')return b.totalMtr-a.totalMtr;
+            if(sort==='pcs_desc')return b.totalPcs-a.totalPcs;
+            if(sort==='lines_desc')return b.items.length-a.items.length;
+            return String(b.date).localeCompare(String(a.date))
+          });return arr
+        };
+        const renderBatches=()=>{
+          const visible=sortedVisible(),chosen=selectedGroups(),vendorLock=chosen.length?String(chosen[0].vendorId||chosen[0].vendor):'';
+          $('#docStitchVisibleCount').textContent=visible.length+' visible / '+list.length+' total';
+          $('#docStitchBatchList').innerHTML=visible.map(g=>{
+            const id=String(g.vendorId||g.vendor),checked=selectedKeys.has(g.key),disabled=!!vendorLock&&id!==vendorLock&&!checked;
+            return '<label class="docs-stitch-batch-option'+(disabled?' disabled':'')+'" data-key="'+esc(g.key)+'" data-vendor="'+esc(id)+'">'+
+              '<input type="checkbox" '+(checked?'checked ':'')+(disabled?'disabled ':'')+'>'+
+              '<span><b>Issue Batch '+g.index+'</b><small>'+esc(fmtDate(g.date))+' · '+esc(g.vendor)+' · '+g.items.length+' line(s) · '+esc(g.fabrics.join(', '))+'</small></span>'+
+              '<em>'+docsMeter(g.totalMtr)+' m · '+docsNum(g.totalPcs)+' pcs</em></label>'
+          }).join('')||'<div class="smart-empty"><b>No matching batches</b><span>Change or clear the filters.</span></div>';
+          document.querySelectorAll('#docStitchBatchList .docs-stitch-batch-option input').forEach(ch=>ch.onchange=()=>{
+            const card=ch.closest('.docs-stitch-batch-option'),key=card.dataset.key;
+            if(ch.checked)selectedKeys.add(key);else selectedKeys.delete(key);
+            renderBatches();renderPreview()
+          })
+        };
         const renderPreview=()=>{
           const chosen=selectedGroups();
-          $('#docStitchSelected').textContent=chosen.length+' batch'+(chosen.length===1?'':'es')+' selected';
+          $('#docStitchSelected').textContent=chosen.length+' batch'+(chosen.length===1?'':'es')+' selected'+(chosen.length?' · '+docsMeter(chosen.reduce((s,g)=>s+g.totalMtr,0))+' m · '+docsNum(chosen.reduce((s,g)=>s+g.totalPcs,0))+' pcs':'');
           if(!chosen.length){
-            $('#docStitchPreview').innerHTML='<div class="smart-empty"><b>Select issue batch(es)</b><span>Selected batches will combine into one vendor challan.</span></div>';
-            document.querySelectorAll('.docs-stitch-batch-option').forEach(x=>x.classList.remove('disabled'));
-            return
+            $('#docStitchPreview').innerHTML='<div class="smart-empty"><b>Select issue batch(es)</b><span>Selected batches will combine into one vendor challan.</span></div>';return
           }
-          const vendorId=chosen[0].vendorId||chosen[0].vendor;
-          document.querySelectorAll('.docs-stitch-batch-option').forEach(x=>{
-            const input=x.querySelector('input'),mismatch=String(x.dataset.vendor)!==String(vendorId)&&!input.checked;
-            x.classList.toggle('disabled',mismatch);input.disabled=mismatch
-          });
           const all=chosen.flatMap(g=>g.items);
           $('#docStitchPreview').innerHTML='<div class="docs-batch-preview-head"><b>'+esc(chosen[0].vendor)+'</b><span>'+chosen.length+' batch(es) · '+all.length+' issue line(s)</span></div>'+
             '<div class="table-wrap"><table class="data"><thead><tr><th>Source</th><th>Style</th><th>Color</th><th>Fabric</th><th>Meter</th><th>Pieces</th></tr></thead><tbody>'+
             all.map(x=>'<tr><td>'+esc(x.CHALLAN_ID)+'</td><td>'+esc(x.STYLE||'')+'</td><td>'+esc(x.COLOR||'')+'</td><td>'+esc(x.FABRIC||'')+'</td><td>'+docsMeter(x.FABRIC_QTY)+'</td><td>'+docsNum(x.TOTAL_PCS)+'</td></tr>').join('')+
             '<tr><td colspan="4" class="tot">Grand Total</td><td class="tot">'+docsMeter(all.reduce((s,x)=>s+Number(x.FABRIC_QTY||0),0))+'</td><td class="tot">'+docsNum(all.reduce((s,x)=>s+Number(x.TOTAL_PCS||0),0))+'</td></tr></tbody></table></div>'
         };
-        document.querySelectorAll('#docStitchBatchList input').forEach(ch=>ch.onchange=renderPreview);
+        const refresh=()=>{renderBatches();renderPreview()};
+        ['docStitchSearch','docStitchVendor','docStitchFabric','docStitchStyle','docStitchColor','docStitchStatus','docStitchFrom','docStitchTo','docStitchSort'].forEach(id=>$('#'+id).addEventListener(id==='docStitchSearch'?'input':'change',refresh));
+        $('#docStitchClear').onclick=()=>{['docStitchSearch','docStitchVendor','docStitchFabric','docStitchStyle','docStitchColor','docStitchStatus','docStitchFrom','docStitchTo'].forEach(id=>$('#'+id).value='');$('#docStitchSort').value='date_desc';refresh()};
+        $('#docStitchSelectVisible').onclick=()=>{
+          const visible=sortedVisible();if(!visible.length)return;
+          const chosen=selectedGroups(),vendorLock=chosen.length?String(chosen[0].vendorId||chosen[0].vendor):String(visible[0].vendorId||visible[0].vendor);
+          visible.filter(g=>String(g.vendorId||g.vendor)===vendorLock).forEach(g=>selectedKeys.add(g.key));refresh()
+        };
+        $('#docStitchClearSelection').onclick=()=>{selectedKeys.clear();refresh()};
         $('#makeStitchDoc').onclick=()=>{
           const chosen=selectedGroups();if(!chosen.length)return toast('Select at least one issue batch.','bad');
           const vendor=String(chosen[0].vendorId||chosen[0].vendor);
           if(chosen.some(g=>String(g.vendorId||g.vendor)!==vendor))return toast('Select issue batches for one vendor only.','bad');
           const ids=chosen.flatMap(g=>g.items.map(x=>x.CHALLAN_ID));
           generateDocAndPrint('STITCHING_CHALLAN',ids,{docDate:$('#docDate').value,notes:$('#docNotes').value})
-        }
+        };
+        refresh()
       }else if(tab==='stickers'){
         const rows=d.sources?.stitching||[];
         const groupKey=x=>String(x.CREATED_AT||x.ISSUE_DATE||'')+'|'+String(x.STITCHING_VENDOR_ID||x.VENDOR||'');
