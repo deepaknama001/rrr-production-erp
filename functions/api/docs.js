@@ -253,8 +253,8 @@ export async function onRequestGet(context){
     if(action==='history'){
       const type=String(u.searchParams.get('type')||'').toUpperCase();
       const q=type
-        ? context.env.DB.prepare("SELECT DOC_ID,DOC_NO,DOC_TYPE,SOURCE_IDS,VENDOR_ID,DOC_DATE,NOTES,STATUS,PRINT_COUNT,CREATED_BY,CREATED_AT FROM docs_documents WHERE DOC_TYPE=? ORDER BY CREATED_AT DESC LIMIT 500").bind(type)
-        : context.env.DB.prepare("SELECT DOC_ID,DOC_NO,DOC_TYPE,SOURCE_IDS,VENDOR_ID,DOC_DATE,NOTES,STATUS,PRINT_COUNT,CREATED_BY,CREATED_AT FROM docs_documents ORDER BY CREATED_AT DESC LIMIT 500");
+        ? context.env.DB.prepare("SELECT d.DOC_ID,d.DOC_NO,d.DOC_TYPE,d.SOURCE_IDS,d.VENDOR_ID,COALESCE(v.VENDOR_NAME,d.VENDOR_ID) VENDOR,d.DOC_DATE,d.NOTES,d.STATUS,d.PRINT_COUNT,d.CREATED_BY,d.CREATED_AT FROM docs_documents d LEFT JOIN vendors v ON v.VENDOR_ID=d.VENDOR_ID WHERE d.DOC_TYPE=? ORDER BY d.CREATED_AT DESC LIMIT 500").bind(type)
+        : context.env.DB.prepare("SELECT d.DOC_ID,d.DOC_NO,d.DOC_TYPE,d.SOURCE_IDS,d.VENDOR_ID,COALESCE(v.VENDOR_NAME,d.VENDOR_ID) VENDOR,d.DOC_DATE,d.NOTES,d.STATUS,d.PRINT_COUNT,d.CREATED_BY,d.CREATED_AT FROM docs_documents d LEFT JOIN vendors v ON v.VENDOR_ID=d.VENDOR_ID ORDER BY d.CREATED_AT DESC LIMIT 500");
       const rows=(await q.all()).results||[];
       return json({items:rows.filter(x=>user.admin||user.permissions?.[typePerm(x.DOC_TYPE)])})
     }
