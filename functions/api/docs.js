@@ -62,15 +62,21 @@ async function saveCompany(db,x){
     .bind(DOC_SETTINGS_KEY,JSON.stringify(v),now()).run();
   return v
 }
-async function nextDocNo(db,prefix){
+function financialYear(v){
+  const s=ymd(v),m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  const d=m?new Date(Number(m[1]),Number(m[2])-1,Number(m[3])):new Date();
+  const y=d.getFullYear(),start=d.getMonth()>=3?y:y-1,end=start+1;
+  return String(start).slice(2)+'-'+String(end).slice(2)
+}
+async function nextDocNo(db,prefix,docDate){
+  const fy=financialYear(docDate),seqKey='DOC:'+prefix+':'+fy;
   const r=await db.batch([
-    db.prepare('INSERT OR IGNORE INTO sequences(prefix,value) VALUES(?,0)').bind(prefix),
-    db.prepare('UPDATE sequences SET value=value+1 WHERE prefix=?').bind(prefix),
-    db.prepare('SELECT value FROM sequences WHERE prefix=?').bind(prefix)
+    db.prepare('INSERT OR IGNORE INTO sequences(prefix,value) VALUES(?,0)').bind(seqKey),
+    db.prepare('UPDATE sequences SET value=value+1 WHERE prefix=?').bind(seqKey),
+    db.prepare('SELECT value FROM sequences WHERE prefix=?').bind(seqKey)
   ]);
   const n=Number(r[2]?.results?.[0]?.value||0);
-  const d=new Date(),yy=String(d.getFullYear()).slice(2),mm=String(d.getMonth()+1).padStart(2,'0'),dd=String(d.getDate()).padStart(2,'0');
-  return prefix+'-'+yy+mm+dd+'-'+String(n).padStart(4,'0')
+  return prefix+'/'+fy+'/'+String(n).padStart(4,'0')
 }
 async function audit(context,user,action,id,payload){
   try{
@@ -306,7 +312,7 @@ export async function onRequestPost(context){
     if(!sourceIds.length)return json({error:'Select source record(s).'},400);
     const payload=await buildPayload(context.env.DB,type,sourceIds,b.overrides||{});
     const prefix=type==='DYE_CHALLAN'?'DYC':type==='STITCHING_CHALLAN'?'STC':'STK';
-    const docNo=await nextDocNo(context.env.DB,prefix),docId=uuid(),t=now(),docDate=ymd(b.docDate||payload.date),notes=String(b.notes||payload.notes||'').slice(0,500);
+    const docDate=ymd(b.docDate||payload.date),docNo=await nextDocNo(context.env.DB,prefix,docDate),docId=uuid(),t=now(),notes=String(b.notes||payload.notes||'').slice(0,500);
     const vendorId=type==='STICKER_SHEET'?'':String(payload.vendorId||'');
     const snapshot={...payload,company:await getCompany(context.env.DB),docNo,docDate,notes};
     await context.env.DB.prepare("INSERT INTO docs_documents(DOC_ID,DOC_NO,DOC_TYPE,SOURCE_IDS,VENDOR_ID,DOC_DATE,NOTES,PAYLOAD_JSON,STATUS,PRINT_COUNT,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
