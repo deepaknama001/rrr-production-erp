@@ -233,7 +233,7 @@ async function buildPayload(db,type,sourceIds,overrides={}){
       if(doc){
         if(String(doc.STATUS||'').toUpperCase()==='CANCELLED')throw Object.assign(new Error('Cancelled stitching challan '+doc.DOC_NO+' cannot generate stickers.'),{status:409});
         let p={};try{p=JSON.parse(doc.PAYLOAD_JSON||'{}')}catch{}
-        for(const x of p.items||[])items.push({...x,sourceDocId:doc.DOC_ID,sourceDocNo:doc.DOC_NO,notes:String(x.notes||p.notes||'')});
+        for(const x of p.items||[])items.push({...x,sourceId:doc.DOC_NO,sourceDocId:doc.DOC_ID,sourceDocNo:doc.DOC_NO,notes:String(x.notes||p.notes||'')});
         continue
       }
       const x=await stitchOne(db,String(id)),ov=overrides?.[id]||{};
