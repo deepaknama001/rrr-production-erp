@@ -1,9 +1,9 @@
 (function(){
 'use strict';
-const BUILD='0.35';
+const BUILD='0.36';
 const MOD_BY_TITLE={
   'Raw Fabric':'raw','Dyeing':'dye','Production':'production','Production / Cutting':'production',
-  'Stitching':'stitching','QC & Rework':'qc','Warehouse Handover':'handover'
+  'Stitching':'stitching','Cutting & Stitching':'stitching','QC & Rework':'qc','Warehouse Handover':'handover'
 };
 const ID_COL={raw:'ROLL_ID',dye:'DYE_BATCH_ID',production:'PRODUCTION_BATCH_ID',stitching:'CHALLAN_ID',qc:'QC_ID',handover:'HANDOVER_ID'};
 const EXPECT_FORMS=['dyePlanForm','stitchSmartForm','stitchEditForm','rwIssueForm'];
