@@ -696,3 +696,12 @@ button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justif
 .docs-batch-preview-head b{font-size:12px}.docs-batch-preview-head span{font-size:10px;color:var(--muted)}
 .docs-stitch-preview .data th,.docs-stitch-preview .data td{font-size:10px!important;padding:8px 9px!important}
 @media(max-width:760px){.docs-stitch-batch-form{grid-template-columns:1fr}.docs-batch-preview-head{align-items:flex-start;flex-direction:column}}
+
+/* v0.46 multi-batch stitching challan builder */
+.docs-stitch-multi{display:grid;gap:12px}
+.docs-stitch-top{display:flex;justify-content:space-between;align-items:end;gap:14px}.docs-stitch-top h4{margin:0 0 3px;font-size:14px}.docs-stitch-top small{font-size:10px;color:var(--muted)}.docs-stitch-top .field{width:220px;margin:0}
+.docs-stitch-batch-select{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;max-height:260px;overflow:auto}
+.docs-stitch-batch-option{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fff;cursor:pointer}
+.docs-stitch-batch-option:hover{background:#f8fafc}.docs-stitch-batch-option input{width:16px;height:16px}.docs-stitch-batch-option b{display:block;font-size:11px}.docs-stitch-batch-option small{display:block;font-size:9px;color:var(--muted);margin-top:2px}.docs-stitch-batch-option em{font-style:normal;font-size:9px;font-weight:850;white-space:nowrap}.docs-stitch-batch-option.disabled{opacity:.38;cursor:not-allowed}
+.docs-stitch-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;padding-top:10px;border-top:1px solid var(--line)}.docs-stitch-footer span{font-size:10px;font-weight:850;color:#586576}
+@media(max-width:760px){.docs-stitch-top{align-items:stretch;flex-direction:column}.docs-stitch-top .field{width:100%}.docs-stitch-batch-select{grid-template-columns:1fr}.docs-stitch-footer{align-items:stretch;flex-direction:column}.docs-stitch-footer .btn{width:100%}}
