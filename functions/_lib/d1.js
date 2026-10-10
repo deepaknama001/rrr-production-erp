@@ -671,7 +671,13 @@ async function lookupData(db){
              SUM(USABLE_MTR) USABLE_MTR,MAX(FINAL_RECEIPT) CLOSED
       FROM dye_receipts WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY DYE_BATCH_ID
     ),
-    a AS (SELECT DYE_BATCH_ID,SUM(ALLOCATED_MTR) ALLOCATED_MTR FROM production_batches WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' GROUP BY DYE_BATCH_ID)
+    a AS (
+      SELECT DYE_BATCH_ID,SUM(ALLOCATED_MTR) ALLOCATED_MTR
+      FROM production_batches
+      WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'
+        AND UPPER(COALESCE(STATUS,''))<>'PLANNED'
+      GROUP BY DYE_BATCH_ID
+    )
     SELECT j.*,COALESCE(r.RECEIVED_MTR,0) RECEIVED_MTR,COALESCE(r.DEFECT_MTR,0) DEFECT_MTR,
            COALESCE(r.USABLE_MTR,0) USABLE_MTR,COALESCE(r.CLOSED,0) CLOSED,
            MAX(0,COALESCE(r.USABLE_MTR,0)-COALESCE(a.ALLOCATED_MTR,0)) BALANCE_MTR,
@@ -1083,7 +1089,7 @@ async function saveDyeReceive(db,r,a){
 }
 
 async function dyeDownstreamCount(db,batch){
-  const r=await row(db,"SELECT COUNT(*) c FROM production_batches WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",batch);
+  const r=await row(db,"SELECT COUNT(*) c FROM production_batches WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' AND UPPER(COALESCE(STATUS,''))<>'PLANNED'",batch);
   return n(r?.c);
 }
 async function getDyeBatchDetail(db,batch){
