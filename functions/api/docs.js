@@ -176,7 +176,7 @@ async function stitchOne(db,id){
       .filter(([,q])=>Number(q||0)>0).map(([SIZE,QTY])=>({SIZE,QTY}))
   }
   return{
-    sourceId:id,vendorId:h.STITCHING_VENDOR_ID,vendor:h.VENDOR,vendorAddress:h.VENDOR_ADDRESS||'',vendorPhone:h.VENDOR_PHONE||'',vendorGst:h.VENDOR_GST||'',date:h.ISSUE_DATE,
+    sourceId:id,vendorId:h.STITCHING_VENDOR_ID,vendor:h.VENDOR,vendorAddress:h.VENDOR_ADDRESS||'',vendorPhone:h.VENDOR_PHONE||'',vendorGst:h.VENDOR_GST||'',date:h.ISSUE_DATE,createdAt:h.CREATED_AT||'',status:h.STATUS||'',
     productionBatchId:h.PRODUCTION_BATCH_ID,style:h.STYLE,color:h.COLOR,fabric:h.FABRIC,
     fabricQty:Number(h.FABRIC_QTY||0),sizes:sizes.map(x=>({size:x.SIZE,qty:Number(x.QTY||0)})),
     totalPcs:sizes.reduce((s,x)=>s+Number(x.QTY||0),0),notes:h.NOTES||''
@@ -185,8 +185,20 @@ async function stitchOne(db,id){
 async function buildPayload(db,type,sourceIds,overrides={}){
   if(type==='DYE_CHALLAN')return dyePayload(db,String(sourceIds[0]||''));
   if(type==='STITCHING_CHALLAN'){
-    const x=await stitchOne(db,String(sourceIds[0]||''));
-    return{...x,title:'Stitching Issue Challan',fabricQty:Number(overrides.fabricQty??x.fabricQty),notes:String(overrides.notes??x.notes??'')}
+    const items=[];
+    for(const id of sourceIds.slice(0,60))items.push(await stitchOne(db,String(id)));
+    if(!items.length)throw Object.assign(new Error('Select a Cutting & Stitching issue batch.'),{status:400});
+    const first=items[0],vendorId=String(first.vendorId||''),createdAt=String(first.createdAt||'');
+    if(items.some(x=>String(x.vendorId||'')!==vendorId))throw Object.assign(new Error('All challan lines must belong to the same vendor issue batch.'),{status:409});
+    if(createdAt&&items.some(x=>String(x.createdAt||'')!==createdAt))throw Object.assign(new Error('Selected lines are from different issue batches.'),{status:409});
+    return{
+      title:'Cutting & Stitching Issue Challan',
+      vendorId:first.vendorId,vendor:first.vendor,vendorAddress:first.vendorAddress,vendorPhone:first.vendorPhone,vendorGst:first.vendorGst,
+      date:first.date,createdAt:first.createdAt||'',items,
+      totalFabricMtr:items.reduce((s,x)=>s+Number(x.fabricQty||0),0),
+      totalPcs:items.reduce((s,x)=>s+Number(x.totalPcs||0),0),
+      notes:String(overrides.notes??'')
+    }
   }
   if(type==='STICKER_SHEET'){
     const items=[];
