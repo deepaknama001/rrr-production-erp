@@ -28,6 +28,9 @@ function vendorOptions(items){
 function styleOptions(items,selected){
   return (items||[]).map(function(x){return '<option value="'+esc(x.STYLE_ID)+'"'+(String(x.STYLE_ID)===String(selected||'')?' selected':'')+'>'+esc(x.STYLE_NAME||x.STYLE_ID)+'</option>'}).join('')
 }
+function fabricOptions(items,selected){
+  return (items||[]).map(function(x){return '<option value="'+esc(x.FABRIC_ID)+'"'+(String(x.FABRIC_ID)===String(selected||'')?' selected':'')+'>'+esc(x.FABRIC_NAME||x.FABRIC_ID)+'</option>'}).join('')
+}
 
 async function openBulkIssuePage(){
   const stage=document.getElementById('stage');if(!stage)return;
@@ -41,6 +44,7 @@ async function openBulkIssuePage(){
     const batches=l.dyeBatches||[];
     const styles=(l.styles||[]).filter(function(x){return truth(x.ACTIVE)});
     const sizes=(l.sizes||[]).filter(function(x){return truth(x.ACTIVE)});
+    const fabrics=(l.fabrics||[]).filter(function(x){return truth(x.ACTIVE)});
 
     if(!vendors.length)throw new Error('Create an active Cutting / Stitching Vendor in Masters → Vendors.');
     if(!batches.length)throw new Error('No dyed fabric balance is available. Receive dyed fabric first.');
@@ -64,6 +68,7 @@ async function openBulkIssuePage(){
             '<div class="field"><label>General Notes</label><input name="NOTES" placeholder="Optional vendor instruction"></div>'+
           '</div>'+
           '<div class="cs-defaults"><div class="cs-defaults-title"><b>Optional Defaults</b><small>Set once; every new line will auto-fill these values.</small></div>'+
+            '<div class="field cs-default-fabric"><label>Default Fabric</label><select id="csDefaultFabric"><option value="">All fabrics</option>'+fabricOptions(fabrics)+'</select></div>'+
             '<div class="field cs-default-style"><label>Default Style</label><select id="csDefaultStyle"><option value="">No default</option>'+styleOptions(styles)+'</select></div>'+
             sizes.map(function(s){return '<label class="cs-default-size"><span>'+esc(s.SIZE_NAME)+'</span><input id="csDef_'+esc(s.SIZE_ID)+'" data-default-size="'+esc(s.SIZE_ID)+'" type="number" min="0" step="1" value="0"></label>'}).join('')+
           '</div>'+
@@ -75,12 +80,20 @@ async function openBulkIssuePage(){
     document.getElementById('csBack').onclick=document.getElementById('csCancel').onclick=backToList;
 
     const host=document.getElementById('csRows');
-    function compatible(batch){
-      return styles.filter(function(s){return !s.DEFAULT_FABRIC_ID||String(s.DEFAULT_FABRIC_ID)===String(batch.FABRIC_ID)})
+    function selectedDefaultFabric(){return String(document.getElementById('csDefaultFabric')?.value||'')}
+    function compatibleByFabric(fabricId){
+      return styles.filter(function(s){return !s.DEFAULT_FABRIC_ID||!fabricId||String(s.DEFAULT_FABRIC_ID)===String(fabricId)})
     }
-    function batchOptions(){
-      return '<option value="">Select dyed batch</option>'+batches.map(function(b){
-        return '<option value="'+esc(b.DYE_BATCH_ID)+'">'+esc(b.DYE_BATCH_ID)+' · '+esc(b.COLOR_NAME||b.COLOR||b.COLOR_ID||'')+' · '+meter(b.BALANCE_MTR)+' m</option>'
+    function compatible(batch){
+      return compatibleByFabric(batch?batch.FABRIC_ID:selectedDefaultFabric())
+    }
+    function visibleBatches(){
+      const fid=selectedDefaultFabric();
+      return batches.filter(function(b){return !fid||String(b.FABRIC_ID)===fid})
+    }
+    function batchOptions(selected){
+      return '<option value="">Select dyed batch</option>'+visibleBatches().map(function(b){
+        return '<option value="'+esc(b.DYE_BATCH_ID)+'"'+(String(b.DYE_BATCH_ID)===String(selected||'')?' selected':'')+'>'+esc(b.DYE_BATCH_ID)+' · '+esc(b.COLOR_NAME||b.COLOR||b.COLOR_ID||'')+' · '+meter(b.BALANCE_MTR)+' m</option>'
       }).join('')
     }
     function defaultSizes(){
@@ -100,7 +113,7 @@ async function openBulkIssuePage(){
     }
     function applyDefaults(row,batch){
       const preferred=document.getElementById('csDefaultStyle').value;
-      const comp=batch?compatible(batch):styles;
+      const comp=batch?compatible(batch):compatibleByFabric(selectedDefaultFabric());
       const style=row.querySelector('.cs-style');
       style.innerHTML='<option value="">Select style</option>'+styleOptions(comp,comp.some(function(s){return String(s.STYLE_ID)===String(preferred)})?preferred:'');
       const ds=defaultSizes();
@@ -113,7 +126,7 @@ async function openBulkIssuePage(){
         '<div class="cs-row-index"></div>'+
         '<div class="field cs-row-batch"><label>Dye Batch</label><select class="cs-batch">'+batchOptions()+'</select></div>'+
         '<div class="cs-row-source"><small>Fabric / Colour</small><b class="cs-source-name">—</b><span class="cs-source-meta">Select batch</span></div>'+
-        '<div class="field cs-row-style"><label>Style</label><select class="cs-style"><option value="">Select style</option>'+styleOptions(styles,document.getElementById('csDefaultStyle').value)+'</select></div>'+
+        '<div class="field cs-row-style"><label>Style</label><select class="cs-style"><option value="">Select style</option>'+styleOptions(compatibleByFabric(selectedDefaultFabric()),document.getElementById('csDefaultStyle').value)+'</select></div>'+
         '<div class="field cs-row-meter"><label>Meter</label><input class="cs-mtr" type="number" min="0.01" step="0.01" placeholder="0.00"></div>'+
         '<div class="cs-row-sizes">'+sizes.map(function(s){return '<label><span>'+esc(s.SIZE_NAME)+'</span><input class="cs-size-input" data-size="'+esc(s.SIZE_ID)+'" type="number" min="0" step="1" value="'+Math.max(0,Math.trunc(num(document.getElementById('csDef_'+s.SIZE_ID)?.value)))+'"></label>'}).join('')+'</div>'+
         '<div class="cs-row-total"><small>Total</small><b class="cs-total-pcs">0</b></div>'+
@@ -145,13 +158,30 @@ async function openBulkIssuePage(){
       totals();row.scrollIntoView({behavior:'smooth',block:'nearest'})
     }
 
+    document.getElementById('csDefaultFabric').onchange=function(){
+      const fid=this.value,defStyle=document.getElementById('csDefaultStyle');
+      const compStyles=compatibleByFabric(fid),currentStyle=defStyle.value;
+      defStyle.innerHTML='<option value="">No default</option>'+styleOptions(compStyles,compStyles.some(function(s){return String(s.STYLE_ID)===String(currentStyle)})?currentStyle:'');
+      [].slice.call(host.querySelectorAll('.cs-issue-row')).forEach(function(row){
+        const batchSel=row.querySelector('.cs-batch'),current=batchSel.value;
+        const currentBatch=batches.find(function(x){return String(x.DYE_BATCH_ID)===String(current)});
+        const keep=currentBatch&&(!fid||String(currentBatch.FABRIC_ID)===String(fid));
+        batchSel.innerHTML=batchOptions(keep?current:'');
+        if(!keep){
+          row.querySelector('.cs-source-name').textContent='—';
+          row.querySelector('.cs-source-meta').textContent='Select batch';
+          row.querySelector('.cs-mtr').removeAttribute('max')
+        }
+        applyDefaults(row,keep?currentBatch:null)
+      })
+    };
     document.getElementById('csDefaultStyle').onchange=function(){
       const val=this.value;
       [].slice.call(host.querySelectorAll('.cs-issue-row')).forEach(function(row){
-        if(row.querySelector('.cs-style').value)return;
         const batch=batches.find(function(x){return String(x.DYE_BATCH_ID)===String(row.querySelector('.cs-batch').value)});
-        const comp=batch?compatible(batch):styles;
-        if(comp.some(function(s){return String(s.STYLE_ID)===String(val)}))row.querySelector('.cs-style').value=val
+        const comp=batch?compatible(batch):compatibleByFabric(selectedDefaultFabric());
+        const style=row.querySelector('.cs-style');
+        style.innerHTML='<option value="">Select style</option>'+styleOptions(comp,comp.some(function(s){return String(s.STYLE_ID)===String(val)})?val:'')
       })
     };
     [].slice.call(document.querySelectorAll('[data-default-size]')).forEach(function(x){
