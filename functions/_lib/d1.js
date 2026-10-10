@@ -493,10 +493,11 @@ async function viewStitch(db){
 }
 async function viewQc(db){
   return rows(db,`
-    SELECT q.*,COALESCE(sz.SIZE_NAME,q.SIZE) SIZE_NAME,
+    SELECT q.*,COALESCE(sj.ISSUE_ID,q.CHALLAN_ID) ISSUE_ID,COALESCE(sz.SIZE_NAME,q.SIZE) SIZE_NAME,
       COALESCE(v.VENDOR_NAME,q.VENDOR_ID) VENDOR,
       COALESCE(st.STYLE_NAME,q.STYLE_ID) STYLE,COALESCE(c.COLOR_NAME,q.COLOR_ID) COLOR
     FROM qc_events q
+    LEFT JOIN stitching_jobs sj ON sj.CHALLAN_ID=q.CHALLAN_ID
     LEFT JOIN sizes sz ON sz.SIZE_ID=q.SIZE
     LEFT JOIN vendors v ON v.VENDOR_ID=q.VENDOR_ID
     LEFT JOIN styles st ON st.STYLE_ID=q.STYLE_ID
@@ -894,9 +895,10 @@ async function traceRecord(db,type,id){
     WHERE s.CHALLAN_ID IN (${qs(challanIds)}) ORDER BY s.ISSUE_DATE,s.CHALLAN_ID`,...challanIds):[];
 
   const qc=(prodIds.length||challanIds.length||qcIds.length)?await rows(db,`
-    SELECT q.*,COALESCE(v.VENDOR_NAME,q.VENDOR_ID) VENDOR,COALESCE(st.STYLE_NAME,q.STYLE_ID) STYLE,
+    SELECT q.*,COALESCE(sj.ISSUE_ID,q.CHALLAN_ID) ISSUE_ID,COALESCE(v.VENDOR_NAME,q.VENDOR_ID) VENDOR,COALESCE(st.STYLE_NAME,q.STYLE_ID) STYLE,
            COALESCE(c.COLOR_NAME,q.COLOR_ID) COLOR
     FROM qc_events q
+    LEFT JOIN stitching_jobs sj ON sj.CHALLAN_ID=q.CHALLAN_ID
     LEFT JOIN vendors v ON v.VENDOR_ID=q.VENDOR_ID
     LEFT JOIN styles st ON st.STYLE_ID=q.STYLE_ID
     LEFT JOIN colors c ON c.COLOR_ID=q.COLOR_ID
@@ -919,13 +921,13 @@ async function traceRecord(db,type,id){
   const planIds=uniq(dyeJobs.map(x=>x.DYE_PLAN_ID));
   return{
     seed:{type,id},
-    ids:{rollIds,dyePlanIds:planIds,dyeBatchIds,productionBatchIds:prodIds,challanIds},
+    ids:{rollIds,dyePlanIds:planIds,dyeBatchIds,productionBatchIds:prodIds,issueIds:uniq(stitching.map(x=>x.ISSUE_ID||x.CHALLAN_ID))},
     stages:[
       {key:'raw',label:'Raw Fabric',items:raw},
       {key:'dye',label:'Dye Issue / Plan',items:dyeJobs},
       {key:'dye_receipt',label:'Dye Receipt',items:dyeReceipts},
       {key:'production',label:'Production / Cutting',items:production},
-      {key:'stitching',label:'Stitching',items:stitching},
+      {key:'stitching',label:'Cutting & Stitching Issue',items:stitching},
       {key:'qc',label:'QC / Rework',items:qc},
       {key:'handover',label:'Warehouse Handover',items:hand}
     ]
@@ -1035,7 +1037,7 @@ async function cancelProduction(db,r,a){
   ]);return{PRODUCTION_BATCH_ID:id,cancelled:true}
 }
 async function cancelStitching(db,r,a){
-  const id=String(r.CHALLAN_ID||''),old=await row(db,'SELECT * FROM stitching_jobs WHERE CHALLAN_ID=?',id);if(!old)throw err('Stitching challan not found.',404);
+  const id=String(r.CHALLAN_ID||''),old=await row(db,'SELECT * FROM stitching_jobs WHERE CHALLAN_ID=?',id);if(!old)throw err('Cutting & stitching issue not found.',404);
   const qc=n((await row(db,"SELECT COUNT(*) c FROM qc_events WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
   const rec=n((await row(db,"SELECT COUNT(*) c FROM stitching_receipts WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
   if(qc||rec)throw err('This challan has active receipts/QC. Reverse/cancel downstream records first.',409);
@@ -1246,7 +1248,7 @@ async function getStitchingDetail(db,id){
     LEFT JOIN production_batches p ON p.PRODUCTION_BATCH_ID=x.PRODUCTION_BATCH_ID
     LEFT JOIN fabrics f ON f.FABRIC_ID=p.FABRIC_ID
     WHERE x.CHALLAN_ID=?`,id);
-  if(!s)throw err('Stitching challan not found.',404);
+  if(!s)throw err('Cutting & stitching issue not found.',404);
   const issueLines=await issueLinesForChallan(db,id),receivedLines=await receivedLinesForChallan(db,id),pendingLines=await stitchingPendingLines(db,id),qcPending=await qcPendingLines(db,id),sizeBalances=await cutBalanceLines(db,s.PRODUCTION_BATCH_ID);
   const receipts=await rows(db,"SELECT * FROM stitching_receipts WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY RECEIPT_DATE,RECEIPT_ID",id);
   const qcCount=n((await row(db,"SELECT COUNT(*) c FROM qc_events WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
@@ -1413,7 +1415,7 @@ async function saveStitching(db,r,a,req=''){
 async function saveQc(db,r,a,req=''){
   const challan=String(r.CHALLAN_ID||''),sizeKey=String(r.SIZE||''),q=intQty(r.QC_QTY,'QC quantity',false),pass=intQty(r.PASS_QTY,'Pass quantity'),rw=intQty(r.REWORK_QTY,'Rework quantity'),rej=intQty(r.REJECT_QTY,'Reject quantity');
   if(pass+rw+rej!==q)throw err('Pass + Rework + Reject must exactly equal QC Qty.',409);
-  const st=await row(db,"SELECT * FROM stitching_jobs WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",challan);if(!st)throw err('Invalid stitching challan.',400);
+  const st=await row(db,"SELECT * FROM stitching_jobs WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",challan);if(!st)throw err('Invalid cutting & stitching issue.',400);
   const sr=await sizeMasterRow(db,sizeKey),sid=sr?.SIZE_ID||sizeKey,sname=sr?.SIZE_NAME||sizeKey;if(!sid)throw err('Size is required.',400);
   await acquireLock(db,'stitching:'+challan,req);
   try{
@@ -1473,7 +1475,7 @@ async function editProduction(db,r,a,req=''){
 
 async function editStitching(db,r,a,req=''){
   const id=String(r.CHALLAN_ID||''),old=await row(db,"SELECT * FROM stitching_jobs WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id);
-  if(!old)throw err('Stitching challan not found.',404);
+  if(!old)throw err('Cutting & stitching issue not found.',404);
   const receipts=n((await row(db,"SELECT COUNT(*) c FROM stitching_receipts WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
   const qc=n((await row(db,"SELECT COUNT(*) c FROM qc_events WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
   if(receipts||qc)throw err('Issue quantities/vendor are locked after receipt or QC. Reverse downstream first.',409);
@@ -1531,7 +1533,7 @@ async function refreshStitchingHeader(db,challan,a){
     .bind(legacy.M,legacy.L,legacy.XL,legacy['2XL'],legacy['3XL'],legacy.OTHER,total,pending,nextStatus,a.userId,now(),challan).run()
 }
 async function saveStitchingReceipt(db,r,a,req=''){
-  const challan=String(r.CHALLAN_ID||''),st=await row(db,"SELECT * FROM stitching_jobs WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",challan);if(!st)throw err('Invalid stitching challan.',400);
+  const challan=String(r.CHALLAN_ID||''),st=await row(db,"SELECT * FROM stitching_jobs WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",challan);if(!st)throw err('Invalid cutting & stitching issue.',400);
   const pending=await stitchingPendingLines(db,challan),bal=Object.fromEntries(pending.map(x=>[x.SIZE_ID,x.PENDING_QTY])),items=Array.isArray(r.items)?r.items:[],lines=[],seen=new Set();
   for(const x of items){const sid=String(x.SIZE_ID||'');if(!sid)continue;if(seen.has(sid))throw err('Same size cannot appear twice.',409);seen.add(sid);const qty=intQty(x.QTY,'Receipt quantity');if(qty>(bal[sid]||0))throw err('Receipt exceeds pending quantity for selected size. Pending: '+(bal[sid]||0),409);if(qty>0)lines.push({SIZE_ID:sid,QTY:qty})}
   const total=lines.reduce((s,x)=>s+x.QTY,0);if(total<=0)throw err('Enter at least one received piece.',400);
@@ -1546,7 +1548,7 @@ async function saveStitchingReceipt(db,r,a,req=''){
 }
 async function cancelStitchingReceipt(db,r,a){
   const id=String(r.RECEIPT_ID||''),rec=await row(db,"SELECT * FROM stitching_receipts WHERE RECEIPT_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id);if(!rec)throw err('Stitching receipt not found.',404);
-  const qc=n((await row(db,"SELECT COUNT(*) c FROM qc_events WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",rec.CHALLAN_ID))?.c);if(qc)throw err('Receipt cannot be cancelled after QC exists on this challan. Reverse QC first.',409);
+  const qc=n((await row(db,"SELECT COUNT(*) c FROM qc_events WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",rec.CHALLAN_ID))?.c);if(qc)throw err('Receipt cannot be cancelled after QC exists on this issue. Reverse QC first.',409);
   const reason=String(r.REASON||'Mistaken entry'),t=now();
   await db.batch([
     db.prepare("UPDATE stitching_receipts SET STATUS='CANCELLED',NOTES=COALESCE(NOTES,'')||?,UPDATED_BY=?,UPDATED_AT=? WHERE RECEIPT_ID=?").bind(' | Cancelled: '+reason,a.userId,t,id),
