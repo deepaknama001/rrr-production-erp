@@ -705,3 +705,10 @@ button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justif
 .docs-stitch-batch-option:hover{background:#f8fafc}.docs-stitch-batch-option input{width:16px;height:16px}.docs-stitch-batch-option b{display:block;font-size:11px}.docs-stitch-batch-option small{display:block;font-size:9px;color:var(--muted);margin-top:2px}.docs-stitch-batch-option em{font-style:normal;font-size:9px;font-weight:850;white-space:nowrap}.docs-stitch-batch-option.disabled{opacity:.38;cursor:not-allowed}
 .docs-stitch-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;padding-top:10px;border-top:1px solid var(--line)}.docs-stitch-footer span{font-size:10px;font-weight:850;color:#586576}
 @media(max-width:760px){.docs-stitch-top{align-items:stretch;flex-direction:column}.docs-stitch-top .field{width:100%}.docs-stitch-batch-select{grid-template-columns:1fr}.docs-stitch-footer{align-items:stretch;flex-direction:column}.docs-stitch-footer .btn{width:100%}}
+
+/* v0.47 Stitching challan batch filters */
+.docs-stitch-filters{display:grid;grid-template-columns:minmax(230px,1.4fr) repeat(5,minmax(115px,.8fr)) 125px 125px 145px auto;gap:8px;align-items:end}
+.docs-stitch-filters input,.docs-stitch-filters select{height:40px;border:1px solid var(--line);border-radius:9px;padding:0 9px;background:#fff;font-size:10px}
+.docs-stitch-actions{display:flex;justify-content:space-between;align-items:center;gap:10px}.docs-stitch-actions>div{display:flex;gap:7px}.docs-stitch-actions span{font-size:10px;font-weight:800;color:#687386}
+@media(max-width:1200px){.docs-stitch-filters{grid-template-columns:repeat(4,minmax(0,1fr))}.docs-stitch-filters #docStitchSearch{grid-column:1/-1}}
+@media(max-width:720px){.docs-stitch-filters{grid-template-columns:1fr 1fr}.docs-stitch-filters #docStitchSearch{grid-column:1/-1}.docs-stitch-actions{align-items:stretch;flex-direction:column}.docs-stitch-actions>div{display:grid;grid-template-columns:1fr 1fr}}
