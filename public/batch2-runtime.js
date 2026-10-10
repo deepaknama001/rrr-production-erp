@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const BUILD='0.41';
+const BUILD='0.43';
 const MOD_BY_TITLE={
   'Raw Fabric':'raw','Dyeing':'dye','Production':'production','Production / Cutting':'production',
   'Stitching':'stitching','Cutting & Stitching':'stitching','QC & Rework':'qc','Warehouse Handover':'handover'
