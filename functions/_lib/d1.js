@@ -22,6 +22,40 @@ async function digestHex(text){const b=await crypto.subtle.digest('SHA-256',new 
 function safeEq(a,b){a=String(a||'');b=String(b||'');if(a.length!==b.length)return false;let x=0;for(let i=0;i<a.length;i++)x|=a.charCodeAt(i)^b.charCodeAt(i);return x===0}
 
 let schemaReadyPromise=null;
+async function ensureIssueIdModel(db){
+  const info=(await db.prepare("PRAGMA table_info(stitching_jobs)").all()).results||[];
+  if(!info.some(x=>String(x.name).toUpperCase()==='ISSUE_ID'))await db.prepare('ALTER TABLE stitching_jobs ADD COLUMN ISSUE_ID TEXT').run();
+
+  const all=(await db.prepare("SELECT CHALLAN_ID,ISSUE_ID,ISSUE_DATE,CREATED_AT FROM stitching_jobs ORDER BY COALESCE(CREATED_AT,ISSUE_DATE,''),COALESCE(ISSUE_DATE,''),CHALLAN_ID").all()).results||[];
+  const used=new Set(),updates=[];let maxSeq=0,migrated=0,preserved=0;
+  const valid=/^CSI-(\d{6})-(\d+)$/;
+  for(const r of all){
+    const id=String(r.ISSUE_ID||''),m=valid.exec(id);
+    if(m&&!used.has(id)){used.add(id);maxSeq=Math.max(maxSeq,Number(m[2])||0);preserved++}
+  }
+  const dateCode=v=>{
+    const s=String(v||'').slice(0,10),m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+    if(m)return m[1].slice(2)+m[2]+m[3];
+    return kolkataStamp()
+  };
+  for(const r of all){
+    const cur=String(r.ISSUE_ID||''),m=valid.exec(cur);
+    if(m&&used.has(cur))continue;
+    let next='';
+    do{maxSeq++;next='CSI-'+dateCode(r.ISSUE_DATE||r.CREATED_AT)+'-'+String(maxSeq).padStart(4,'0')}while(used.has(next));
+    used.add(next);updates.push(db.prepare('UPDATE stitching_jobs SET ISSUE_ID=? WHERE CHALLAN_ID=?').bind(next,String(r.CHALLAN_ID)));migrated++
+  }
+  for(let i=0;i<updates.length;i+=75)await db.batch(updates.slice(i,i+75));
+  await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_stitch_issue_id ON stitching_jobs(ISSUE_ID) WHERE ISSUE_ID IS NOT NULL AND ISSUE_ID<>''").run();
+  await db.prepare("INSERT INTO sequences(prefix,value) VALUES('CSI',?) ON CONFLICT(prefix) DO UPDATE SET value=MAX(value,excluded.value)").bind(maxSeq).run();
+  const missing=Number((await db.prepare("SELECT COUNT(*) c FROM stitching_jobs WHERE COALESCE(ISSUE_ID,'')=''").first())?.c||0);
+  const duplicate=Number((await db.prepare("SELECT COUNT(*) c FROM (SELECT ISSUE_ID FROM stitching_jobs WHERE COALESCE(ISSUE_ID,'')<>'' GROUP BY ISSUE_ID HAVING COUNT(*)>1)").first())?.c||0);
+  const report={rows:all.length,migrated,preserved,missing,duplicate,maxSeq,verified:missing===0&&duplicate===0,at:now()};
+  await db.prepare("INSERT INTO settings(KEY,VALUE,UPDATED_AT) VALUES('IDMODEL:STITCHING',?,?) ON CONFLICT(KEY) DO UPDATE SET VALUE=excluded.VALUE,UPDATED_AT=excluded.UPDATED_AT").bind(JSON.stringify(report),now()).run();
+  if(!report.verified)throw err('Cutting & Stitching Issue ID migration verification failed.',500);
+  return report
+}
+
 async function ensureSchema(env){
   if(!env?.DB)return;
   if(!schemaReadyPromise)schemaReadyPromise=(async()=>{
@@ -30,6 +64,7 @@ async function ensureSchema(env){
       const exists=await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").first();
       if(!exists)throw err('D1 schema is not initialized. Run the database migrations first.',503)
     }
+    await ensureIssueIdModel(env.DB);
     try{
       await env.DB.batch([
         env.DB.prepare("DELETE FROM request_log WHERE created_at < datetime('now','-7 day')"),
@@ -1270,8 +1305,8 @@ async function saveCutStitchBulk(db,r,a,req=''){
       stmts.push(
         db.prepare('INSERT INTO production_batches(ROW_ID,PRODUCTION_BATCH_ID,PLAN_DATE,DYE_BATCH_ID,STYLE_ID,FABRIC_ID,COLOR_ID,PLANNED_QTY,ALLOCATED_MTR,CUT_DATE,CONSUMED_MTR,CUTTING_WASTE_MTR,DEFECT_MTR,M_CUT,L_CUT,XL_CUT,"2XL_CUT","3XL_CUT",OTHER_CUT,TOTAL_CUT,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
           .bind(uuid(),pb,issueDate,x.dyeBatch,x.styleId,x.source.FABRIC_ID,x.source.COLOR_ID,x.total,x.allocated,'',0,0,0,0,0,0,0,0,0,0,'AT CUTTING & STITCHING',String(x.lineNotes||notes),a.userId,t,a.userId,t),
-        db.prepare('INSERT INTO stitching_jobs(ROW_ID,CHALLAN_ID,ISSUE_DATE,STITCHING_VENDOR_ID,PRODUCTION_BATCH_ID,STYLE_ID,COLOR_ID,M_ISSUED,L_ISSUED,XL_ISSUED,"2XL_ISSUED","3XL_ISSUED",OTHER_ISSUED,M_RECEIVED,L_RECEIVED,XL_RECEIVED,"2XL_RECEIVED","3XL_RECEIVED",OTHER_RECEIVED,TOTAL_ISSUED,TOTAL_RECEIVED,PENDING_QTY,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-          .bind(uuid(),challan,issueDate,vendor,pb,x.styleId,x.source.COLOR_ID,legacy.M,legacy.L,legacy.XL,legacy['2XL'],legacy['3XL'],legacy.OTHER,0,0,0,0,0,0,x.total,0,x.total,'AT CUTTING & STITCHING',String(x.lineNotes||notes),a.userId,t,a.userId,t)
+        db.prepare('INSERT INTO stitching_jobs(ROW_ID,CHALLAN_ID,ISSUE_ID,ISSUE_DATE,STITCHING_VENDOR_ID,PRODUCTION_BATCH_ID,STYLE_ID,COLOR_ID,M_ISSUED,L_ISSUED,XL_ISSUED,"2XL_ISSUED","3XL_ISSUED",OTHER_ISSUED,M_RECEIVED,L_RECEIVED,XL_RECEIVED,"2XL_RECEIVED","3XL_RECEIVED",OTHER_RECEIVED,TOTAL_ISSUED,TOTAL_RECEIVED,PENDING_QTY,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+          .bind(uuid(),challan,challan,issueDate,vendor,pb,x.styleId,x.source.COLOR_ID,legacy.M,legacy.L,legacy.XL,legacy['2XL'],legacy['3XL'],legacy.OTHER,0,0,0,0,0,0,x.total,0,x.total,'AT CUTTING & STITCHING',String(x.lineNotes||notes),a.userId,t,a.userId,t)
       );
       for(const z of x.sizes)stmts.push(db.prepare('INSERT INTO stitching_issue_lines(LINE_ID,CHALLAN_ID,SIZE_ID,QTY,CREATED_AT,UPDATED_AT) VALUES(?,?,?,?,?,?)').bind(uuid(),challan,z.SIZE_ID,z.QTY,t,t));
       if(expected)stmts.push(expectationStmt(db,'STITCHING',challan,expected,a.userId,'Cutting & stitching expected return'));
@@ -1367,8 +1402,8 @@ async function saveStitching(db,r,a,req=''){
     const id=await nextId(db,'CSI'),t=now(),legacy={M:0,L:0,XL:0,'2XL':0,'3XL':0,OTHER:0};
     for(const x of lines){const sr=await sizeMasterRow(db,x.SIZE_ID),nm=legacySizeName(sr?.SIZE_NAME||x.SIZE_ID);if(nm)legacy[nm]+=x.QTY}
     const stmts=[
-      db.prepare('INSERT INTO stitching_jobs(ROW_ID,CHALLAN_ID,ISSUE_DATE,STITCHING_VENDOR_ID,PRODUCTION_BATCH_ID,STYLE_ID,COLOR_ID,M_ISSUED,L_ISSUED,XL_ISSUED,"2XL_ISSUED","3XL_ISSUED",OTHER_ISSUED,M_RECEIVED,L_RECEIVED,XL_RECEIVED,"2XL_RECEIVED","3XL_RECEIVED",OTHER_RECEIVED,TOTAL_ISSUED,TOTAL_RECEIVED,PENDING_QTY,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-        .bind(uuid(),id,dateOnly(r.ISSUE_DATE),vendor,pb,p.STYLE_ID,p.COLOR_ID,legacy.M,legacy.L,legacy.XL,legacy['2XL'],legacy['3XL'],legacy.OTHER,0,0,0,0,0,0,total,0,total,'PENDING FROM VENDOR',String(r.NOTES||''),a.userId,t,a.userId,t)
+      db.prepare('INSERT INTO stitching_jobs(ROW_ID,CHALLAN_ID,ISSUE_ID,ISSUE_DATE,STITCHING_VENDOR_ID,PRODUCTION_BATCH_ID,STYLE_ID,COLOR_ID,M_ISSUED,L_ISSUED,XL_ISSUED,"2XL_ISSUED","3XL_ISSUED",OTHER_ISSUED,M_RECEIVED,L_RECEIVED,XL_RECEIVED,"2XL_RECEIVED","3XL_RECEIVED",OTHER_RECEIVED,TOTAL_ISSUED,TOTAL_RECEIVED,PENDING_QTY,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .bind(uuid(),id,id,dateOnly(r.ISSUE_DATE),vendor,pb,p.STYLE_ID,p.COLOR_ID,legacy.M,legacy.L,legacy.XL,legacy['2XL'],legacy['3XL'],legacy.OTHER,0,0,0,0,0,0,total,0,total,'PENDING FROM VENDOR',String(r.NOTES||''),a.userId,t,a.userId,t)
     ];
     for(const x of lines)stmts.push(db.prepare('INSERT INTO stitching_issue_lines(LINE_ID,CHALLAN_ID,SIZE_ID,QTY,CREATED_AT,UPDATED_AT) VALUES(?,?,?,?,?,?)').bind(uuid(),id,x.SIZE_ID,x.QTY,t,t));
     if(r.EXPECTED_DATE)stmts.push(expectationStmt(db,'STITCHING',id,r.EXPECTED_DATE,a.userId,'Vendor expected return'));stmts.push(auditStmt(db,a,'CREATE','STITCHING',id,'',JSON.stringify({pb,vendor,lines,total,expectedDate:String(r.EXPECTED_DATE||'')})));
