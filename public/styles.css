@@ -620,3 +620,6 @@ button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justif
   .cs-issue-row{min-width:1050px}
   .cs-default-size{width:58px}
 }
+
+.cs-default-fabric{width:220px;margin:0}.cs-default-fabric select{height:40px!important;font-size:10px!important}
+@media(max-width:900px){.cs-default-fabric{width:min(100%,260px)}}
