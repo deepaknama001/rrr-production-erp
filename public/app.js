@@ -59,7 +59,7 @@ function setMobileNav(open){document.body.classList.toggle('nav-open',!!open);$(
 function renderNav(){$('#nav').innerHTML=NAV.filter(x=>allowed(x[0])).map(([m,i,l])=>`<button data-m="${m}">${i} &nbsp; ${l}</button>`).join('');$('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>{setMobileNav(false);go(b.dataset.m)})}
 async function go(m,force=false){if(m==='production')m='stitching';if(!allowed(m))return;state.activeGridKey='';setStatus('↻ Opening '+(NAV.find(x=>x[0]===m)?.[2]||m)+'…','busy');state.current=m;sessionStorage.setItem('rrr_prod_page',m);syncShell();setMobileNav(false);document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.m===m));$('#pageTitle').textContent=NAV.find(x=>x[0]===m)?.[2]||m;if(m==='dashboard')return renderDashboard(force);if(m==='reports')return renderReports(force);if(m==='masters')return renderMasters(force);if(m==='users')return renderUsers(force);return renderModule(m,force)}
 
-function docsTypeLabel(t){return t==='DYE_CHALLAN'?'Dye Challan':t==='STITCHING_CHALLAN'?'Stitching Challan':'Sticker Sheet'}
+function docsTypeLabel(t){return t==='DYE_CHALLAN'?'Dye Challan':t==='STITCHING_CHALLAN'?'Cutting & Stitching Challan':'Sticker Sheet'}
 function docsNum(v){const n=Number(v||0);return Number.isFinite(n)?n.toLocaleString('en-IN',{maximumFractionDigits:0}):'0'}
 function docsMeter(v){const n=Number(v||0);return Number.isFinite(n)?n.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}):'0.00'}
 function docsPartyBlock(title,name,address,phone,gst,email=''){
