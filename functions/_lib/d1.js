@@ -48,7 +48,7 @@ function intQty(v,label='Quantity',allowZero=true){
 const LEGACY_SIZE_COL={M:'M',L:'L',XL:'XL','2XL':'2XL','3XL':'3XL',OTHER:'OTHER'};
 const STATUS_RULES={
   production:{'PLANNED':['CUT COMPLETE','CANCELLED'],'CUT COMPLETE':['CANCELLED']},
-  stitching:{'PENDING FROM VENDOR':['PARTIAL RECEIVED','RECEIVED COMPLETE','CANCELLED'],'PARTIAL RECEIVED':['PARTIAL RECEIVED','RECEIVED COMPLETE','CANCELLED'],'RECEIVED COMPLETE':['CANCELLED']},
+  stitching:{'AT CUTTING & STITCHING':['PARTIAL RECEIVED','RECEIVED COMPLETE','CANCELLED'],'PENDING FROM VENDOR':['PARTIAL RECEIVED','RECEIVED COMPLETE','CANCELLED'],'PARTIAL RECEIVED':['PARTIAL RECEIVED','RECEIVED COMPLETE','CANCELLED'],'RECEIVED COMPLETE':['CANCELLED']},
   qc:{'QC COMPLETE':['REWORK PARTIAL','REWORK CLOSED','CANCELLED'],'REWORK PARTIAL':['REWORK PARTIAL','REWORK CLOSED','CANCELLED'],'REWORK CLOSED':['CANCELLED']},
   handover:{'PARTIAL':['PARTIAL','RECEIVED','CANCELLED'],'RECEIVED':['CANCELLED']},
   rework:{'AT REWORK':['PARTIAL REWORK RETURN','REWORK CLOSED','CANCELLED'],'PARTIAL REWORK RETURN':['PARTIAL REWORK RETURN','REWORK CLOSED']}
@@ -1002,7 +1002,16 @@ async function cancelStitching(db,r,a){
   await db.batch([
     db.prepare("UPDATE stitching_jobs SET STATUS='CANCELLED',NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE CHALLAN_ID=?").bind(String(old.NOTES||'')+(old.NOTES?' | ':'')+'Cancelled: '+reason,a.userId,t,id),
     auditStmt(db,a,'CANCEL_STITCHING','STITCHING',id,JSON.stringify(old),JSON.stringify({cancelled:true,reason}))
-  ]);return{CHALLAN_ID:id,cancelled:true}
+  ]);
+  const prod=await row(db,'SELECT * FROM production_batches WHERE PRODUCTION_BATCH_ID=?',old.PRODUCTION_BATCH_ID);
+  const others=n((await row(db,"SELECT COUNT(*) c FROM stitching_jobs WHERE PRODUCTION_BATCH_ID=? AND CHALLAN_ID<>? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",old.PRODUCTION_BATCH_ID,id))?.c);
+  if(prod&&/CUTTING\s*&\s*STITCHING/i.test(String(prod.STATUS||''))&&!others){
+    await db.batch([
+      db.prepare("UPDATE production_batches SET STATUS='CANCELLED',NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE PRODUCTION_BATCH_ID=?").bind(String(prod.NOTES||'')+(prod.NOTES?' | ':'')+'Cancelled with vendor issue: '+reason,a.userId,t,prod.PRODUCTION_BATCH_ID),
+      auditStmt(db,a,'CANCEL_COMBINED','PRODUCTION',prod.PRODUCTION_BATCH_ID,JSON.stringify(prod),JSON.stringify({cancelled:true,reason,challan:id}))
+    ])
+  }
+  return{CHALLAN_ID:id,cancelled:true}
 }
 async function cancelQc(db,r,a){
   const id=String(r.QC_ID||''),old=await row(db,'SELECT * FROM qc_events WHERE QC_ID=?',id);if(!old)throw err('QC entry not found.',404);
@@ -1426,12 +1435,16 @@ async function editStitching(db,r,a,req=''){
   const vendor=String(r.STITCHING_VENDOR_ID??old.STITCHING_VENDOR_ID);
   if(!await row(db,'SELECT 1 ok FROM vendors WHERE VENDOR_ID=? AND ACTIVE=1 AND STITCHING_VENDOR=1',vendor))throw err('Select a valid active Stitching Vendor.',400);
   let items=Array.isArray(r.items)?r.items:await issueLinesForChallan(db,id),lines=[],seen=new Set();
-  const base=await cutBalanceLines(db,old.PRODUCTION_BATCH_ID),current=await issueLinesForChallan(db,id);
-  const available=Object.fromEntries(base.map(x=>[x.SIZE_ID,x.BALANCE_QTY]));
-  for(const x of current)available[x.SIZE_ID]=(available[x.SIZE_ID]||0)+x.QTY;
+  const prod=await row(db,'SELECT STATUS FROM production_batches WHERE PRODUCTION_BATCH_ID=?',old.PRODUCTION_BATCH_ID),combined=/CUTTING\s*&\s*STITCHING/i.test(String(prod?.STATUS||''));
+  let available={};
+  if(!combined){
+    const base=await cutBalanceLines(db,old.PRODUCTION_BATCH_ID),current=await issueLinesForChallan(db,id);
+    available=Object.fromEntries(base.map(x=>[x.SIZE_ID,x.BALANCE_QTY]));for(const x of current)available[x.SIZE_ID]=(available[x.SIZE_ID]||0)+x.QTY
+  }
   for(const x of items){
     const sid=String(x.SIZE_ID||'');if(!sid)continue;if(seen.has(sid))throw err('Same size cannot appear twice.',409);seen.add(sid);
-    const qty=intQty(x.QTY,'Issue quantity');if(qty>(available[sid]||0))throw err('Issue exceeds available cut stock for size '+sid+'. Available: '+(available[sid]||0),409);
+    if(!await row(db,'SELECT 1 ok FROM sizes WHERE SIZE_ID=? AND ACTIVE=1',sid))throw err('Invalid active size '+sid+'.',400);
+    const qty=intQty(x.QTY,'Issue quantity');if(!combined&&qty>(available[sid]||0))throw err('Issue exceeds available cut stock for size '+sid+'. Available: '+(available[sid]||0),409);
     if(qty>0)lines.push({SIZE_ID:sid,QTY:qty})
   }
   const total=lines.reduce((s,x)=>s+x.QTY,0);if(total<=0)throw err('Total stitching issue must be greater than 0.',400);
@@ -1445,6 +1458,7 @@ async function editStitching(db,r,a,req=''){
       db.prepare('DELETE FROM stitching_issue_lines WHERE CHALLAN_ID=?').bind(id)
     ];
     for(const x of lines)stmts.push(db.prepare('INSERT INTO stitching_issue_lines(LINE_ID,CHALLAN_ID,SIZE_ID,QTY,CREATED_AT,UPDATED_AT) VALUES(?,?,?,?,?,?)').bind(uuid(),id,x.SIZE_ID,x.QTY,t,t));
+    if(combined)stmts.push(db.prepare('UPDATE production_batches SET PLANNED_QTY=?,UPDATED_BY=?,UPDATED_AT=? WHERE PRODUCTION_BATCH_ID=?').bind(total,a.userId,t,old.PRODUCTION_BATCH_ID));
     stmts.push(expectationStmt(db,'STITCHING',id,r.EXPECTED_DATE??await expectedDate(db,'STITCHING',id),a.userId,'Vendor expected return'));stmts.push(auditStmt(db,a,'EDIT_STITCHING','STITCHING',id,JSON.stringify(old),JSON.stringify({vendor,total,lines,expectedDate:String(r.EXPECTED_DATE||'')})));
     await db.batch(stmts);return await getStitchingDetail(db,id)
   }finally{await releaseLock(db,'production:'+old.PRODUCTION_BATCH_ID)}
