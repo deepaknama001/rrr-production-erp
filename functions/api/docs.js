@@ -380,16 +380,12 @@ async function buildPayload(db,type,sourceIds,overrides={}){
     const items=[];
     for(const id of sourceIds.slice(0,30)){
       const doc=await db.prepare("SELECT DOC_ID,DOC_NO,PAYLOAD_JSON,STATUS FROM docs_documents WHERE DOC_ID=? AND DOC_TYPE='STITCHING_CHALLAN'").bind(String(id)).first();
-      if(doc){
-        if(String(doc.STATUS||'').toUpperCase()==='CANCELLED')throw Object.assign(new Error('Cancelled stitching challan '+doc.DOC_NO+' cannot generate stickers.'),{status:409});
-        let p={};try{p=JSON.parse(doc.PAYLOAD_JSON||'{}')}catch{}
-        for(const x of p.items||[])items.push({...x,sourceId:doc.DOC_NO,sourceDocId:doc.DOC_ID,sourceDocNo:doc.DOC_NO,notes:String(x.notes||p.notes||'')});
-        continue
-      }
-      const x=await stitchOne(db,String(id)),ov=overrides?.[id]||{};
-      items.push({...x,fabricQty:Number(ov.fabricQty??x.fabricQty),notes:String(ov.notes??x.notes??'')})
+      if(!doc)throw Object.assign(new Error('Sticker source must be a generated Cutting & Stitching Challan document.'),{status:400});
+      if(String(doc.STATUS||'').toUpperCase()==='CANCELLED')throw Object.assign(new Error('Cancelled Cutting & Stitching Challan '+doc.DOC_NO+' cannot generate stickers.'),{status:409});
+      let p={};try{p=JSON.parse(doc.PAYLOAD_JSON||'{}')}catch{}
+      for(const x of p.items||[])items.push({...x,sourceId:doc.DOC_NO,sourceDocId:doc.DOC_ID,sourceDocNo:doc.DOC_NO,notes:String(x.notes||p.notes||'')})
     }
-    if(!items.length)throw Object.assign(new Error('Select at least one generated stitching challan.'),{status:400});
+    if(!items.length)throw Object.assign(new Error('Select at least one generated Cutting & Stitching Challan.'),{status:400});
     return{title:'Production Fabric Stickers',items}
   }
   throw Object.assign(new Error('Unknown document type.'),{status:400})
