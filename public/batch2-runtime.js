@@ -201,6 +201,8 @@ function cell(k,v){
   if(/STATUS/.test(k))return '<span class="badge">'+esc(v)+'</span>';
   if(/DATE$/.test(k))return esc(fmt(v));
   if(/OVERDUE_DAYS/.test(k)&&Number(v)>0)return '<span class="b2-overdue">'+Number(v)+'d overdue</span>';
+  if(/(?:MTR|METER|VARIANCE)/i.test(String(k))&&!Number.isNaN(Number(v)))return Number(v).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+  if(/(?:QTY|COUNT|PIECES|_CUT$|_ISSUED$|_RECEIVED$|PENDING)/i.test(String(k))&&!Number.isNaN(Number(v)))return Number(v).toLocaleString('en-IN',{maximumFractionDigits:0});
   return esc(v);
 }
 async function reload(shell,st,patch){
