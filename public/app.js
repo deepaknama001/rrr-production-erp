@@ -29,8 +29,8 @@ async function getCachedModule(module,force=false){
   const p=api('/api/data?module='+module).then(d=>writeCache(module,d)).finally(()=>moduleInflight.delete(module));
   moduleInflight.set(module,p);return p
 }
-const NAV=[['dashboard','⌂','Dashboard'],['raw','▣','Raw Fabric'],['dye','◉','Dyeing'],['stitching','✂','Cutting & Stitching'],['qc','✓','QC & Rework'],['handover','⇥','Warehouse Handover'],['docs','▤','Docs Maker'],['reports','▤','Reports'],['masters','◆','Masters'],['users','⚙','Users']];
-function allowed(m){if(!state.user)return false;if(m==='dashboard')return true;if(m==='users'||m==='masters')return !!state.user.admin;if(m==='docs')return state.user.admin||!!state.user.permissions?.dye||!!state.user.permissions?.stitching;if(m==='handover')return state.user.admin||state.user.permissions?.qc;return state.user.admin||!!state.user.permissions?.[m]}
+const NAV=[['dashboard','⌂','Dashboard'],['raw','▣','Raw Fabric'],['dye','◉','Dyeing'],['stitching','✂','Cutting & Stitching'],['qc','✓','QC & Rework'],['handover','⇥','Warehouse Handover'],['reports','▤','Reports'],['masters','◆','Masters'],['users','⚙','Users']];
+function allowed(m){if(!state.user)return false;if(m==='dashboard')return true;if(m==='users'||m==='masters')return !!state.user.admin;if(m==='handover')return state.user.admin||state.user.permissions?.qc;return state.user.admin||!!state.user.permissions?.[m]}
 function actionModule(m){return m==='handover'?'qc':m}
 function canAction(m,action='view'){
   if(!state.user)return false;if(state.user.admin)return true;
@@ -57,7 +57,7 @@ function startNotificationPolling(){clearInterval(notificationTimer);setTimeout(
 function showApp(){$('#loginView').classList.add('hidden');$('#appView').classList.remove('hidden');$('#sideName').textContent=state.user.name;$('#sideRole').textContent=state.user.role;syncShell();renderNav();startNotificationPolling();go(allowed(state.current)?state.current:'dashboard')}
 function setMobileNav(open){document.body.classList.toggle('nav-open',!!open);$('#navOverlay')?.classList.toggle('hidden',!open)}
 function renderNav(){$('#nav').innerHTML=NAV.filter(x=>allowed(x[0])).map(([m,i,l])=>`<button data-m="${m}">${i} &nbsp; ${l}</button>`).join('');$('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>{setMobileNav(false);go(b.dataset.m)})}
-async function go(m,force=false){if(m==='production')m='stitching';if(!allowed(m))return;state.activeGridKey='';setStatus('↻ Opening '+(NAV.find(x=>x[0]===m)?.[2]||m)+'…','busy');state.current=m;sessionStorage.setItem('rrr_prod_page',m);syncShell();setMobileNav(false);document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.m===m));$('#pageTitle').textContent=NAV.find(x=>x[0]===m)?.[2]||m;if(m==='dashboard')return renderDashboard(force);if(m==='docs')return renderDocsMaker(force);if(m==='reports')return renderReports(force);if(m==='masters')return renderMasters(force);if(m==='users')return renderUsers(force);return renderModule(m,force)}
+async function go(m,force=false){if(m==='production')m='stitching';if(!allowed(m))return;state.activeGridKey='';setStatus('↻ Opening '+(NAV.find(x=>x[0]===m)?.[2]||m)+'…','busy');state.current=m;sessionStorage.setItem('rrr_prod_page',m);syncShell();setMobileNav(false);document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.m===m));$('#pageTitle').textContent=NAV.find(x=>x[0]===m)?.[2]||m;if(m==='dashboard')return renderDashboard(force);if(m==='reports')return renderReports(force);if(m==='masters')return renderMasters(force);if(m==='users')return renderUsers(force);return renderModule(m,force)}
 
 function docsTypeLabel(t){return t==='DYE_CHALLAN'?'Dye Challan':t==='STITCHING_CHALLAN'?'Stitching Challan':'Sticker Sheet'}
 function docsNum(v){const n=Number(v||0);return Number.isFinite(n)?n.toLocaleString('en-IN',{maximumFractionDigits:0}):'0'}
@@ -184,192 +184,27 @@ async function generateDocAndPrint(docType,sourceIds,extra={}){
     printDocsDocument(d.document,w);dropCaches();return d.document
   }catch(e){w.close();toast(e.message,'bad',4500)}
 }
-async function renderDocsMaker(force=false){
-  const s=$('#stage');
-  s.innerHTML='<section class="panel docs-maker"><div class="panel-head"><div><h3>Docs Maker</h3><small>Vendor challans and production fabric stickers from existing ERP records</small></div></div><div class="master-tabs" id="docsTabs"><button data-doc-tab="dye">Dye Challan</button><button data-doc-tab="stitch">Stitching Challan</button><button data-doc-tab="stickers">Sticker Sheet</button><button data-doc-tab="history">History</button>'+(state.user?.admin?'<button data-doc-tab="settings">Settings</button>':'')+'</div><div id="docsBody"><div class="trail-loading">Loading document sources…</div></div></section>';
-  try{
-    const d=await api('/api/docs',{activity:'Loading Docs Maker…'}),body=$('#docsBody');
-    let tab='dye';try{tab=localStorage.getItem(prefLocalKey('docs:tab'))||'dye'}catch{}
-    const render=()=>{
-      document.querySelectorAll('#docsTabs button').forEach(b=>b.classList.toggle('active',b.dataset.docTab===tab));
-      if(tab==='dye'){
-        const rows=d.sources?.dye||[];
-        body.innerHTML='<div class="docs-form"><div class="field"><label>Dye Plan</label><select id="docDyeSource"><option value="">Select dye plan…</option>'+rows.map(x=>'<option value="'+esc(x.DYE_PLAN_ID)+'">'+esc(x.DYE_PLAN_ID)+' · '+esc(x.VENDOR||'')+' · '+docsNum(x.TOTAL_MTR)+' m</option>').join('')+'</select></div><div class="field"><label>Document Date</label><input id="docDate" type="date" value="'+todayLocal()+'"></div><div class="field wide"><label>Notes</label><input id="docNotes" placeholder="Optional vendor instruction"></div><div class="form-actions"><button class="btn teal" id="makeDyeDoc">Generate & Print Dye Challan</button></div></div>';
-        $('#makeDyeDoc').onclick=()=>{const id=$('#docDyeSource').value;if(!id)return toast('Select a dye plan.','bad');generateDocAndPrint('DYE_CHALLAN',[id],{docDate:$('#docDate').value,notes:$('#docNotes').value})}
-      }else if(tab==='stitch'){
-        const rows=d.sources?.stitching||[];
-        const groupKey=x=>String(x.CREATED_AT||x.ISSUE_DATE||'')+'|'+String(x.STITCHING_VENDOR_ID||x.VENDOR||'');
-        const groups=new Map();
-        rows.forEach(x=>{
-          const k=groupKey(x);
-          if(!groups.has(k))groups.set(k,{key:k,date:x.ISSUE_DATE,createdAt:x.CREATED_AT,vendor:x.VENDOR||'',vendorId:x.STITCHING_VENDOR_ID||'',items:[]});
-          groups.get(k).items.push(x)
-        });
-        const list=[...groups.values()].map((g,i)=>({
-          ...g,index:i+1,
-          fabrics:[...new Set(g.items.map(x=>x.FABRIC).filter(Boolean))],
-          styles:[...new Set(g.items.map(x=>x.STYLE).filter(Boolean))],
-          colors:[...new Set(g.items.map(x=>x.COLOR).filter(Boolean))],
-          statuses:[...new Set(g.items.map(x=>x.STATUS).filter(Boolean))],
-          totalMtr:g.items.reduce((s,x)=>s+Number(x.FABRIC_QTY||0),0),
-          totalPcs:g.items.reduce((s,x)=>s+Number(x.TOTAL_PCS||0),0)
-        }));
-        const uniq=fn=>[...new Set(list.flatMap(fn).filter(Boolean))].sort();
-        const vendors=uniq(g=>[g.vendor]),fabrics=uniq(g=>g.fabrics),styles=uniq(g=>g.styles),colors=uniq(g=>g.colors),statuses=uniq(g=>g.statuses);
-
-        body.innerHTML='<div class="docs-stitch-multi">'+
-          '<div class="docs-stitch-top"><div><h4>Build Cutting & Stitching Challan</h4><small>Select one or more issue batches for the same vendor.</small></div><div class="field"><label>Document Date</label><input id="docDate" type="date" value="'+todayLocal()+'"></div></div>'+
-          '<div class="docs-stitch-filters">'+
-            '<input id="docStitchSearch" placeholder="Search batch / style / fabric / color / vendor">'+
-            '<select id="docStitchVendor"><option value="">All Vendors</option>'+vendors.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
-            '<select id="docStitchFabric"><option value="">All Fabrics</option>'+fabrics.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
-            '<select id="docStitchStyle"><option value="">All Styles</option>'+styles.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
-            '<select id="docStitchColor"><option value="">All Colors</option>'+colors.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
-            '<select id="docStitchStatus"><option value="">All Status</option>'+statuses.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
-            '<input id="docStitchFrom" type="date" title="From date"><input id="docStitchTo" type="date" title="To date">'+
-            '<select id="docStitchSort"><option value="date_desc">Newest First</option><option value="date_asc">Oldest First</option><option value="vendor_asc">Vendor A-Z</option><option value="meter_desc">Meter High-Low</option><option value="pcs_desc">Pieces High-Low</option><option value="lines_desc">Lines High-Low</option></select>'+
-            '<button type="button" class="btn ghost" id="docStitchClear">Clear</button>'+
-          '</div>'+
-          '<div class="docs-stitch-actions"><div><button type="button" class="btn ghost" id="docStitchSelectVisible">Select All Visible</button><button type="button" class="btn ghost" id="docStitchClearSelection">Clear Selection</button></div><span id="docStitchVisibleCount"></span></div>'+
-          '<div class="docs-stitch-batch-select" id="docStitchBatchList"></div>'+
-          '<div class="field"><label>Notes</label><input id="docNotes" placeholder="Optional vendor instruction"></div>'+
-          '<div class="docs-stitch-preview" id="docStitchPreview"><div class="smart-empty"><b>Select issue batch(es)</b><span>Selected batches will combine into one vendor challan.</span></div></div>'+
-          '<div class="docs-stitch-footer"><span id="docStitchSelected">0 batches selected</span><button class="btn teal" id="makeStitchDoc">Generate & Print Combined Challan</button></div>'+
-        '</div>';
-
-        let selectedKeys=new Set();
-
-        const selectedGroups=()=>list.filter(g=>selectedKeys.has(g.key));
-        const matches=(g)=>{
-          const q=$('#docStitchSearch').value.trim().toLowerCase(),v=$('#docStitchVendor').value,f=$('#docStitchFabric').value,s=$('#docStitchStyle').value,c=$('#docStitchColor').value,st=$('#docStitchStatus').value,from=$('#docStitchFrom').value,to=$('#docStitchTo').value;
-          const hay=('Issue Batch '+g.index+' '+g.vendor+' '+g.fabrics.join(' ')+' '+g.styles.join(' ')+' '+g.colors.join(' ')+' '+g.statuses.join(' ')+' '+g.items.map(x=>x.CHALLAN_ID+' '+(x.DYE_BATCH_ID||'')).join(' ')).toLowerCase();
-          return(!q||hay.includes(q))&&(!v||g.vendor===v)&&(!f||g.fabrics.includes(f))&&(!s||g.styles.includes(s))&&(!c||g.colors.includes(c))&&(!st||g.statuses.includes(st))&&(!from||String(g.date||'').slice(0,10)>=from)&&(!to||String(g.date||'').slice(0,10)<=to)
-        };
-        const sortedVisible=()=>{
-          const arr=list.filter(matches),sort=$('#docStitchSort').value;
-          arr.sort((a,b)=>{
-            if(sort==='date_asc')return String(a.date).localeCompare(String(b.date));
-            if(sort==='vendor_asc')return a.vendor.localeCompare(b.vendor);
-            if(sort==='meter_desc')return b.totalMtr-a.totalMtr;
-            if(sort==='pcs_desc')return b.totalPcs-a.totalPcs;
-            if(sort==='lines_desc')return b.items.length-a.items.length;
-            return String(b.date).localeCompare(String(a.date))
-          });return arr
-        };
-        const renderBatches=()=>{
-          const visible=sortedVisible(),chosen=selectedGroups(),vendorLock=chosen.length?String(chosen[0].vendorId||chosen[0].vendor):'';
-          $('#docStitchVisibleCount').textContent=visible.length+' visible / '+list.length+' total';
-          $('#docStitchBatchList').innerHTML=visible.map(g=>{
-            const id=String(g.vendorId||g.vendor),checked=selectedKeys.has(g.key),disabled=!!vendorLock&&id!==vendorLock&&!checked;
-            return '<label class="docs-stitch-batch-option'+(disabled?' disabled':'')+'" data-key="'+esc(g.key)+'" data-vendor="'+esc(id)+'">'+
-              '<input type="checkbox" '+(checked?'checked ':'')+(disabled?'disabled ':'')+'>'+
-              '<span><b>Issue Batch '+g.index+'</b><small>'+esc(fmtDate(g.date))+' · '+esc(g.vendor)+' · '+g.items.length+' line(s) · '+esc(g.fabrics.join(', '))+'</small></span>'+
-              '<em>'+docsMeter(g.totalMtr)+' m · '+docsNum(g.totalPcs)+' pcs</em></label>'
-          }).join('')||'<div class="smart-empty"><b>No matching batches</b><span>Change or clear the filters.</span></div>';
-          document.querySelectorAll('#docStitchBatchList .docs-stitch-batch-option input').forEach(ch=>ch.onchange=()=>{
-            const card=ch.closest('.docs-stitch-batch-option'),key=card.dataset.key;
-            if(ch.checked)selectedKeys.add(key);else selectedKeys.delete(key);
-            renderBatches();renderPreview()
-          })
-        };
-        const renderPreview=()=>{
-          const chosen=selectedGroups();
-          $('#docStitchSelected').textContent=chosen.length+' batch'+(chosen.length===1?'':'es')+' selected'+(chosen.length?' · '+docsMeter(chosen.reduce((s,g)=>s+g.totalMtr,0))+' m · '+docsNum(chosen.reduce((s,g)=>s+g.totalPcs,0))+' pcs':'');
-          if(!chosen.length){
-            $('#docStitchPreview').innerHTML='<div class="smart-empty"><b>Select issue batch(es)</b><span>Selected batches will combine into one vendor challan.</span></div>';return
-          }
-          const all=chosen.flatMap(g=>g.items);
-          $('#docStitchPreview').innerHTML='<div class="docs-batch-preview-head"><b>'+esc(chosen[0].vendor)+'</b><span>'+chosen.length+' batch(es) · '+all.length+' issue line(s)</span></div>'+
-            '<div class="table-wrap"><table class="data"><thead><tr><th>Source</th><th>Style</th><th>Color</th><th>Fabric</th><th>Meter</th><th>Pieces</th></tr></thead><tbody>'+
-            all.map(x=>'<tr><td>'+esc(x.CHALLAN_ID)+'</td><td>'+esc(x.STYLE||'')+'</td><td>'+esc(x.COLOR||'')+'</td><td>'+esc(x.FABRIC||'')+'</td><td>'+docsMeter(x.FABRIC_QTY)+'</td><td>'+docsNum(x.TOTAL_PCS)+'</td></tr>').join('')+
-            '<tr><td colspan="4" class="tot">Grand Total</td><td class="tot">'+docsMeter(all.reduce((s,x)=>s+Number(x.FABRIC_QTY||0),0))+'</td><td class="tot">'+docsNum(all.reduce((s,x)=>s+Number(x.TOTAL_PCS||0),0))+'</td></tr></tbody></table></div>'
-        };
-        const refresh=()=>{renderBatches();renderPreview()};
-        ['docStitchSearch','docStitchVendor','docStitchFabric','docStitchStyle','docStitchColor','docStitchStatus','docStitchFrom','docStitchTo','docStitchSort'].forEach(id=>$('#'+id).addEventListener(id==='docStitchSearch'?'input':'change',refresh));
-        $('#docStitchClear').onclick=()=>{['docStitchSearch','docStitchVendor','docStitchFabric','docStitchStyle','docStitchColor','docStitchStatus','docStitchFrom','docStitchTo'].forEach(id=>$('#'+id).value='');$('#docStitchSort').value='date_desc';refresh()};
-        $('#docStitchSelectVisible').onclick=()=>{
-          const visible=sortedVisible();if(!visible.length)return;
-          const chosen=selectedGroups(),vendorLock=chosen.length?String(chosen[0].vendorId||chosen[0].vendor):String(visible[0].vendorId||visible[0].vendor);
-          visible.filter(g=>String(g.vendorId||g.vendor)===vendorLock).forEach(g=>selectedKeys.add(g.key));refresh()
-        };
-        $('#docStitchClearSelection').onclick=()=>{selectedKeys.clear();refresh()};
-        $('#makeStitchDoc').onclick=()=>{
-          const chosen=selectedGroups();if(!chosen.length)return toast('Select at least one issue batch.','bad');
-          const vendor=String(chosen[0].vendorId||chosen[0].vendor);
-          if(chosen.some(g=>String(g.vendorId||g.vendor)!==vendor))return toast('Select issue batches for one vendor only.','bad');
-          const ids=chosen.flatMap(g=>g.items.map(x=>x.CHALLAN_ID));
-          generateDocAndPrint('STITCHING_CHALLAN',ids,{docDate:$('#docDate').value,notes:$('#docNotes').value})
-        };
-        refresh()
-      }else if(tab==='stickers'){
-        const rows=d.sources?.stitching||[];
-        const groupKey=x=>String(x.CREATED_AT||x.ISSUE_DATE||'')+'|'+String(x.STITCHING_VENDOR_ID||x.VENDOR||'');
-        const groups=new Map();
-        rows.forEach(x=>{const k=groupKey(x);if(!groups.has(k))groups.set(k,{key:k,date:x.ISSUE_DATE,createdAt:x.CREATED_AT,vendor:x.VENDOR||'',vendorId:x.STITCHING_VENDOR_ID||'',items:[]});groups.get(k).items.push(x)});
-        const vendors=[...new Set(rows.map(x=>x.VENDOR).filter(Boolean))].sort();
-        const fabrics=[...new Set(rows.map(x=>x.FABRIC).filter(Boolean))].sort();
-        const styles=[...new Set(rows.map(x=>x.STYLE).filter(Boolean))].sort();
-        const colors=[...new Set(rows.map(x=>x.COLOR).filter(Boolean))].sort();
-        const statuses=[...new Set(rows.map(x=>x.STATUS).filter(Boolean))].sort();
-        const opt=a=>'<option value="">All</option>'+a.map(v=>'<option value="'+esc(v)+'">'+esc(v)+'</option>').join('');
-        body.innerHTML='<div class="docs-sticker-head"><div><h4>Sticker Sheet — Issue Batch Wise</h4><small>Select a whole Cutting & Stitching issue batch or individual lines. 4 stickers per A4 page.</small></div></div>'+
-          '<div class="docs-sticker-filters">'+
-            '<input id="stickerSearch" placeholder="Search batch / challan / style / vendor">'+
-            '<select id="stickerVendor"><option value="">All Vendors</option>'+vendors.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
-            '<select id="stickerFabric"><option value="">All Fabrics</option>'+fabrics.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
-            '<select id="stickerStyle"><option value="">All Styles</option>'+styles.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
-            '<select id="stickerColor"><option value="">All Colors</option>'+colors.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
-            '<select id="stickerStatus"><option value="">All Status</option>'+statuses.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
-            '<input id="stickerFrom" type="date" title="From date"><input id="stickerTo" type="date" title="To date">'+
-            '<button type="button" class="btn ghost" id="stickerClear">Clear</button>'+
-          '</div>'+
-          '<div class="docs-batch-list" id="stickerBatchList">'+
-          [...groups.values()].map((g,gi)=>'<section class="docs-batch-card" data-group="'+esc(g.key)+'">'+
-            '<div class="docs-batch-head"><label><input type="checkbox" class="batch-check"><span><b>Issue Batch '+(gi+1)+'</b><small>'+esc(fmtDate(g.date))+' · '+esc(g.vendor)+' · '+g.items.length+' line(s)</small></span></label><button type="button" class="btn ghost batch-toggle">Show Lines</button></div>'+
-            '<div class="docs-batch-items">'+g.items.map(x=>'<label class="docs-sticker-item" data-text="'+esc((x.CHALLAN_ID+' '+x.DYE_BATCH_ID+' '+x.STYLE+' '+x.COLOR+' '+x.FABRIC+' '+x.VENDOR+' '+x.STATUS).toLowerCase())+'" data-vendor="'+esc(x.VENDOR||'')+'" data-fabric="'+esc(x.FABRIC||'')+'" data-style="'+esc(x.STYLE||'')+'" data-color="'+esc(x.COLOR||'')+'" data-status="'+esc(x.STATUS||'')+'" data-date="'+esc(String(x.ISSUE_DATE||'').slice(0,10))+'"><input type="checkbox" class="item-check" value="'+esc(x.CHALLAN_ID)+'"><span><b>'+esc(x.STYLE||'')+'</b><small>'+esc(x.CHALLAN_ID)+' · '+esc(x.DYE_BATCH_ID||'')+' · '+esc(x.COLOR||'')+' · '+esc(x.FABRIC||'')+'</small></span><em>'+docsNum(x.TOTAL_PCS)+' pcs</em></label>').join('')+'</div>'+
-          '</section>').join('')+'</div>'+
-          '<div class="docs-sticker-footer"><span id="stickerSelected">0 selected</span><button class="btn teal" id="makeStickers">Generate & Print Selected Stickers</button></div>';
-
-        const filter=()=>{
-          const q=$('#stickerSearch').value.trim().toLowerCase(),v=$('#stickerVendor').value,f=$('#stickerFabric').value,s=$('#stickerStyle').value,c=$('#stickerColor').value,st=$('#stickerStatus').value,from=$('#stickerFrom').value,to=$('#stickerTo').value;
-          document.querySelectorAll('.docs-batch-card').forEach(card=>{
-            let visible=0;
-            card.querySelectorAll('.docs-sticker-item').forEach(item=>{
-              const ok=(!q||item.dataset.text.includes(q))&&(!v||item.dataset.vendor===v)&&(!f||item.dataset.fabric===f)&&(!s||item.dataset.style===s)&&(!c||item.dataset.color===c)&&(!st||item.dataset.status===st)&&(!from||item.dataset.date>=from)&&(!to||item.dataset.date<=to);
-              item.classList.toggle('hidden',!ok);if(ok)visible++
-            });
-            card.classList.toggle('hidden',visible===0)
-          })
-        };
-        const updateSelected=()=>{$('#stickerSelected').textContent=[...document.querySelectorAll('.item-check:checked')].length+' selected'};
-        ['stickerSearch','stickerVendor','stickerFabric','stickerStyle','stickerColor','stickerStatus','stickerFrom','stickerTo'].forEach(id=>$('#'+id).addEventListener(id==='stickerSearch'?'input':'change',filter));
-        $('#stickerClear').onclick=()=>{['stickerSearch','stickerVendor','stickerFabric','stickerStyle','stickerColor','stickerStatus','stickerFrom','stickerTo'].forEach(id=>$('#'+id).value='');filter()};
-        document.querySelectorAll('.batch-toggle').forEach(b=>b.onclick=()=>{const card=b.closest('.docs-batch-card');card.classList.toggle('open');b.textContent=card.classList.contains('open')?'Hide Lines':'Show Lines'});
-        document.querySelectorAll('.batch-check').forEach(ch=>ch.onchange=()=>{const card=ch.closest('.docs-batch-card');card.querySelectorAll('.docs-sticker-item:not(.hidden) .item-check').forEach(x=>x.checked=ch.checked);updateSelected()});
-        document.querySelectorAll('.item-check').forEach(ch=>ch.onchange=()=>{const card=ch.closest('.docs-batch-card'),items=[...card.querySelectorAll('.docs-sticker-item:not(.hidden) .item-check')];card.querySelector('.batch-check').checked=items.length>0&&items.every(x=>x.checked);updateSelected()});
-        $('#makeStickers').onclick=()=>{const ids=[...document.querySelectorAll('.item-check:checked')].map(x=>x.value);if(!ids.length)return toast('Select at least one sticker.','bad');generateDocAndPrint('STICKER_SHEET',ids)}
-      }else if(tab==='settings'){
-        const x=d.company||{};
-        body.innerHTML='<div class="docs-settings"><div class="form-grid">'+
-          '<div class="field"><label>Company / Brand Name</label><input id="docCompanyName" value="'+esc(x.name||'')+'" placeholder="RARE RICH RIGHT (RRR)"></div>'+
-          '<div class="field"><label>Phone</label><input id="docCompanyPhone" value="'+esc(x.phone||'')+'"></div>'+
-          '<div class="field wide"><label>Address</label><input id="docCompanyAddress" value="'+esc(x.address||'')+'" placeholder="Full challan address"></div>'+
-          '<div class="field"><label>GSTIN</label><input id="docCompanyGst" value="'+esc(x.gst||'')+'"></div>'+
-          '<div class="field"><label>Email</label><input id="docCompanyEmail" value="'+esc(x.email||'')+'"></div>'+
-          '<div class="field wide"><label>Footer Note</label><input id="docCompanyFooter" value="'+esc(x.footer||'')+'"></div>'+
-          '</div><div class="smart-note"><b>Used on challan header:</b> Save once; future generated documents will snapshot these details. Old saved documents remain unchanged.</div><div class="form-actions"><button class="btn teal" id="saveDocSettings">Save Challan Settings</button></div></div>';
-        $('#saveDocSettings').onclick=async()=>{try{const r=await api('/api/docs',{method:'POST',body:JSON.stringify({action:'save_settings',company:{name:$('#docCompanyName').value,address:$('#docCompanyAddress').value,phone:$('#docCompanyPhone').value,gst:$('#docCompanyGst').value,email:$('#docCompanyEmail').value,footer:$('#docCompanyFooter').value}}),activity:'Saving challan settings…'});d.company=r.company;toast('Challan settings saved')}catch(e){toast(e.message,'bad',4000)}}
-      }else{
-        const rows=d.history||[];
-        body.innerHTML=rows.length?'<div class="table-wrap"><table class="data"><thead><tr><th>Doc No.</th><th>Type</th><th>Date</th><th>Source</th><th>Status</th><th>Prints</th><th>Action</th></tr></thead><tbody>'+rows.map((x,i)=>'<tr><td>'+esc(x.DOC_NO)+'</td><td>'+esc(docsTypeLabel(x.DOC_TYPE))+'</td><td>'+esc(fmtDate(x.DOC_DATE))+'</td><td>'+esc((()=>{try{return JSON.parse(x.SOURCE_IDS||'[]').join(', ')}catch{return''}})())+'</td><td>'+badge(x.STATUS)+'</td><td>'+Number(x.PRINT_COUNT||0)+'</td><td><button class="btn ghost docs-reprint" data-id="'+esc(x.DOC_ID)+'">Reprint</button></td></tr>').join('')+'</tbody></table></div>':'<div class="smart-empty"><b>No documents generated yet</b><span>Generated challans and sticker sheets will appear here.</span></div>';
-        document.querySelectorAll('.docs-reprint').forEach(b=>b.onclick=async()=>{const w=window.open('','_blank');if(!w)return toast('Allow pop-ups to reprint.','bad');try{const x=await api('/api/docs?action=document&id='+encodeURIComponent(b.dataset.id),{activity:'Loading document…'});printDocsDocument(x.document,w)}catch(e){w.close();toast(e.message,'bad')}})
-      }
-    };
-    document.querySelectorAll('#docsTabs button').forEach(b=>b.onclick=()=>{tab=b.dataset.docTab;try{localStorage.setItem(prefLocalKey('docs:tab'),tab)}catch{}render()});
-    if(!['dye','stitch','stickers','history','settings'].includes(tab)||(tab==='settings'&&!state.user?.admin))tab='dye';render()
-  }catch(e){toast(e.message,'bad',4500);$('#docsBody').innerHTML='<div class="smart-empty"><b>Docs Maker could not load</b><span>'+esc(e.message)+'</span></div>'}finally{setStatus('● Ready','ok')}
+function documentSelectionButton(label,cls){return '<button type="button" class="btn teal '+cls+'">'+esc(label)+'</button>'}
+async function generateDyeFromRows(rows){
+  const ids=[...new Set((rows||[]).map(r=>String(r.DYE_PLAN_ID||'')).filter(Boolean))];
+  if(!ids.length)return toast('Select Dye Plan row(s) first.','bad',3200);
+  return generateDocAndPrint('DYE_CHALLAN',ids)
 }
-
+async function generateStitchFromRows(rows){
+  const ids=[...new Set((rows||[]).flatMap(r=>Array.isArray(r.__items)?r.__items.map(x=>x.CHALLAN_ID):[r.CHALLAN_ID]).map(String).filter(Boolean))];
+  if(!ids.length)return toast('Select Cutting & Stitching row(s) first.','bad',3200);
+  return generateDocAndPrint('STITCHING_CHALLAN',ids)
+}
+async function reprintDocument(docId){
+  const w=window.open('','_blank');if(!w)return toast('Allow pop-ups to reprint.','bad',3200);
+  try{const d=await api('/api/docs?action=document&id='+encodeURIComponent(docId),{activity:'Loading document…'});printDocsDocument(d.document,w)}catch(e){w.close();toast(e.message,'bad',4200)}
+}
+async function generateStickersFromDocuments(rows){
+  const valid=(rows||[]).filter(r=>String(r.DOC_TYPE)==='STITCHING_CHALLAN'&&String(r.STATUS||'').toUpperCase()!=='CANCELLED');
+  if(!valid.length)return toast('Select generated Stitching Challan document(s).','bad',3500);
+  if(valid.length!==(rows||[]).length)return toast('Only active Stitching Challans can generate stickers.','bad',4200);
+  return generateDocAndPrint('STICKER_SHEET',valid.map(r=>r.DOC_ID))
+}
 async function renderDashboard(force=false){
   const s=$('#stage');
   s.innerHTML=`<section class="hero"><div><h2>Production Control</h2><p>Raw fabric to warehouse handover — one traceable workflow.</p></div><div>${fmtDate(todayLocal())}</div></section>
