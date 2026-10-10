@@ -1,3 +1,4 @@
+import {D1_SCHEMA} from './d1-schema.js';
 const TABLE_MAP={
   USERS:'users',VENDORS:'vendors',FABRICS:'fabrics',COLORS:'colors',STYLES:'styles',SIZES:'sizes',
   DEFECT_REASONS:'defect_reasons',RAW_INWARD:'raw_inward',DYE_JOBS:'dye_jobs',DYE_RECEIPTS:'dye_receipts',
