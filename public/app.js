@@ -1,4 +1,4 @@
-const APP_BUILD='0.41';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.42';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -188,9 +188,51 @@ async function renderDocsMaker(force=false){
         $('#makeStitchDoc').onclick=()=>{const id=$('#docStitchSource').value;if(!id)return toast('Select a stitching challan.','bad');const fq=$('#docFabricQty').value;generateDocAndPrint('STITCHING_CHALLAN',[id],{docDate:$('#docDate').value,notes:$('#docNotes').value,overrides:fq?{fabricQty:Number(fq)}:{}})}
       }else if(tab==='stickers'){
         const rows=d.sources?.stitching||[];
-        body.innerHTML='<div class="docs-sticker-tools"><div><h4>Select Stitching Challans</h4><small>4 stickers will print per A4 page.</small></div><input id="stickerSearch" placeholder="Search challan / style / vendor"></div><div class="docs-select-list" id="stickerList">'+rows.map((x,i)=>'<label data-text="'+esc((x.CHALLAN_ID+' '+x.STYLE+' '+x.COLOR+' '+x.VENDOR).toLowerCase())+'"><input type="checkbox" value="'+esc(x.CHALLAN_ID)+'"> <span><b>'+esc(x.STYLE||'')+'</b><small>'+esc(x.CHALLAN_ID)+' · '+esc(x.COLOR||'')+' · '+esc(x.FABRIC||'')+' · '+esc(x.VENDOR||'')+'</small></span><em>'+docsNum(x.TOTAL_PCS)+' pcs</em></label>').join('')+'</div><div class="form-actions"><button class="btn teal" id="makeStickers">Generate & Print Selected Stickers</button></div>';
-        $('#stickerSearch').oninput=e=>{const q=e.target.value.trim().toLowerCase();document.querySelectorAll('#stickerList label').forEach(x=>x.classList.toggle('hidden',q&&!x.dataset.text.includes(q)))};
-        $('#makeStickers').onclick=()=>{const ids=[...document.querySelectorAll('#stickerList input:checked')].map(x=>x.value);if(!ids.length)return toast('Select at least one challan.','bad');generateDocAndPrint('STICKER_SHEET',ids)}
+        const groupKey=x=>String(x.CREATED_AT||x.ISSUE_DATE||'')+'|'+String(x.STITCHING_VENDOR_ID||x.VENDOR||'');
+        const groups=new Map();
+        rows.forEach(x=>{const k=groupKey(x);if(!groups.has(k))groups.set(k,{key:k,date:x.ISSUE_DATE,createdAt:x.CREATED_AT,vendor:x.VENDOR||'',vendorId:x.STITCHING_VENDOR_ID||'',items:[]});groups.get(k).items.push(x)});
+        const vendors=[...new Set(rows.map(x=>x.VENDOR).filter(Boolean))].sort();
+        const fabrics=[...new Set(rows.map(x=>x.FABRIC).filter(Boolean))].sort();
+        const styles=[...new Set(rows.map(x=>x.STYLE).filter(Boolean))].sort();
+        const colors=[...new Set(rows.map(x=>x.COLOR).filter(Boolean))].sort();
+        const statuses=[...new Set(rows.map(x=>x.STATUS).filter(Boolean))].sort();
+        const opt=a=>'<option value="">All</option>'+a.map(v=>'<option value="'+esc(v)+'">'+esc(v)+'</option>').join('');
+        body.innerHTML='<div class="docs-sticker-head"><div><h4>Sticker Sheet — Issue Batch Wise</h4><small>Select a whole Cutting & Stitching issue batch or individual lines. 4 stickers per A4 page.</small></div></div>'+
+          '<div class="docs-sticker-filters">'+
+            '<input id="stickerSearch" placeholder="Search batch / challan / style / vendor">'+
+            '<select id="stickerVendor"><option value="">All Vendors</option>'+vendors.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
+            '<select id="stickerFabric"><option value="">All Fabrics</option>'+fabrics.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
+            '<select id="stickerStyle"><option value="">All Styles</option>'+styles.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
+            '<select id="stickerColor"><option value="">All Colors</option>'+colors.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
+            '<select id="stickerStatus"><option value="">All Status</option>'+statuses.map(v=>'<option>'+esc(v)+'</option>').join('')+'</select>'+
+            '<input id="stickerFrom" type="date" title="From date"><input id="stickerTo" type="date" title="To date">'+
+            '<button type="button" class="btn ghost" id="stickerClear">Clear</button>'+
+          '</div>'+
+          '<div class="docs-batch-list" id="stickerBatchList">'+
+          [...groups.values()].map((g,gi)=>'<section class="docs-batch-card" data-group="'+esc(g.key)+'">'+
+            '<div class="docs-batch-head"><label><input type="checkbox" class="batch-check"><span><b>Issue Batch '+(gi+1)+'</b><small>'+esc(fmtDate(g.date))+' · '+esc(g.vendor)+' · '+g.items.length+' line(s)</small></span></label><button type="button" class="btn ghost batch-toggle">Show Lines</button></div>'+
+            '<div class="docs-batch-items">'+g.items.map(x=>'<label class="docs-sticker-item" data-text="'+esc((x.CHALLAN_ID+' '+x.DYE_BATCH_ID+' '+x.STYLE+' '+x.COLOR+' '+x.FABRIC+' '+x.VENDOR+' '+x.STATUS).toLowerCase())+'" data-vendor="'+esc(x.VENDOR||'')+'" data-fabric="'+esc(x.FABRIC||'')+'" data-style="'+esc(x.STYLE||'')+'" data-color="'+esc(x.COLOR||'')+'" data-status="'+esc(x.STATUS||'')+'" data-date="'+esc(String(x.ISSUE_DATE||'').slice(0,10))+'"><input type="checkbox" class="item-check" value="'+esc(x.CHALLAN_ID)+'"><span><b>'+esc(x.STYLE||'')+'</b><small>'+esc(x.CHALLAN_ID)+' · '+esc(x.DYE_BATCH_ID||'')+' · '+esc(x.COLOR||'')+' · '+esc(x.FABRIC||'')+'</small></span><em>'+docsNum(x.TOTAL_PCS)+' pcs</em></label>').join('')+'</div>'+
+          '</section>').join('')+'</div>'+
+          '<div class="docs-sticker-footer"><span id="stickerSelected">0 selected</span><button class="btn teal" id="makeStickers">Generate & Print Selected Stickers</button></div>';
+
+        const filter=()=>{
+          const q=$('#stickerSearch').value.trim().toLowerCase(),v=$('#stickerVendor').value,f=$('#stickerFabric').value,s=$('#stickerStyle').value,c=$('#stickerColor').value,st=$('#stickerStatus').value,from=$('#stickerFrom').value,to=$('#stickerTo').value;
+          document.querySelectorAll('.docs-batch-card').forEach(card=>{
+            let visible=0;
+            card.querySelectorAll('.docs-sticker-item').forEach(item=>{
+              const ok=(!q||item.dataset.text.includes(q))&&(!v||item.dataset.vendor===v)&&(!f||item.dataset.fabric===f)&&(!s||item.dataset.style===s)&&(!c||item.dataset.color===c)&&(!st||item.dataset.status===st)&&(!from||item.dataset.date>=from)&&(!to||item.dataset.date<=to);
+              item.classList.toggle('hidden',!ok);if(ok)visible++
+            });
+            card.classList.toggle('hidden',visible===0)
+          })
+        };
+        const updateSelected=()=>{$('#stickerSelected').textContent=[...document.querySelectorAll('.item-check:checked')].length+' selected'};
+        ['stickerSearch','stickerVendor','stickerFabric','stickerStyle','stickerColor','stickerStatus','stickerFrom','stickerTo'].forEach(id=>$('#'+id).addEventListener(id==='stickerSearch'?'input':'change',filter));
+        $('#stickerClear').onclick=()=>{['stickerSearch','stickerVendor','stickerFabric','stickerStyle','stickerColor','stickerStatus','stickerFrom','stickerTo'].forEach(id=>$('#'+id).value='');filter()};
+        document.querySelectorAll('.batch-toggle').forEach(b=>b.onclick=()=>{const card=b.closest('.docs-batch-card');card.classList.toggle('open');b.textContent=card.classList.contains('open')?'Hide Lines':'Show Lines'});
+        document.querySelectorAll('.batch-check').forEach(ch=>ch.onchange=()=>{const card=ch.closest('.docs-batch-card');card.querySelectorAll('.docs-sticker-item:not(.hidden) .item-check').forEach(x=>x.checked=ch.checked);updateSelected()});
+        document.querySelectorAll('.item-check').forEach(ch=>ch.onchange=()=>{const card=ch.closest('.docs-batch-card'),items=[...card.querySelectorAll('.docs-sticker-item:not(.hidden) .item-check')];card.querySelector('.batch-check').checked=items.length>0&&items.every(x=>x.checked);updateSelected()});
+        $('#makeStickers').onclick=()=>{const ids=[...document.querySelectorAll('.item-check:checked')].map(x=>x.value);if(!ids.length)return toast('Select at least one sticker.','bad');generateDocAndPrint('STICKER_SHEET',ids)}
       }else if(tab==='settings'){
         const x=d.company||{};
         body.innerHTML='<div class="docs-settings"><div class="form-grid">'+
