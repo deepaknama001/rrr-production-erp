@@ -188,13 +188,12 @@ async function buildPayload(db,type,sourceIds,overrides={}){
     const items=[];
     for(const id of sourceIds.slice(0,60))items.push(await stitchOne(db,String(id)));
     if(!items.length)throw Object.assign(new Error('Select a Cutting & Stitching issue batch.'),{status:400});
-    const first=items[0],vendorId=String(first.vendorId||''),createdAt=String(first.createdAt||'');
-    if(items.some(x=>String(x.vendorId||'')!==vendorId))throw Object.assign(new Error('All challan lines must belong to the same vendor issue batch.'),{status:409});
-    if(createdAt&&items.some(x=>String(x.createdAt||'')!==createdAt))throw Object.assign(new Error('Selected lines are from different issue batches.'),{status:409});
+    const first=items[0],vendorId=String(first.vendorId||'');
+    if(items.some(x=>String(x.vendorId||'')!==vendorId))throw Object.assign(new Error('Selected issue batches must belong to the same vendor.'),{status:409});
     return{
       title:'Cutting & Stitching Issue Challan',
       vendorId:first.vendorId,vendor:first.vendor,vendorAddress:first.vendorAddress,vendorPhone:first.vendorPhone,vendorGst:first.vendorGst,
-      date:first.date,createdAt:first.createdAt||'',items,
+      date:first.date,items,
       totalFabricMtr:items.reduce((s,x)=>s+Number(x.fabricQty||0),0),
       totalPcs:items.reduce((s,x)=>s+Number(x.totalPcs||0),0),
       notes:String(overrides.notes??'')
