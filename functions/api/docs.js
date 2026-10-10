@@ -182,6 +182,45 @@ async function ensureDocumentIdModel(db){
   if(!report.verified)throw Object.assign(new Error('Document number migration verification failed.'),{status:500});
   return report
 }
+async function identifierAudit(db){
+  const stitch=(await db.prepare("SELECT CHALLAN_ID,ISSUE_ID,ISSUE_DATE FROM stitching_jobs ORDER BY CREATED_AT,CHALLAN_ID").all()).results||[];
+  const issueSeen=new Set();let missingIssue=0,invalidIssue=0,duplicateIssue=0;
+  for(const r of stitch){
+    const id=String(r.ISSUE_ID||'');
+    if(!id)missingIssue++;
+    if(id&&!/^CSI-\d{6}-\d+$/.test(id))invalidIssue++;
+    if(id&&issueSeen.has(id))duplicateIssue++;
+    if(id)issueSeen.add(id)
+  }
+  const docs=(await db.prepare("SELECT DOC_ID,DOC_NO,DOC_TYPE,DOC_DATE,PAYLOAD_JSON FROM docs_documents ORDER BY CREATED_AT,DOC_ID").all()).results||[];
+  const docSeen=new Set();let invalidDocs=0,duplicateDocs=0,unresolvedStickerRefs=0;
+  const docById=new Map(docs.map(x=>[String(x.DOC_ID),x]));
+  for(const r of docs){
+    const prefix=docPrefix(r.DOC_TYPE),fy=financialYear(r.DOC_DATE),m=/^(DYC|STC|STK)\/(\d{2}-\d{2})\/(\d+)$/.exec(String(r.DOC_NO||''));
+    if(!m||m[1]!==prefix||m[2]!==fy)invalidDocs++;
+    if(docSeen.has(r.DOC_NO))duplicateDocs++;docSeen.add(r.DOC_NO);
+    if(r.DOC_TYPE==='STICKER_SHEET'){
+      let p={};try{p=JSON.parse(r.PAYLOAD_JSON||'{}')}catch{}
+      for(const item of p.items||[]){
+        if(item.sourceDocId){
+          const src=docById.get(String(item.sourceDocId));
+          if(!src||src.DOC_TYPE!=='STITCHING_CHALLAN'||String(item.sourceId||'')!==String(src.DOC_NO||''))unresolvedStickerRefs++
+        }else if(item.sourceId)unresolvedStickerRefs++
+      }
+    }
+  }
+  let storedIssue={},storedDocs={};
+  try{storedIssue=JSON.parse((await db.prepare("SELECT VALUE FROM settings WHERE KEY='IDMODEL:STITCHING'").first())?.VALUE||'{}')}catch{}
+  try{storedDocs=JSON.parse((await db.prepare("SELECT VALUE FROM settings WHERE KEY='IDMODEL:DOCUMENTS'").first())?.VALUE||'{}')}catch{}
+  const verified=missingIssue===0&&invalidIssue===0&&duplicateIssue===0&&invalidDocs===0&&duplicateDocs===0;
+  return{
+    verified,
+    stitching:{rows:stitch.length,missingIssue,invalidIssue,duplicateIssue,stored:storedIssue},
+    documents:{rows:docs.length,invalidDocs,duplicateDocs,unresolvedStickerRefs,stored:storedDocs},
+    at:now()
+  }
+}
+
 async function audit(context,user,action,id,payload){
   try{
     await context.env.DB.prepare('INSERT INTO audit_log(AUDIT_ID,TIMESTAMP,USER_ID,USER_NAME,ACTION,MODULE,RECORD_ID,OLD_VALUE_JSON,NEW_VALUE_JSON,DEVICE_INFO,IP_HASH) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
@@ -360,6 +399,10 @@ export async function onRequestGet(context){
     await ensureDocs(context.env.DB);
     const u=new URL(context.request.url),action=u.searchParams.get('action')||'home';
     if(action==='settings')return json({company:await getCompany(context.env.DB)});
+    if(action==='id_audit'){
+      if(!user.admin)return json({error:'Admin permission required.'},403);
+      return json({audit:await identifierAudit(context.env.DB)})
+    }
     if(action==='history'){
       const type=String(u.searchParams.get('type')||'').toUpperCase();
       const q=type
