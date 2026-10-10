@@ -688,3 +688,11 @@ button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justif
 .docs-sticker-item em{font-size:10px!important}
 .docs-sticker-footer span{font-size:11px!important}
 .docs-sticker-footer .btn{font-size:11px!important;min-height:42px!important}
+
+/* v0.45 Batch-wise Cutting & Stitching challan */
+.docs-stitch-batch-form{grid-template-columns:minmax(360px,1.2fr) 220px}
+.docs-stitch-preview{margin-top:4px}
+.docs-batch-preview-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#f8fafc}
+.docs-batch-preview-head b{font-size:12px}.docs-batch-preview-head span{font-size:10px;color:var(--muted)}
+.docs-stitch-preview .data th,.docs-stitch-preview .data td{font-size:10px!important;padding:8px 9px!important}
+@media(max-width:760px){.docs-stitch-batch-form{grid-template-columns:1fr}.docs-batch-preview-head{align-items:flex-start;flex-direction:column}}
