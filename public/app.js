@@ -652,6 +652,8 @@ async function renderModule(m,force=false){
         return mountDataGrid(host,{
           key:'module:'+m+':summary',title:cfg.title+' - Summary',items:summaries,columns:summaryColumns(m),filters:[],
           actionRenderer:r=>actionMenuHtml([{cls:'summary-detail-btn',label:'Details'},{cls:'summary-trail-btn',label:'Trail'}],r.__gridIndex),
+          renderSelectionActions:rows=>m==='stitching'&&canAction('stitching','create')?documentSelectionButton('Generate Stitching Challan','grid-stitch-doc'):'',
+          bindSelectionActions:(rows,h)=>{const b=h.querySelector('.grid-stitch-doc');if(b)b.onclick=()=>generateStitchFromRows(rows)},
           bindActions:(pageRows,h)=>{
             h.querySelectorAll('.summary-detail-btn').forEach(b=>b.onclick=()=>openSummaryDetails(m,summaries[Number(b.dataset.idx)],id=>setView('trail',id)));
             h.querySelectorAll('.summary-trail-btn').forEach(b=>b.onclick=()=>setView('trail',firstTrailIdentity(m,summaries[Number(b.dataset.idx)])))
@@ -660,6 +662,8 @@ async function renderModule(m,force=false){
       }
       return mountDataGrid(host,{
         key:'module:'+m+':detail',title:cfg.title+' - Detail',items,columns:cfg.columns,filters:cfg.filters||[],
+        renderSelectionActions:rows=>m==='stitching'&&canAction('stitching','create')?documentSelectionButton('Generate Stitching Challan','grid-stitch-doc'):'',
+        bindSelectionActions:(rows,h)=>{const b=h.querySelector('.grid-stitch-doc');if(b)b.onclick=()=>generateStitchFromRows(rows)},
         actionRenderer:r=>{
           const actions=[];
           if(m==='raw'&&(canAction('raw','edit')||canAction('raw','cancel')))actions.push({cls:'raw-manage-btn',label:'Manage'});
@@ -757,6 +761,8 @@ async function renderDyeBatchGrid(items,onTrail){
   await mountDataGrid($('#gridHost'),{
     key:'module:dye:batch',title:'Dyeing - Batch View',items,columns:configs.dye.columns,filters:configs.dye.filters||[],
     actionRenderer:r=>actionMenuHtml([!/^RECEIVED/.test(String(r.STATUS))?{cls:'dye-receive-btn',label:'Receive'}:null,{cls:'dye-manage-btn',label:'Manage'},{cls:'dye-trail-btn',label:'Trail'}],r.__gridIndex),
+    renderSelectionActions:rows=>canAction('dye','create')?documentSelectionButton('Generate Dye Challan','grid-dye-doc'): '',
+    bindSelectionActions:(rows,host)=>{const b=host.querySelector('.grid-dye-doc');if(b)b.onclick=()=>generateDyeFromRows(rows)},
     bindActions:(pageRows,host)=>{
       host.querySelectorAll('.dye-receive-btn').forEach(b=>b.onclick=()=>openDyeReceive(items[Number(b.dataset.idx)]));
       host.querySelectorAll('.dye-manage-btn').forEach(b=>b.onclick=()=>openDyeManage(items[Number(b.dataset.idx)]));host.querySelectorAll('.dye-trail-btn').forEach(b=>b.onclick=()=>onTrail?.({type:'dye',id:String(items[Number(b.dataset.idx)]?.DYE_BATCH_ID||''),label:String(items[Number(b.dataset.idx)]?.DYE_BATCH_ID||'')}))
@@ -771,6 +777,8 @@ async function renderDyePlanGrid(batchItems,onTrail){
     columns:['DYE_PLAN_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR_COUNT','BATCH_COUNT','OPEN_BATCHES','ISSUE_MTR','RECEIVED_MTR','PENDING_MTR','USABLE_MTR','FINAL_NET_VARIANCE_MTR','PLAN_STATUS','__ACTION'],
     filters:['DYE_VENDOR','FABRIC','PLAN_STATUS'],
     actionRenderer:r=>actionMenuHtml([{cls:'dye-plan-detail-btn',label:'View Details'},{cls:'dye-plan-trail-btn',label:'Trail'}],r.__gridIndex),
+    renderSelectionActions:rows=>canAction('dye','create')?documentSelectionButton('Generate Dye Challan','grid-dye-doc'): '',
+    bindSelectionActions:(rows,host)=>{const b=host.querySelector('.grid-dye-doc');if(b)b.onclick=()=>generateDyeFromRows(rows)},
     bindActions:(pageRows,host)=>{host.querySelectorAll('.dye-plan-detail-btn').forEach(b=>b.onclick=()=>openDyePlanDetails(plans[Number(b.dataset.idx)],onTrail));host.querySelectorAll('.dye-plan-trail-btn').forEach(b=>b.onclick=()=>{const p=plans[Number(b.dataset.idx)],first=p?.__batches?.[0];if(first)onTrail?.({type:'dye',id:String(first.DYE_BATCH_ID||''),label:String(p.DYE_PLAN_ID||'')})})}
   })
 }
