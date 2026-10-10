@@ -712,3 +712,11 @@ button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justif
 .docs-stitch-actions{display:flex;justify-content:space-between;align-items:center;gap:10px}.docs-stitch-actions>div{display:flex;gap:7px}.docs-stitch-actions span{font-size:10px;font-weight:800;color:#687386}
 @media(max-width:1200px){.docs-stitch-filters{grid-template-columns:repeat(4,minmax(0,1fr))}.docs-stitch-filters #docStitchSearch{grid-column:1/-1}}
 @media(max-width:720px){.docs-stitch-filters{grid-template-columns:1fr 1fr}.docs-stitch-filters #docStitchSearch{grid-column:1/-1}.docs-stitch-actions{align-items:stretch;flex-direction:column}.docs-stitch-actions>div{display:grid;grid-template-columns:1fr 1fr}}
+
+/* v0.48 integrated document workflow */
+.grid-selection-actions{display:inline-flex;align-items:center;gap:7px;margin-left:6px}
+.grid-selection-actions .btn{min-height:34px;padding:0 12px;font-size:9px}
+.documents-master-tools{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:10px;padding:11px 12px;border:1px solid var(--line);border-radius:11px;background:#f8fafc}
+.documents-master-tools b{display:block;font-size:11px}.documents-master-tools small{display:block;margin-top:2px;font-size:8px;color:var(--muted)}
+.doc-row-actions{display:flex;align-items:center;gap:6px;white-space:nowrap}
+@media(max-width:720px){.documents-master-tools{align-items:stretch;flex-direction:column}.documents-master-tools .btn{width:100%}.grid-selection-actions{display:flex;width:100%;margin:6px 0 0}.grid-selection-actions .btn{width:100%}}
