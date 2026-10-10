@@ -160,7 +160,7 @@ function stickerPrintHtml(doc){
         '<div class="st-row"><b>Challan No.</b><span>'+esc(item.sourceId||'')+'</span></div>'+
         '<div class="st-row"><b>Colour</b><span>'+esc(item.color||'')+'</span></div>'+
         '<div class="st-row"><b>Fabric</b><span>'+esc(item.fabric||'')+'</span></div>'+
-        '<div class="st-row"><b>Fabric Qty.</b><span><strong>'+docsNum(item.fabricQty)+' Mtr</strong></span></div>'+
+        '<div class="st-row"><b>Fabric Qty.</b><span><strong>'+docsMeter(item.fabricQty)+' Mtr</strong></span></div>'+
         '<div class="st-row"><b>Total Pcs.</b><span><strong>'+docsNum(item.totalPcs)+'</strong></span></div>'+
         '<div class="st-row"><b>Vendor Name</b><span>'+esc(item.vendor||'')+'</span></div>'+
         '</div><div class="sizes">'+sizes.map(x=>'<div class="size-row"><b>'+esc(x.size)+'</b><span>'+docsNum(x.qty)+'</span></div>').join('')+'</div></div>'+
