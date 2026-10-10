@@ -1,5 +1,6 @@
 import {json,errorResponse} from '../_lib/common.js';
 import {requireAuth} from '../_lib/auth.js';
+import {ensureSchema} from '../_lib/d1.js';
 
 const CFG={
   raw:{
@@ -182,6 +183,7 @@ export async function onRequestGet(context){
   try{
     const user=await requireAuth(context);
     if(!context.env.DB)return json({error:'D1 unavailable.'},503);
+    await ensureSchema(context.env);
     const u=new URL(context.request.url);
     const module=String(u.searchParams.get('module')||'').toLowerCase();
     const cfg=CFG[module];
