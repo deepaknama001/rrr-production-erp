@@ -250,7 +250,7 @@ async function cutBalance(db,pb){
 }
 async function qcSizePending(db,challan,size){
   const col={M:'M_RECEIVED',L:'L_RECEIVED',XL:'XL_RECEIVED','2XL':'2XL_RECEIVED','3XL':'3XL_RECEIVED',OTHER:'OTHER_RECEIVED'}[String(size||'').toUpperCase()];if(!col)return 0;
-  const r=await row(db,`SELECT MAX(0,COALESCE((SELECT "${col}" FROM stitching_jobs WHERE CHALLAN_ID=?),0)-COALESCE((SELECT SUM(QC_QTY) FROM qc_events WHERE CHALLAN_ID=? AND UPPER(SIZE)=?),0)) AS bal`,challan,challan,String(size).toUpperCase());return n(r?.bal)
+  const r=await row(db,`SELECT MAX(0,COALESCE((SELECT "${col}" FROM stitching_jobs WHERE CHALLAN_ID=?),0)-COALESCE((SELECT SUM(QC_QTY) FROM qc_events WHERE CHALLAN_ID=? AND UPPER(SIZE)=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'),0)) AS bal`,challan,challan,String(size).toUpperCase());return n(r?.bal)
 }
 
 async function sizeMasterRow(db,key){
