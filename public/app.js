@@ -1,4 +1,4 @@
-const APP_BUILD='0.49';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.50';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -253,7 +253,7 @@ function saveGridPrefs(page,prefs){
     try{await fetch('/api/preferences',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+state.token},body:JSON.stringify({page,prefs})})}catch{}
   },650))
 }
-function gridLabel(k){const key=String(k||'');if(key==='CHALLAN_ID')return'Issue ID';if(key==='DOC_NO')return'Document No.';return key.replace(/^__/,'').replaceAll('_',' ').replace(/\b\w/g,x=>x.toUpperCase())}
+function gridLabel(k){const key=String(k||'');if(key==='ISSUE_ID')return'Issue ID';if(key==='CHALLAN_ID')return'Internal Issue Key';if(key==='DOC_NO')return'Document No.';return key.replace(/^__/,'').replaceAll('_',' ').replace(/\b\w/g,x=>x.toUpperCase())}
 function gridCell(k,v){
   if(['ACTIVE','FABRIC_SUPPLIER','DYE_VENDOR','STITCHING_VENDOR','CUTTING_VENDOR','admin','active'].includes(k))return boolText(v);
   return displayCell(k,v)
@@ -506,8 +506,8 @@ const configs={
 raw:{title:'Raw Fabric',columns:['ROLL_ID','INWARD_DATE','SUPPLIER','VENDOR_ROLL_NO','FABRIC','INWARD_MTR','ISSUED_MTR','BALANCE_MTR','STATUS','__ACTION'],filters:['SUPPLIER','FABRIC','STATUS'],action:'New Inward',fields:['INWARD_DATE','SUPPLIER_ID','VENDOR_ROLL_NO','FABRIC_ID','INWARD_MTR','INVOICE_CHALLAN','LOT_REF','NOTES']},
 dye:{title:'Dyeing',columns:['DYE_PLAN_ID','DYE_BATCH_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR','ROLL_COUNT','ISSUE_MTR','RECEIVED_MTR','VARIANCE_MTR','USABLE_MTR','STATUS','__ACTION'],filters:['DYE_VENDOR','FABRIC','COLOR','STATUS'],action:'New Dye Plan',fields:['ISSUE_DATE','DYE_VENDOR_ID','ROLL_ID','COLOR_ID','ISSUE_MTR','NOTES']},
 production:{title:'Production / Cutting',columns:['PRODUCTION_BATCH_ID','PLAN_DATE','STYLE','COLOR','DYE_BATCH_ID','PLANNED_QTY','ALLOCATED_MTR','ACTUAL_CONSUMED_MTR','ACTUAL_CUT_QTY','CUT_BALANCE','STATUS','__ACTION'],filters:['STYLE','DYE_BATCH_ID','STATUS'],action:'New Production Batch',fields:['PLAN_DATE','DYE_BATCH_ID','STYLE_ID','PLANNED_QTY','ALLOCATED_MTR','NOTES']},
-stitching:{title:'Cutting & Stitching',columns:['CHALLAN_ID','ISSUE_DATE','STITCHING_VENDOR','DYE_BATCH_ID','FABRIC','STYLE','COLOR','ALLOCATED_MTR','ACTUAL_ISSUED','ACTUAL_RECEIVED','PENDING_QTY','EXPECTED_DATE','OVERDUE_DAYS','STATUS','__ACTION'],filters:['STITCHING_VENDOR','FABRIC','STYLE','COLOR','STATUS'],action:'Bulk Issue',fields:['ISSUE_DATE','STITCHING_VENDOR_ID','NOTES']},
-qc:{title:'QC & Rework',columns:['QC_ID','QC_DATE','CHALLAN_ID','SIZE_NAME','STYLE','COLOR','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','FINAL_ACCEPTED_QTY','STATUS','__ACTION'],filters:['SIZE','CHALLAN_ID','STATUS'],action:'New QC Entry',fields:['QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','DEFECT_REASON','NOTES']},
+stitching:{title:'Cutting & Stitching',columns:['ISSUE_ID','ISSUE_DATE','STITCHING_VENDOR','DYE_BATCH_ID','FABRIC','STYLE','COLOR','ALLOCATED_MTR','ACTUAL_ISSUED','ACTUAL_RECEIVED','PENDING_QTY','EXPECTED_DATE','OVERDUE_DAYS','STATUS','__ACTION'],filters:['STITCHING_VENDOR','FABRIC','STYLE','COLOR','STATUS'],action:'Bulk Issue',fields:['ISSUE_DATE','STITCHING_VENDOR_ID','NOTES']},
+qc:{title:'QC & Rework',columns:['QC_ID','QC_DATE','ISSUE_ID','SIZE_NAME','STYLE','COLOR','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','FINAL_ACCEPTED_QTY','STATUS','__ACTION'],filters:['SIZE','ISSUE_ID','STATUS'],action:'New QC Entry',fields:['QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','DEFECT_REASON','NOTES']},
 handover:{title:'Warehouse Handover',columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE_NAME','ACCEPTED_QTY','TOTAL_WAREHOUSE_RECEIVED','PENDING_QTY','STATUS','__ACTION'],filters:['STYLE','COLOR','SIZE','STATUS'],action:'New Handover',fields:['HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE_ID','COLOR_ID','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','WAREHOUSE_REF','NOTES']}
 };
 
@@ -515,7 +515,7 @@ function moduleRecordIdentity(m,r){
   const map={
     raw:['raw','ROLL_ID'],production:['production','PRODUCTION_BATCH_ID'],
     stitching:['stitching','CHALLAN_ID'],qc:['qc','QC_ID'],handover:['handover','HANDOVER_ID']
-  },x=map[m];return x?{type:x[0],id:String(r?.[x[1]]||''),label:String(r?.[x[1]]||'')}:{type:m,id:'',label:''}
+  },x=map[m];if(!x)return{type:m,id:'',label:''};const id=String(r?.[x[1]]||''),label=m==='stitching'?String(r?.ISSUE_ID||id):m==='qc'?String(r?.ISSUE_ID||r?.QC_ID||id):id;return{type:x[0],id,label}
 }
 function summaryForModule(m,items){
   const groups=new Map(),add=(key,seed,r)=>{let g=groups.get(key);if(!g){g={...seed,__items:[]};groups.set(key,g)}g.__items.push(r);return g};
@@ -543,7 +543,7 @@ function summaryForModule(m,items){
   }
   if(m==='qc'){
     for(const r of items){
-      const key=String(r.CHALLAN_ID||r.QC_ID),g=add(key,{CHALLAN_ID:key,QC_DATE:r.QC_DATE,QC_ENTRY_COUNT:0,QC_QTY:0,PASS_QTY:0,REWORK_QTY:0,REJECT_QTY:0,FINAL_ACCEPTED_QTY:0},r);
+      const key=String(r.CHALLAN_ID||r.QC_ID),g=add(key,{CHALLAN_ID:key,ISSUE_ID:r.ISSUE_ID||key,QC_DATE:r.QC_DATE,QC_ENTRY_COUNT:0,QC_QTY:0,PASS_QTY:0,REWORK_QTY:0,REJECT_QTY:0,FINAL_ACCEPTED_QTY:0},r);
       g.QC_ENTRY_COUNT++;g.QC_QTY+=Number(r.QC_QTY||0);g.PASS_QTY+=Number(r.PASS_QTY||0);g.REWORK_QTY+=Number(r.REWORK_QTY||0);g.REJECT_QTY+=Number(r.REJECT_QTY||0);g.FINAL_ACCEPTED_QTY+=Number(r.FINAL_ACCEPTED_QTY||0)
     }
     return [...groups.values()].map(g=>({...g,STATUS:g.REWORK_QTY>0?'REWORK':g.REJECT_QTY>0?'QC COMPLETE WITH REJECT':'QC COMPLETE'}))
@@ -562,7 +562,7 @@ function summaryColumns(m){
     raw:['INWARD_ID','INWARD_DATE','SUPPLIER','FABRIC','ROLL_COUNT','INWARD_MTR','ISSUED_MTR','BALANCE_MTR','STATUS','__ACTION'],
     production:['PLAN_DATE','DYE_BATCH_ID','STYLE','BATCH_COUNT','PLANNED_QTY','ALLOCATED_MTR','TOTAL_CUT','STATUS','__ACTION'],
     stitching:['ISSUE_DATE','STITCHING_VENDOR','LINE_COUNT','FABRIC','ALLOCATED_MTR','TOTAL_ISSUED','TOTAL_RECEIVED','PENDING_QTY','STATUS','__ACTION'],
-    qc:['CHALLAN_ID','QC_DATE','QC_ENTRY_COUNT','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','FINAL_ACCEPTED_QTY','STATUS','__ACTION'],
+    qc:['ISSUE_ID','QC_DATE','QC_ENTRY_COUNT','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','FINAL_ACCEPTED_QTY','STATUS','__ACTION'],
     handover:['PRODUCTION_BATCH_ID','HANDOVER_DATE','STYLE','COLOR','HANDOVER_COUNT','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','PENDING_QTY','STATUS','__ACTION']
   }[m]||[]
 }
@@ -596,8 +596,8 @@ function trailStageColumns(key,items){
     dye:['DYE_PLAN_ID','DYE_BATCH_ID','ISSUE_DATE','DYE_VENDOR','ROLL_ID','FABRIC','COLOR','ISSUE_MTR'],
     dye_receipt:['RECEIPT_ID','DYE_BATCH_ID','RECEIPT_DATE','RECEIVED_MTR','DEFECT_MTR','USABLE_MTR','VARIANCE_MTR','STATUS'],
     production:['PRODUCTION_BATCH_ID','PLAN_DATE','STYLE','COLOR','PLANNED_QTY','ALLOCATED_MTR','TOTAL_CUT','STATUS'],
-    stitching:['CHALLAN_ID','ISSUE_DATE','STITCHING_VENDOR','STYLE','COLOR','TOTAL_ISSUED','TOTAL_RECEIVED','PENDING_QTY','STATUS'],
-    qc:['QC_ID','QC_DATE','CHALLAN_ID','STYLE','COLOR','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','FINAL_ACCEPTED_QTY','STATUS'],
+    stitching:['ISSUE_ID','ISSUE_DATE','STITCHING_VENDOR','STYLE','COLOR','TOTAL_ISSUED','TOTAL_RECEIVED','PENDING_QTY','STATUS'],
+    qc:['QC_ID','QC_DATE','ISSUE_ID','STYLE','COLOR','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','FINAL_ACCEPTED_QTY','STATUS'],
     handover:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE','WAREHOUSE_RECEIVED_QTY','PENDING_QTY','STATUS']
   };
   return (presets[key]||Object.keys(items?.[0]||{}).slice(0,10)).filter(k=>items?.some(r=>r[k]!==undefined))
@@ -1124,7 +1124,7 @@ async function openStitchingManage(row){
   try{d=await fetchDetail('stitching',id)}catch(e){return toast(e.message,'bad',4500)}
   const pending=(d.pendingLines||[]).reduce((s,x)=>s+Number(x.PENDING_QTY||0),0);
   $('#modalBody').innerHTML=`
-    <div class="panel-head"><div><h3>Manage Cutting & Stitching Issue</h3><small>${esc(id)} · ${esc(d.STITCHING_VENDOR||'')}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <div class="panel-head"><div><h3>Manage Cutting & Stitching Issue</h3><small>${esc(d.ISSUE_ID||id)} · ${esc(d.STITCHING_VENDOR||'')}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
     <div class="manage-kpis"><div><span>Issued</span><b>${(d.issueLines||[]).reduce((s,x)=>s+x.QTY,0)}</b></div><div><span>Received</span><b>${(d.receivedLines||[]).reduce((s,x)=>s+x.QTY,0)}</b></div><div><span>Pending Vendor</span><b>${pending}</b></div><div><span>Receipts</span><b>${(d.receipts||[]).length}</b></div></div>
     <div class="manage-actions">
       ${canAction('stitching','edit')?'<button class="btn ghost" id="editStitch">Edit Issue</button>':''}
@@ -1145,7 +1145,7 @@ async function openStitchingEdit(d){
   const vendors=(l.vendors||[]).filter(v=>isTrue(v.ACTIVE)&&isTrue(v.STITCHING_VENDOR)),sizes=(l.sizes||[]).filter(x=>isTrue(x.ACTIVE));
   const vals=Object.fromEntries((d.issueLines||[]).map(x=>[x.SIZE_ID,x.QTY])),mx=Object.fromEntries((d.sizeBalances||[]).map(x=>[x.SIZE_ID,Number(x.BALANCE_QTY||0)+(vals[x.SIZE_ID]||0)]));
   $('#modalBody').innerHTML=`
-    <div class="panel-head"><div><h3>Edit Stitching Issue</h3><small>${esc(d.CHALLAN_ID)}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <div class="panel-head"><div><h3>Edit Cutting & Stitching Issue</h3><small>${esc(d.ISSUE_ID||d.CHALLAN_ID)}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
     <form id="stitchEditForm"><div class="form-grid">
       <div class="field"><label>Issue Date</label><input name="ISSUE_DATE" type="date" value="${esc(String(d.ISSUE_DATE||'').slice(0,10))}" required></div>
       <div class="field"><label>Vendor</label><select name="STITCHING_VENDOR_ID" required>${vendors.map(v=>`<option value="${esc(v.VENDOR_ID)}" ${String(v.VENDOR_ID)===String(d.STITCHING_VENDOR_ID)?'selected':''}>${esc(v.VENDOR_NAME)}</option>`).join('')}</select></div>
@@ -1159,7 +1159,7 @@ async function openStitchingEdit(d){
 async function openStitchingReceipt(d){
   const pending=(d.pendingLines||[]).filter(x=>Number(x.PENDING_QTY)>0);
   $('#modalBody').innerHTML=`
-    <div class="panel-head"><div><h3>Receive from Cutting & Stitching</h3><small>${esc(d.CHALLAN_ID)} · partial receipts allowed</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <div class="panel-head"><div><h3>Receive from Cutting & Stitching</h3><small>${esc(d.ISSUE_ID||d.CHALLAN_ID)} · partial receipts allowed</small></div><button class="btn ghost" id="closeModal">Close</button></div>
     <form id="stitchReceiptForm"><div class="form-grid"><div class="field"><label>Receipt Date</label><input name="RECEIPT_DATE" type="date" required value="${todayLocal()}"></div><div class="field wide"><label>Notes</label><input name="NOTES"></div></div>
     <div class="subsection"><h4>Size-wise Receipt</h4><div class="dynamic-size-grid">${pending.map(x=>`<div class="field"><label>${esc(x.SIZE_NAME)} · ${x.PENDING_QTY} pending</label><input class="receipt-size" data-size-id="${esc(x.SIZE_ID)}" type="number" min="0" max="${x.PENDING_QTY}" step="1" value="0"></div>`).join('')}</div></div>
     <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary">Save Receipt</button></div></form>`;
@@ -1520,7 +1520,7 @@ async function openQcEntry(){
     <div class="panel-head"><div><h3>QC Entry</h3><small>Received pieces pending QC are loaded size-wise from the selected issue.</small></div><button class="btn ghost" id="closeModal">Close</button></div>
     <form id="qcSmartForm"><div class="form-grid">
       <div class="field"><label>QC Date</label><input name="QC_DATE" type="date" required value="${todayLocal()}"></div>
-      <div class="field"><label>Cutting & Stitching Issue</label><select name="CHALLAN_ID" id="qcChallan" required><option value="">Select issue</option>${challans.map(x=>`<option value="${esc(x.CHALLAN_ID)}">${esc(x.CHALLAN_ID)} · ${esc(x.VENDOR_NAME||'')} · ${esc(x.STYLE_NAME||'')} · ${Number(x.QC_PENDING||0)} pcs pending QC</option>`).join('')}</select></div>
+      <div class="field"><label>Cutting & Stitching Issue</label><select name="CHALLAN_ID" id="qcChallan" required><option value="">Select issue</option>${challans.map(x=>`<option value="${esc(x.CHALLAN_ID)}">${esc(x.ISSUE_ID||x.CHALLAN_ID)} · ${esc(x.VENDOR_NAME||'')} · ${esc(x.STYLE_NAME||'')} · ${Number(x.QC_PENDING||0)} pcs pending QC</option>`).join('')}</select></div>
       <div class="field"><label>Size</label><select name="SIZE" id="qcSize" required><option value="">Select issue first</option></select></div>
       <div class="field"><label>Pending QC Qty</label><input id="qcPending" readonly value="—"></div>
       <div class="field"><label>QC Qty</label><input name="QC_QTY" id="qcQty" type="number" min="1" step="1" required></div>
