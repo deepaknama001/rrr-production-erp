@@ -23,8 +23,7 @@ async function ensureDocs(db){
     `CREATE INDEX IF NOT EXISTS idx_docs_type_date ON docs_documents(DOC_TYPE,DOC_DATE)`,
     `CREATE INDEX IF NOT EXISTS idx_docs_status ON docs_documents(STATUS)`
   ];
-  for(const sql of ddl)await db.prepare(sql).run();
-  await ensureDocumentIdModel(db)
+  for(const sql of ddl)await db.prepare(sql).run()
 }
 function typePerm(t){return t==='DYE_CHALLAN'?'dye':'stitching'}
 async function can(context,user,perm,action='view'){
@@ -81,146 +80,7 @@ async function nextDocNo(db,prefix,docDate){
   return prefix+'/'+fy+'/'+String(n).padStart(4,'0')
 }
 function docPrefix(type){return type==='DYE_CHALLAN'?'DYC':type==='STITCHING_CHALLAN'?'STC':type==='STICKER_SHEET'?'STK':''}
-async function ensureDocumentIdModel(db){
-  const all=(await db.prepare("SELECT DOC_ID,DOC_NO,DOC_TYPE,SOURCE_IDS,DOC_DATE,PAYLOAD_JSON,STATUS,CREATED_AT FROM docs_documents ORDER BY COALESCE(DOC_DATE,''),COALESCE(CREATED_AT,''),DOC_ID").all()).results||[];
-  if(!all.length){
-    const report={rows:0,migrated:0,payloadsUpdated:0,stickerRefsUpdated:0,unresolvedStickerRefs:0,invalid:0,verified:true,at:now()};
-    await db.prepare("INSERT INTO settings(KEY,VALUE,UPDATED_AT) VALUES('IDMODEL:DOCUMENTS',?,?) ON CONFLICT(KEY) DO UPDATE SET VALUE=excluded.VALUE,UPDATED_AT=excluded.UPDATED_AT").bind(JSON.stringify(report),now()).run();
-    return report
-  }
-  const valid=/^(DYC|STC|STK)\/(\d{2}-\d{2})\/(\d+)$/,used=new Set(),maxByKey=new Map(),newNoById=new Map(),oldToNew=new Map();
-  for(const r of all){
-    const no=String(r.DOC_NO||''),m=valid.exec(no),prefix=docPrefix(r.DOC_TYPE),fy=financialYear(r.DOC_DATE);
-    if(m&&m[1]===prefix&&m[2]===fy&&!used.has(no)){
-      used.add(no);newNoById.set(r.DOC_ID,no);
-      const key=prefix+'|'+fy;maxByKey.set(key,Math.max(maxByKey.get(key)||0,Number(m[3])||0))
-    }
-  }
-  let migrated=0;
-  for(const r of all){
-    if(newNoById.has(r.DOC_ID))continue;
-    const prefix=docPrefix(r.DOC_TYPE);if(!prefix)continue;
-    const fy=financialYear(r.DOC_DATE),key=prefix+'|'+fy;let n=maxByKey.get(key)||0,next='';
-    do{n++;next=prefix+'/'+fy+'/'+String(n).padStart(4,'0')}while(used.has(next));
-    maxByKey.set(key,n);used.add(next);newNoById.set(r.DOC_ID,next);oldToNew.set(String(r.DOC_NO||''),next);migrated++
-  }
-  const numberUpdates=[];
-  for(const r of all){
-    const nn=newNoById.get(r.DOC_ID);
-    if(nn&&nn!==String(r.DOC_NO||''))numberUpdates.push(db.prepare('UPDATE docs_documents SET DOC_NO=?,UPDATED_AT=? WHERE DOC_ID=?').bind(nn,now(),r.DOC_ID))
-  }
-  for(let i=0;i<numberUpdates.length;i+=60)await db.batch(numberUpdates.slice(i,i+60));
 
-  const stitchDocs=new Map(),stitchBySource=new Map();
-  for(const r of all){
-    if(r.DOC_TYPE!=='STITCHING_CHALLAN')continue;
-    const currentNo=newNoById.get(r.DOC_ID)||String(r.DOC_NO||'');
-    let src=[];try{src=JSON.parse(r.SOURCE_IDS||'[]')}catch{}
-    const meta={id:r.DOC_ID,no:currentNo,createdAt:String(r.CREATED_AT||''),sources:Array.isArray(src)?src.map(String):[]};
-    stitchDocs.set(r.DOC_ID,meta);
-    for(const s of meta.sources){if(!stitchBySource.has(s))stitchBySource.set(s,[]);stitchBySource.get(s).push(meta)}
-  }
-  for(const arr of stitchBySource.values())arr.sort((a,b)=>String(a.createdAt).localeCompare(String(b.createdAt)));
-
-  let payloadsUpdated=0,stickerRefsUpdated=0,unresolvedStickerRefs=0;
-  const payloadUpdates=[];
-  for(const r of all){
-    let p={};try{p=JSON.parse(r.PAYLOAD_JSON||'{}')}catch{p={}}
-    let changed=false;
-    const currentNo=newNoById.get(r.DOC_ID)||String(r.DOC_NO||'');
-    if(p.docNo!==currentNo){p.docNo=currentNo;changed=true}
-    let newSources=null;
-    if(r.DOC_TYPE==='STICKER_SHEET'&&Array.isArray(p.items)){
-      const resolvedDocIds=new Set();let allResolved=true;
-      for(const item of p.items){
-        let target=null;
-        if(item.sourceDocId&&stitchDocs.has(String(item.sourceDocId)))target=stitchDocs.get(String(item.sourceDocId));
-        if(!target&&item.sourceDocNo){
-          const mapped=oldToNew.get(String(item.sourceDocNo))||String(item.sourceDocNo);
-          target=[...stitchDocs.values()].find(x=>x.no===mapped)||null
-        }
-        if(!target&&item.sourceId){
-          const raw=String(item.sourceId),mapped=oldToNew.get(raw);
-          if(mapped)target=[...stitchDocs.values()].find(x=>x.no===mapped)||null;
-          if(!target){
-            const candidates=stitchBySource.get(raw)||[],before=candidates.filter(x=>!r.CREATED_AT||!x.createdAt||x.createdAt<=String(r.CREATED_AT));
-            target=(before.length?before[before.length-1]:candidates[candidates.length-1])||null
-          }
-        }
-        if(target){
-          if(item.sourceId!==target.no||item.sourceDocNo!==target.no||item.sourceDocId!==target.id){
-            item.sourceId=target.no;item.sourceDocNo=target.no;item.sourceDocId=target.id;changed=true;stickerRefsUpdated++
-          }
-          resolvedDocIds.add(target.id)
-        }else{
-          allResolved=false;
-          if(/^STC[-/]/.test(String(item.sourceId||item.sourceDocNo||'')))unresolvedStickerRefs++
-        }
-      }
-      if(allResolved&&resolvedDocIds.size)newSources=[...resolvedDocIds]
-    }
-    if(changed||newSources){
-      payloadsUpdated++;
-      payloadUpdates.push(db.prepare('UPDATE docs_documents SET PAYLOAD_JSON=?,SOURCE_IDS=COALESCE(?,SOURCE_IDS),UPDATED_AT=? WHERE DOC_ID=?')
-        .bind(JSON.stringify(p),newSources?JSON.stringify(newSources):null,now(),r.DOC_ID))
-    }
-  }
-  for(let i=0;i<payloadUpdates.length;i+=50)await db.batch(payloadUpdates.slice(i,i+50));
-  for(const [key,value] of maxByKey){
-    const [prefix,fy]=key.split('|');
-    await db.prepare("INSERT INTO sequences(prefix,value) VALUES(?,?) ON CONFLICT(prefix) DO UPDATE SET value=MAX(value,excluded.value)").bind('DOC:'+prefix+':'+fy,value).run()
-  }
-
-  const after=(await db.prepare("SELECT DOC_ID,DOC_NO,DOC_TYPE,DOC_DATE FROM docs_documents").all()).results||[];
-  let invalid=0;const seen=new Set();
-  for(const r of after){
-    const prefix=docPrefix(r.DOC_TYPE),fy=financialYear(r.DOC_DATE),m=valid.exec(String(r.DOC_NO||''));
-    if(!m||m[1]!==prefix||m[2]!==fy||seen.has(r.DOC_NO))invalid++;
-    seen.add(r.DOC_NO)
-  }
-  const report={rows:all.length,migrated,payloadsUpdated,stickerRefsUpdated,unresolvedStickerRefs,invalid,verified:invalid===0,at:now()};
-  await db.prepare("INSERT INTO settings(KEY,VALUE,UPDATED_AT) VALUES('IDMODEL:DOCUMENTS',?,?) ON CONFLICT(KEY) DO UPDATE SET VALUE=excluded.VALUE,UPDATED_AT=excluded.UPDATED_AT").bind(JSON.stringify(report),now()).run();
-  if(!report.verified)throw Object.assign(new Error('Document number migration verification failed.'),{status:500});
-  return report
-}
-async function identifierAudit(db){
-  const stitch=(await db.prepare("SELECT CHALLAN_ID,ISSUE_ID,ISSUE_DATE FROM stitching_jobs ORDER BY CREATED_AT,CHALLAN_ID").all()).results||[];
-  const issueSeen=new Set();let missingIssue=0,invalidIssue=0,duplicateIssue=0;
-  for(const r of stitch){
-    const id=String(r.ISSUE_ID||'');
-    if(!id)missingIssue++;
-    if(id&&!/^CSI-\d{6}-\d+$/.test(id))invalidIssue++;
-    if(id&&issueSeen.has(id))duplicateIssue++;
-    if(id)issueSeen.add(id)
-  }
-  const docs=(await db.prepare("SELECT DOC_ID,DOC_NO,DOC_TYPE,DOC_DATE,PAYLOAD_JSON FROM docs_documents ORDER BY CREATED_AT,DOC_ID").all()).results||[];
-  const docSeen=new Set();let invalidDocs=0,duplicateDocs=0,unresolvedStickerRefs=0;
-  const docById=new Map(docs.map(x=>[String(x.DOC_ID),x]));
-  for(const r of docs){
-    const prefix=docPrefix(r.DOC_TYPE),fy=financialYear(r.DOC_DATE),m=/^(DYC|STC|STK)\/(\d{2}-\d{2})\/(\d+)$/.exec(String(r.DOC_NO||''));
-    if(!m||m[1]!==prefix||m[2]!==fy)invalidDocs++;
-    if(docSeen.has(r.DOC_NO))duplicateDocs++;docSeen.add(r.DOC_NO);
-    if(r.DOC_TYPE==='STICKER_SHEET'){
-      let p={};try{p=JSON.parse(r.PAYLOAD_JSON||'{}')}catch{}
-      for(const item of p.items||[]){
-        if(item.sourceDocId){
-          const src=docById.get(String(item.sourceDocId));
-          if(!src||src.DOC_TYPE!=='STITCHING_CHALLAN'||String(item.sourceId||'')!==String(src.DOC_NO||''))unresolvedStickerRefs++
-        }else if(item.sourceId)unresolvedStickerRefs++
-      }
-    }
-  }
-  let storedIssue={},storedDocs={};
-  try{storedIssue=JSON.parse((await db.prepare("SELECT VALUE FROM settings WHERE KEY='IDMODEL:STITCHING'").first())?.VALUE||'{}')}catch{}
-  try{storedDocs=JSON.parse((await db.prepare("SELECT VALUE FROM settings WHERE KEY='IDMODEL:DOCUMENTS'").first())?.VALUE||'{}')}catch{}
-  const verified=missingIssue===0&&invalidIssue===0&&duplicateIssue===0&&invalidDocs===0&&duplicateDocs===0&&unresolvedStickerRefs===0;
-  return{
-    verified,
-    stitching:{rows:stitch.length,missingIssue,invalidIssue,duplicateIssue,stored:storedIssue},
-    documents:{rows:docs.length,invalidDocs,duplicateDocs,unresolvedStickerRefs,stored:storedDocs},
-    at:now()
-  }
-}
 
 async function audit(context,user,action,id,payload){
   try{
@@ -396,10 +256,6 @@ export async function onRequestGet(context){
     await ensureSchema(context.env);await ensureDocs(context.env.DB);
     const u=new URL(context.request.url),action=u.searchParams.get('action')||'home';
     if(action==='settings')return json({company:await getCompany(context.env.DB)});
-    if(action==='id_audit'){
-      if(!user.admin)return json({error:'Admin permission required.'},403);
-      return json({audit:await identifierAudit(context.env.DB)})
-    }
     if(action==='history'){
       const type=String(u.searchParams.get('type')||'').toUpperCase();
       const q=type
