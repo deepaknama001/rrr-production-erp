@@ -1265,7 +1265,7 @@ async function saveCutStitchBulk(db,r,a,req=''){
     }
     const t=now(),stmts=[],created=[];
     for(const x of parsed){
-      const pb=await nextId(db,'PB'),challan=await nextId(db,'STC'),legacy={M:0,L:0,XL:0,'2XL':0,'3XL':0,OTHER:0};
+      const pb=await nextId(db,'PB'),challan=await nextId(db,'CSI'),legacy={M:0,L:0,XL:0,'2XL':0,'3XL':0,OTHER:0};
       for(const z of x.sizes){const nm=legacySizeName(sizeMap[z.SIZE_ID]?.SIZE_NAME||z.SIZE_ID);if(nm)legacy[nm]+=z.QTY}
       stmts.push(
         db.prepare('INSERT INTO production_batches(ROW_ID,PRODUCTION_BATCH_ID,PLAN_DATE,DYE_BATCH_ID,STYLE_ID,FABRIC_ID,COLOR_ID,PLANNED_QTY,ALLOCATED_MTR,CUT_DATE,CONSUMED_MTR,CUTTING_WASTE_MTR,DEFECT_MTR,M_CUT,L_CUT,XL_CUT,"2XL_CUT","3XL_CUT",OTHER_CUT,TOTAL_CUT,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
@@ -1364,7 +1364,7 @@ async function saveStitching(db,r,a,req=''){
   try{
     const fresh=await cutBalanceLines(db,pb),freshBal=Object.fromEntries(fresh.map(x=>[x.SIZE_ID,x.BALANCE_QTY]));
     for(const x of lines)if(x.QTY>(freshBal[x.SIZE_ID]||0))throw err('Cut stock changed while saving. Refresh and retry.',409);
-    const id=await nextId(db,'STC'),t=now(),legacy={M:0,L:0,XL:0,'2XL':0,'3XL':0,OTHER:0};
+    const id=await nextId(db,'CSI'),t=now(),legacy={M:0,L:0,XL:0,'2XL':0,'3XL':0,OTHER:0};
     for(const x of lines){const sr=await sizeMasterRow(db,x.SIZE_ID),nm=legacySizeName(sr?.SIZE_NAME||x.SIZE_ID);if(nm)legacy[nm]+=x.QTY}
     const stmts=[
       db.prepare('INSERT INTO stitching_jobs(ROW_ID,CHALLAN_ID,ISSUE_DATE,STITCHING_VENDOR_ID,PRODUCTION_BATCH_ID,STYLE_ID,COLOR_ID,M_ISSUED,L_ISSUED,XL_ISSUED,"2XL_ISSUED","3XL_ISSUED",OTHER_ISSUED,M_RECEIVED,L_RECEIVED,XL_RECEIVED,"2XL_RECEIVED","3XL_RECEIVED",OTHER_RECEIVED,TOTAL_ISSUED,TOTAL_RECEIVED,PENDING_QTY,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
