@@ -60,7 +60,8 @@ function renderNav(){$('#nav').innerHTML=NAV.filter(x=>allowed(x[0])).map(([m,i,
 async function go(m,force=false){if(m==='production')m='stitching';if(!allowed(m))return;state.activeGridKey='';setStatus('↻ Opening '+(NAV.find(x=>x[0]===m)?.[2]||m)+'…','busy');state.current=m;sessionStorage.setItem('rrr_prod_page',m);syncShell();setMobileNav(false);document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.m===m));$('#pageTitle').textContent=NAV.find(x=>x[0]===m)?.[2]||m;if(m==='dashboard')return renderDashboard(force);if(m==='docs')return renderDocsMaker(force);if(m==='reports')return renderReports(force);if(m==='masters')return renderMasters(force);if(m==='users')return renderUsers(force);return renderModule(m,force)}
 
 function docsTypeLabel(t){return t==='DYE_CHALLAN'?'Dye Challan':t==='STITCHING_CHALLAN'?'Stitching Challan':'Sticker Sheet'}
-function docsNum(v){const n=Number(v||0);return Number.isFinite(n)?n.toLocaleString('en-IN',{maximumFractionDigits:2}):'0'}
+function docsNum(v){const n=Number(v||0);return Number.isFinite(n)?n.toLocaleString('en-IN',{maximumFractionDigits:0}):'0'}
+function docsMeter(v){const n=Number(v||0);return Number.isFinite(n)?n.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}):'0.00'}
 function docsPartyBlock(title,name,address,phone,gst,email=''){
   return '<div class="party"><div class="party-title">'+esc(title)+'</div><div class="party-name">'+esc(name||'—')+'</div>'+
     (address?'<div>'+esc(address)+'</div>':'')+
@@ -105,16 +106,16 @@ function dyePrintHtml(doc){
   }
   const totalRollMtr=Number(p.totalRollMtr??rolls.reduce((s,x)=>s+Number(x.rollMtr||0),0));
   const totalPlanMtr=Number(p.totalPlanMtr??p.totalMtr??plan.reduce((s,x)=>s+Number(x.mtr||0),0));
-  const rollRows=rolls.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(x.vendorRollNo||'')+'</td><td>'+esc(x.fabric||'')+'</td><td class="right">'+docsNum(x.rollMtr)+'</td></tr>').join('');
-  const planRows=plan.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(x.fabric||'')+'</td><td>'+esc(x.color||'')+'</td><td class="right">'+docsNum(x.mtr)+'</td></tr>').join('');
+  const rollRows=rolls.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(x.vendorRollNo||'')+'</td><td>'+esc(x.fabric||'')+'</td><td class="right">'+docsMeter(x.rollMtr)+'</td></tr>').join('');
+  const planRows=plan.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(x.fabric||'')+'</td><td>'+esc(x.color||'')+'</td><td class="right">'+docsMeter(x.mtr)+'</td></tr>').join('');
   const body='<div class="doc">'+docsHeader(p,doc,'DYE PROCESS CHALLAN')+
     '<div class="party-grid-wrap">'+
       docsPartyBlock('Issued By',company.name||'RARE RICH RIGHT (RRR)',company.address||'',company.phone||'',company.gst||'',company.email||'')+
       docsPartyBlock('Dye Vendor',p.vendor||'',p.vendorAddress||'',p.vendorPhone||'',p.vendorGst||'')+
     '</div>'+
     '<div class="summary-strip"><div><b>Dye Plan:</b> '+esc(p.sourceId||'')+'</div><div><b>Purpose:</b> Fabric sent for dyeing / job work</div></div>'+
-    '<div class="doc-section"><h3>A. Fabric Rolls Handed Over</h3><table><thead><tr><th style="width:34px">#</th><th>Raw Vendor Roll No.</th><th>Fabric</th><th class="right" style="width:110px">Roll Meter</th></tr></thead><tbody>'+rollRows+'<tr><td colspan="3" class="right tot">Total Fabric Meter</td><td class="right tot">'+docsNum(totalRollMtr)+'</td></tr></tbody></table></div>'+
-    '<div class="doc-section"><h3>B. Dye Plan</h3><table><thead><tr><th style="width:34px">#</th><th>Fabric</th><th>Colour</th><th class="right" style="width:130px">Meter to Dye</th></tr></thead><tbody>'+planRows+'<tr><td colspan="3" class="right tot">Total Planned Meter</td><td class="right tot">'+docsNum(totalPlanMtr)+'</td></tr></tbody></table></div>'+
+    '<div class="doc-section"><h3>A. Fabric Rolls Handed Over</h3><table><thead><tr><th style="width:34px">#</th><th>Raw Vendor Roll No.</th><th>Fabric</th><th class="right" style="width:110px">Roll Meter</th></tr></thead><tbody>'+rollRows+'<tr><td colspan="3" class="right tot">Total Fabric Meter</td><td class="right tot">'+docsMeter(totalRollMtr)+'</td></tr></tbody></table></div>'+
+    '<div class="doc-section"><h3>B. Dye Plan</h3><table><thead><tr><th style="width:34px">#</th><th>Fabric</th><th>Colour</th><th class="right" style="width:130px">Meter to Dye</th></tr></thead><tbody>'+planRows+'<tr><td colspan="3" class="right tot">Total Planned Meter</td><td class="right tot">'+docsMeter(totalPlanMtr)+'</td></tr></tbody></table></div>'+
     '<div class="notes"><b>Notes / Instructions:</b><br>'+esc(p.notes||'')+'</div>'+
     '<div class="footer-note">'+esc(company.footer||'Material issued for processing / job work only.')+'</div>'+
     '<div class="sign"><div>Authorised Signatory / Issued By</div><div>Received By / Dye Vendor</div></div></div>';
