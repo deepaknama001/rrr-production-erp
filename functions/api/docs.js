@@ -183,7 +183,34 @@ async function stitchOne(db,id){
   }
 }
 async function buildPayload(db,type,sourceIds,overrides={}){
-  if(type==='DYE_CHALLAN')return dyePayload(db,String(sourceIds[0]||''));
+  if(type==='DYE_CHALLAN'){
+    const plans=[];
+    for(const id of sourceIds.slice(0,20))plans.push(await dyePayload(db,String(id)));
+    if(!plans.length)throw Object.assign(new Error('Select at least one dye plan.'),{status:400});
+    const first=plans[0],vendorId=String(first.vendorId||'');
+    if(plans.some(x=>String(x.vendorId||'')!==vendorId))throw Object.assign(new Error('Selected dye plans must belong to the same dye vendor.'),{status:409});
+    const rollMap=new Map(),planMap=new Map();
+    for(const p of plans){
+      for(const r of p.rolls||[]){
+        const k=String(r.vendorRollNo||'')+'|'+String(r.fabric||'')+'|'+String(r.rollMtr||0);
+        if(!rollMap.has(k))rollMap.set(k,{...r})
+      }
+      for(const x of p.plan||[]){
+        const k=String(x.fabric||'')+'|'+String(x.color||'');
+        const old=planMap.get(k)||{fabric:x.fabric||'',color:x.color||'',mtr:0};
+        old.mtr+=Number(x.mtr||0);planMap.set(k,old)
+      }
+    }
+    const rolls=[...rollMap.values()],plan=[...planMap.values()];
+    return{
+      title:'Dye Process Challan',
+      sourceId:plans.map(x=>x.sourceId).join(', '),sourceIds:plans.map(x=>x.sourceId),
+      vendorId:first.vendorId,vendor:first.vendor,vendorAddress:first.vendorAddress,vendorPhone:first.vendorPhone,vendorGst:first.vendorGst,
+      date:first.date,rolls,plan,
+      totalRollMtr:rolls.reduce((s,x)=>s+Number(x.rollMtr||0),0),
+      totalPlanMtr:plan.reduce((s,x)=>s+Number(x.mtr||0),0)
+    }
+  }
   if(type==='STITCHING_CHALLAN'){
     const items=[];
     for(const id of sourceIds.slice(0,60))items.push(await stitchOne(db,String(id)));
@@ -201,12 +228,18 @@ async function buildPayload(db,type,sourceIds,overrides={}){
   }
   if(type==='STICKER_SHEET'){
     const items=[];
-    for(const id of sourceIds.slice(0,40)){
-      const x=await stitchOne(db,String(id));
-      const ov=overrides?.[id]||{};
+    for(const id of sourceIds.slice(0,30)){
+      const doc=await db.prepare("SELECT DOC_ID,DOC_NO,PAYLOAD_JSON,STATUS FROM docs_documents WHERE DOC_ID=? AND DOC_TYPE='STITCHING_CHALLAN'").bind(String(id)).first();
+      if(doc){
+        if(String(doc.STATUS||'').toUpperCase()==='CANCELLED')throw Object.assign(new Error('Cancelled stitching challan '+doc.DOC_NO+' cannot generate stickers.'),{status:409});
+        let p={};try{p=JSON.parse(doc.PAYLOAD_JSON||'{}')}catch{}
+        for(const x of p.items||[])items.push({...x,sourceDocId:doc.DOC_ID,sourceDocNo:doc.DOC_NO,notes:String(x.notes||p.notes||'')});
+        continue
+      }
+      const x=await stitchOne(db,String(id)),ov=overrides?.[id]||{};
       items.push({...x,fabricQty:Number(ov.fabricQty??x.fabricQty),notes:String(ov.notes??x.notes??'')})
     }
-    if(!items.length)throw Object.assign(new Error('Select at least one stitching challan.'),{status:400});
+    if(!items.length)throw Object.assign(new Error('Select at least one generated stitching challan.'),{status:400});
     return{title:'Production Fabric Stickers',items}
   }
   throw Object.assign(new Error('Unknown document type.'),{status:400})
@@ -217,6 +250,14 @@ export async function onRequestGet(context){
     await ensureDocs(context.env.DB);
     const u=new URL(context.request.url),action=u.searchParams.get('action')||'home';
     if(action==='settings')return json({company:await getCompany(context.env.DB)});
+    if(action==='history'){
+      const type=String(u.searchParams.get('type')||'').toUpperCase();
+      const q=type
+        ? context.env.DB.prepare("SELECT DOC_ID,DOC_NO,DOC_TYPE,SOURCE_IDS,VENDOR_ID,DOC_DATE,NOTES,STATUS,PRINT_COUNT,CREATED_BY,CREATED_AT FROM docs_documents WHERE DOC_TYPE=? ORDER BY CREATED_AT DESC LIMIT 500").bind(type)
+        : context.env.DB.prepare("SELECT DOC_ID,DOC_NO,DOC_TYPE,SOURCE_IDS,VENDOR_ID,DOC_DATE,NOTES,STATUS,PRINT_COUNT,CREATED_BY,CREATED_AT FROM docs_documents ORDER BY CREATED_AT DESC LIMIT 500");
+      const rows=(await q.all()).results||[];
+      return json({items:rows.filter(x=>user.admin||user.permissions?.[typePerm(x.DOC_TYPE)])})
+    }
     if(action==='document'){
       const id=u.searchParams.get('id')||'';
       const r=await context.env.DB.prepare("SELECT * FROM docs_documents WHERE DOC_ID=?").bind(id).first();
