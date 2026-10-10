@@ -48,7 +48,7 @@ function intQty(v,label='Quantity',allowZero=true){
 const LEGACY_SIZE_COL={M:'M',L:'L',XL:'XL','2XL':'2XL','3XL':'3XL',OTHER:'OTHER'};
 const STATUS_RULES={
   production:{'PLANNED':['CUT COMPLETE','CANCELLED'],'CUT COMPLETE':['CANCELLED']},
-  stitching:{'AT CUTTING & STITCHING':['PARTIAL RECEIVED','RECEIVED COMPLETE','CANCELLED'],'PENDING FROM VENDOR':['PARTIAL RECEIVED','RECEIVED COMPLETE','CANCELLED'],'PARTIAL RECEIVED':['PARTIAL RECEIVED','RECEIVED COMPLETE','CANCELLED'],'RECEIVED COMPLETE':['CANCELLED']},
+  stitching:{'AT CUTTING & STITCHING':['PARTIAL RECEIVED','RECEIVED COMPLETE','CANCELLED'],'PENDING FROM VENDOR':['PARTIAL RECEIVED','RECEIVED COMPLETE','CANCELLED'],'PARTIAL RECEIVED':['AT CUTTING & STITCHING','PENDING FROM VENDOR','PARTIAL RECEIVED','RECEIVED COMPLETE','CANCELLED'],'RECEIVED COMPLETE':['AT CUTTING & STITCHING','PENDING FROM VENDOR','PARTIAL RECEIVED','CANCELLED']},
   qc:{'QC COMPLETE':['REWORK PARTIAL','REWORK CLOSED','CANCELLED'],'REWORK PARTIAL':['REWORK PARTIAL','REWORK CLOSED','CANCELLED'],'REWORK CLOSED':['CANCELLED']},
   handover:{'PARTIAL':['PARTIAL','RECEIVED','CANCELLED'],'RECEIVED':['CANCELLED']},
   rework:{'AT REWORK':['PARTIAL REWORK RETURN','REWORK CLOSED','CANCELLED'],'PARTIAL REWORK RETURN':['PARTIAL REWORK RETURN','REWORK CLOSED']}
@@ -1474,7 +1474,9 @@ async function refreshStitchingHeader(db,challan,a){
   const st=await row(db,'SELECT * FROM stitching_jobs WHERE CHALLAN_ID=?',challan);if(!st)return;
   const received=await receivedLinesForChallan(db,challan),total=received.reduce((s,x)=>s+x.QTY,0),issued=(await issueLinesForChallan(db,challan)).reduce((s,x)=>s+x.QTY,0),pending=Math.max(0,issued-total),legacy={M:0,L:0,XL:0,'2XL':0,'3XL':0,OTHER:0};
   for(const x of received){const nm=legacySizeName(x.SIZE_NAME||x.SIZE_ID);if(nm)legacy[nm]+=x.QTY}
-  const nextStatus=pending>0?'PARTIAL RECEIVED':'RECEIVED COMPLETE';assertTransition('stitching',st.STATUS,nextStatus);
+  const prod=await row(db,'SELECT STATUS FROM production_batches WHERE PRODUCTION_BATCH_ID=?',st.PRODUCTION_BATCH_ID),combined=/CUTTING\s*&\s*STITCHING/i.test(String(prod?.STATUS||''));
+  const nextStatus=total<=0?(combined?'AT CUTTING & STITCHING':'PENDING FROM VENDOR'):(pending>0?'PARTIAL RECEIVED':'RECEIVED COMPLETE');
+  assertTransition('stitching',st.STATUS,nextStatus);
   await db.prepare('UPDATE stitching_jobs SET M_RECEIVED=?,L_RECEIVED=?,XL_RECEIVED=?,"2XL_RECEIVED"=?,"3XL_RECEIVED"=?,OTHER_RECEIVED=?,TOTAL_RECEIVED=?,PENDING_QTY=?,STATUS=?,UPDATED_BY=?,UPDATED_AT=? WHERE CHALLAN_ID=?')
     .bind(legacy.M,legacy.L,legacy.XL,legacy['2XL'],legacy['3XL'],legacy.OTHER,total,pending,nextStatus,a.userId,now(),challan).run()
 }
