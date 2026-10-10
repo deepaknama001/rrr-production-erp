@@ -216,6 +216,13 @@ async function renderDashboard(force=false){
   try{
     const d=await getCachedModule('dashboard',force);state.user=d.user||d.actor||state.user;
     try{localStorage.setItem('rrr_prod_user',JSON.stringify(state.user))}catch{}
+    if(state.user?.admin){
+      let idOk='';try{idOk=localStorage.getItem('rrr_idmodel_v050')||''}catch{}
+      if(idOk!=='ok')api('/api/docs?action=id_audit').then(x=>{
+        if(x?.audit?.verified){try{localStorage.setItem('rrr_idmodel_v050','ok')}catch{}}
+        else toast('Identifier migration needs review. Open Masters → Documents before continuing document work.','bad',7000)
+      }).catch(e=>toast('Identifier verification could not complete: '+e.message,'bad',7000))
+    }
     const v=d.kpis||{};[v.rawAvailable,v.atDye,v.dyedAvailable,v.cutPending,v.atStitching,v.readyWarehouse].forEach((x,i)=>document.querySelectorAll('#dashKpis .kpi strong')[i].textContent=isQtyKey(Object.keys(v)[i]||'')?Math.round(Number(x||0)):moneyless(x??0));
     const a=d.alerts||{},rates=a.rates||{},ex=a.exceptions||[];setExceptionBadge(a.exceptionCount||0);
     $('#dashAlerts').innerHTML=`<div class="mini-metrics">
