@@ -435,6 +435,60 @@ async function viewProd(db){
     WHERE COALESCE(p.STATUS,'') NOT LIKE 'CANCELLED%'
     ORDER BY p.CREATED_AT DESC`)
 }
+async function viewStitchSize(db){
+  const jobs=await rows(db,`
+    SELECT s.CHALLAN_ID,COALESCE(s.ISSUE_ID,s.CHALLAN_ID) ISSUE_ID,s.ISSUE_DATE,s.STITCHING_VENDOR_ID,
+      COALESCE(v.VENDOR_NAME,s.STITCHING_VENDOR_ID) STITCHING_VENDOR,
+      s.STYLE_ID,COALESCE(st.STYLE_NAME,s.STYLE_ID) STYLE,
+      s.COLOR_ID,COALESCE(c.COLOR_NAME,s.COLOR_ID) COLOR,s.STATUS,
+      s.M_ISSUED,s.L_ISSUED,s.XL_ISSUED,s."2XL_ISSUED",s."3XL_ISSUED",s.OTHER_ISSUED,
+      s.M_RECEIVED,s.L_RECEIVED,s.XL_RECEIVED,s."2XL_RECEIVED",s."3XL_RECEIVED",s.OTHER_RECEIVED
+    FROM stitching_jobs s
+    LEFT JOIN vendors v ON v.VENDOR_ID=s.STITCHING_VENDOR_ID
+    LEFT JOIN styles st ON st.STYLE_ID=s.STYLE_ID
+    LEFT JOIN colors c ON c.COLOR_ID=s.COLOR_ID
+    WHERE COALESCE(s.STATUS,'') NOT LIKE 'CANCELLED%'
+    ORDER BY s.ISSUE_DATE DESC,s.CREATED_AT DESC`);
+  if(!jobs.length)return{items:[],sizes:[]};
+
+  const issue=await rows(db,`
+    SELECT l.CHALLAN_ID,l.SIZE_ID,COALESCE(sz.SIZE_NAME,l.SIZE_ID) SIZE_NAME,COALESCE(sz.SORT_ORDER,9999) SORT_ORDER,SUM(l.QTY) ISSUED_QTY
+    FROM stitching_issue_lines l
+    LEFT JOIN sizes sz ON sz.SIZE_ID=l.SIZE_ID
+    GROUP BY l.CHALLAN_ID,l.SIZE_ID,sz.SIZE_NAME,sz.SORT_ORDER`);
+  const rec=await rows(db,`
+    SELECT l.CHALLAN_ID,l.SIZE_ID,SUM(l.QTY) RECEIVED_QTY
+    FROM stitching_receipt_lines l
+    JOIN stitching_receipts r ON r.RECEIPT_ID=l.RECEIPT_ID AND COALESCE(r.STATUS,'') NOT LIKE 'CANCELLED%'
+    GROUP BY l.CHALLAN_ID,l.SIZE_ID`);
+
+  const recMap=new Map(rec.map(x=>[String(x.CHALLAN_ID)+'|'+String(x.SIZE_ID),Math.round(n(x.RECEIVED_QTY))]));
+  const issueBy=new Map(),sizeMap=new Map();
+  for(const x of issue){
+    const ch=String(x.CHALLAN_ID);if(!issueBy.has(ch))issueBy.set(ch,[]);
+    const z={SIZE_ID:String(x.SIZE_ID),SIZE_NAME:String(x.SIZE_NAME||x.SIZE_ID),SORT_ORDER:Number(x.SORT_ORDER||9999),ISSUED_QTY:Math.round(n(x.ISSUED_QTY))};
+    issueBy.get(ch).push(z);sizeMap.set(z.SIZE_ID,{SIZE_ID:z.SIZE_ID,SIZE_NAME:z.SIZE_NAME,SORT_ORDER:z.SORT_ORDER})
+  }
+  const legacy=[['M','M_ISSUED','M_RECEIVED'],['L','L_ISSUED','L_RECEIVED'],['XL','XL_ISSUED','XL_RECEIVED'],['2XL','2XL_ISSUED','2XL_RECEIVED'],['3XL','3XL_ISSUED','3XL_RECEIVED'],['OTHER','OTHER_ISSUED','OTHER_RECEIVED']];
+  const items=[];
+  for(const j of jobs){
+    let lines=issueBy.get(String(j.CHALLAN_ID))||[];
+    if(!lines.length){
+      lines=legacy.filter(([nm,ic])=>n(j[ic])>0).map(([nm,ic,rc],i)=>({SIZE_ID:nm,SIZE_NAME:nm,SORT_ORDER:9000+i,ISSUED_QTY:Math.round(n(j[ic])),LEGACY_RECEIVED:Math.round(n(j[rc]))}));
+      for(const z of lines)if(!sizeMap.has(z.SIZE_ID))sizeMap.set(z.SIZE_ID,{SIZE_ID:z.SIZE_ID,SIZE_NAME:z.SIZE_NAME,SORT_ORDER:z.SORT_ORDER})
+    }
+    const out={ISSUE_ID:j.ISSUE_ID,CHALLAN_ID:j.CHALLAN_ID,ISSUE_DATE:j.ISSUE_DATE,STITCHING_VENDOR:j.STITCHING_VENDOR,STYLE:j.STYLE,COLOR:j.COLOR,STATUS:j.STATUS,TOTAL_ISSUED:0,TOTAL_RECEIVED:0,PENDING_QTY:0};
+    for(const z of lines){
+      const issued=Math.round(n(z.ISSUED_QTY)),received=z.LEGACY_RECEIVED??(recMap.get(String(j.CHALLAN_ID)+'|'+String(z.SIZE_ID))||0),pending=Math.max(0,issued-received);
+      out['SIZE_'+z.SIZE_ID]=issued+' / '+received+' / '+pending;
+      out.TOTAL_ISSUED+=issued;out.TOTAL_RECEIVED+=received;out.PENDING_QTY+=pending
+    }
+    items.push(out)
+  }
+  const sizes=[...sizeMap.values()].sort((a,b)=>Number(a.SORT_ORDER||9999)-Number(b.SORT_ORDER||9999)||String(a.SIZE_NAME).localeCompare(String(b.SIZE_NAME)));
+  return{items,sizes}
+}
+
 async function viewStitch(db){
   return rows(db,`
     WITH il AS (SELECT CHALLAN_ID,SUM(QTY) ISSUE_QTY FROM stitching_issue_lines GROUP BY CHALLAN_ID),
@@ -909,8 +963,8 @@ async function traceRecord(db,type,id){
   }
 }
 export async function getDataD1(env,{module,actorUserId,id='',type='',limit=100,offset=0,search='',user='',action='',dateFrom='',dateTo=''}){
-  await ensureSchema(env);const db=env.DB,m=String(module||'dashboard'),trailPerm=m==='trail'?({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[String(type||'').toLowerCase()]||null):null,perm=trailPerm||({raw:'raw',dye:'dye',dye_detail:'dye',production:'production',production_detail:'production',stitching:'stitching',stitching_detail:'stitching',qc:'qc',qc_detail:'qc',handover:'qc',handover_detail:'qc',reports:'reports'}[m]||null),a=await actor(db,actorUserId,perm,false);if(perm&&m!=='trail')await requireAction(db,a,perm,'view');
-  if(m==='dashboard'){a.actions=await actionPerms(db,a.userId);const canReports=a.admin||((a.permissions?.reports)&&a.actions?.reports?.view!==false),analytics=canReports?await operationsAnalytics(db):null;return{user:a,kpis:await kpisD1(db),alerts:analytics?{exceptionCount:analytics.exceptionCount,rates:analytics.rates,exceptions:analytics.exceptions.slice(0,8)}:{exceptionCount:0,rates:{},exceptions:[]}}};if(m==='trail'){await requireAction(db,a,trailPerm,'view');return{trail:await traceRecord(db,type,id)}};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='production_detail')return{detail:await getProductionDetail(db,String(id||''))};if(m==='stitching_detail')return{detail:await getStitchingDetail(db,String(id||''))};if(m==='qc_detail')return{detail:await getQcDetail(db,String(id||''))};if(m==='handover_detail')return{detail:await getHandoverDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db),analytics:await operationsAnalytics(db)};if(m==='audit'){
+  await ensureSchema(env);const db=env.DB,m=String(module||'dashboard'),trailPerm=m==='trail'?({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[String(type||'').toLowerCase()]||null):null,perm=trailPerm||({raw:'raw',dye:'dye',dye_detail:'dye',production:'production',production_detail:'production',stitching:'stitching',stitching_size:'stitching',stitching_detail:'stitching',qc:'qc',qc_detail:'qc',handover:'qc',handover_detail:'qc',reports:'reports'}[m]||null),a=await actor(db,actorUserId,perm,false);if(perm&&m!=='trail')await requireAction(db,a,perm,'view');
+  if(m==='dashboard'){a.actions=await actionPerms(db,a.userId);const canReports=a.admin||((a.permissions?.reports)&&a.actions?.reports?.view!==false),analytics=canReports?await operationsAnalytics(db):null;return{user:a,kpis:await kpisD1(db),alerts:analytics?{exceptionCount:analytics.exceptionCount,rates:analytics.rates,exceptions:analytics.exceptions.slice(0,8)}:{exceptionCount:0,rates:{},exceptions:[]}}};if(m==='trail'){await requireAction(db,a,trailPerm,'view');return{trail:await traceRecord(db,type,id)}};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='production_detail')return{detail:await getProductionDetail(db,String(id||''))};if(m==='stitching_detail')return{detail:await getStitchingDetail(db,String(id||''))};if(m==='qc_detail')return{detail:await getQcDetail(db,String(id||''))};if(m==='handover_detail')return{detail:await getHandoverDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='stitching_size')return await viewStitchSize(db);if(m==='qc')return{items:await viewQc(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db),analytics:await operationsAnalytics(db)};if(m==='audit'){
     await requireAction(db,a,'reports','audit');
     const lim=Math.min(250,Math.max(10,Number(limit)||100)),off=Math.max(0,Number(offset)||0),w=[],b=[];
     if(search){w.push('(RECORD_ID LIKE ? OR MODULE LIKE ? OR ACTION LIKE ? OR USER_NAME LIKE ?)');const q='%'+String(search).slice(0,80)+'%';b.push(q,q,q,q)}
