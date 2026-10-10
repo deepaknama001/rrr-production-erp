@@ -1,4 +1,4 @@
-const APP_BUILD='0.51';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.52';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -621,13 +621,39 @@ async function renderTrailView(host,identity){
       </div>`
   }catch(e){host.innerHTML='';toast(e.message,'bad',5000)}
 }
+async function renderStitchingSizeView(host,onTrail){
+  host.innerHTML='<div class="grid-loading">Loading size-wise balance…</div>';
+  try{
+    const d=await api('/api/data?module=stitching_size',{activity:'Loading size view…'}),sizes=d.sizes||[];
+    const items=(d.items||[]).map(r=>{
+      const x={...r};
+      for(const s of sizes)x[s.SIZE_NAME]=r['SIZE_'+s.SIZE_ID]||'0 / 0 / 0';
+      return x
+    });
+    const cols=['ISSUE_ID','ISSUE_DATE','STITCHING_VENDOR','STYLE','COLOR',...sizes.map(s=>s.SIZE_NAME),'TOTAL_ISSUED','TOTAL_RECEIVED','PENDING_QTY','STATUS','__ACTION'];
+    await mountDataGrid(host,{
+      key:'module:stitching:size',title:'Cutting & Stitching - Size View',items,columns:cols,
+      filters:['STITCHING_VENDOR','STYLE','COLOR','STATUS'],
+      actionRenderer:r=>actionMenuHtml([
+        (canAction('stitching','edit')||canAction('stitching','cancel')||canAction('stitching','create'))?{cls:'size-manage-btn',label:'Manage'}:null,
+        canAction('stitching','view')?{cls:'size-trail-btn',label:'Trail'}:null
+      ],r.__gridIndex),
+      bindActions:(pageRows,h)=>{
+        h.querySelectorAll('.size-manage-btn').forEach(b=>b.onclick=()=>openStitchingManage(items[Number(b.dataset.idx)]));
+        h.querySelectorAll('.size-trail-btn').forEach(b=>b.onclick=()=>onTrail(moduleRecordIdentity('stitching',items[Number(b.dataset.idx)])))
+      }
+    });
+    const note=document.createElement('div');note.className='size-view-legend';note.innerHTML='<b>Size cells:</b> Issued / Received / Pending';host.prepend(note)
+  }catch(e){host.innerHTML='';toast(e.message,'bad',4500)}
+}
+
 async function renderModule(m,force=false){
   const cfg=configs[m],s=$('#stage');
   if(m==='dye')return renderDyeModule(force);
   s.innerHTML=`<section class="panel">
     <div class="panel-head"><div><h3>${cfg.title}</h3><small>Summary, transaction detail and full genealogy</small></div>${canAction(m,'create')?`<button class="btn teal" id="newBtn">+ ${cfg.action}</button>`:''}</div>
     <div class="master-tabs module-view-tabs" id="moduleViewTabs">
-      <button data-view="summary">Summary View</button><button data-view="detail">Detail View</button><button data-view="trail">Trail View</button>
+      <button data-view="summary">Summary View</button><button data-view="detail">Detail View</button>${m==='stitching'?'<button data-view="size">Size View</button>':''}<button data-view="trail">Trail View</button>
     </div>
     <div id="gridHost">Loading…</div>
   </section>`;
@@ -635,9 +661,9 @@ async function renderModule(m,force=false){
   try{
     const d=await getCachedModule(m,force),items=d.items||[],summaries=summaryForModule(m,items);
     let current='summary',selectedTrail=null;
-    try{const lv=localStorage.getItem(prefLocalKey(m+':view'));if(['summary','detail','trail'].includes(lv))current=lv}catch{}
+    try{const lv=localStorage.getItem(prefLocalKey(m+':view')),valid=m==='stitching'?['summary','detail','size','trail']:['summary','detail','trail'];if(valid.includes(lv))current=lv}catch{}
     fetch('/api/preferences?page='+encodeURIComponent(m+':view'),{headers:{authorization:'Bearer '+state.token}})
-      .then(r=>r.ok?r.json():null).then(pr=>{const v=pr?.prefs?.view;if(['summary','detail','trail'].includes(v))try{localStorage.setItem(prefLocalKey(m+':view'),v)}catch{}}).catch(()=>{});
+      .then(r=>r.ok?r.json():null).then(pr=>{const v=pr?.prefs?.view,valid=m==='stitching'?['summary','detail','size','trail']:['summary','detail','trail'];if(valid.includes(v))try{localStorage.setItem(prefLocalKey(m+':view'),v)}catch{}}).catch(()=>{});
     async function setView(view,trailIdentity=null,persist=true){
       current=view;if(trailIdentity)selectedTrail=trailIdentity;
       document.querySelectorAll('#moduleViewTabs button').forEach(b=>b.classList.toggle('active',b.dataset.view===current));
@@ -648,6 +674,7 @@ async function renderModule(m,force=false){
         if(!selectedTrail&&items.length){const seed=moduleRecordIdentity(m,items[0]);if(seed?.id)selectedTrail=seed}
         return renderTrailView(host,selectedTrail)
       }
+      if(current==='size'&&m==='stitching')return renderStitchingSizeView(host,id=>setView('trail',id));
       if(current==='summary'){
         return mountDataGrid(host,{
           key:'module:'+m+':summary',title:cfg.title+' - Summary',items:summaries,columns:summaryColumns(m),filters:[],
