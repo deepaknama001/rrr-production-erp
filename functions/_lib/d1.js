@@ -1204,9 +1204,13 @@ async function getProductionDetail(db,id){
 }
 async function getStitchingDetail(db,id){
   const s=await row(db,`SELECT x.*,COALESCE(v.VENDOR_NAME,x.STITCHING_VENDOR_ID) STITCHING_VENDOR,
-    COALESCE(st.STYLE_NAME,x.STYLE_ID) STYLE,COALESCE(c.COLOR_NAME,x.COLOR_ID) COLOR
+    COALESCE(st.STYLE_NAME,x.STYLE_ID) STYLE,COALESCE(c.COLOR_NAME,x.COLOR_ID) COLOR,
+    p.DYE_BATCH_ID,p.ALLOCATED_MTR,COALESCE(f.FABRIC_NAME,p.FABRIC_ID) FABRIC
     FROM stitching_jobs x LEFT JOIN vendors v ON v.VENDOR_ID=x.STITCHING_VENDOR_ID
-    LEFT JOIN styles st ON st.STYLE_ID=x.STYLE_ID LEFT JOIN colors c ON c.COLOR_ID=x.COLOR_ID WHERE x.CHALLAN_ID=?`,id);
+    LEFT JOIN styles st ON st.STYLE_ID=x.STYLE_ID LEFT JOIN colors c ON c.COLOR_ID=x.COLOR_ID
+    LEFT JOIN production_batches p ON p.PRODUCTION_BATCH_ID=x.PRODUCTION_BATCH_ID
+    LEFT JOIN fabrics f ON f.FABRIC_ID=p.FABRIC_ID
+    WHERE x.CHALLAN_ID=?`,id);
   if(!s)throw err('Stitching challan not found.',404);
   const issueLines=await issueLinesForChallan(db,id),receivedLines=await receivedLinesForChallan(db,id),pendingLines=await stitchingPendingLines(db,id),qcPending=await qcPendingLines(db,id),sizeBalances=await cutBalanceLines(db,s.PRODUCTION_BATCH_ID);
   const receipts=await rows(db,"SELECT * FROM stitching_receipts WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' ORDER BY RECEIPT_DATE,RECEIPT_ID",id);
@@ -1441,7 +1445,9 @@ async function editStitching(db,r,a,req=''){
   const vendor=String(r.STITCHING_VENDOR_ID??old.STITCHING_VENDOR_ID);
   if(!await row(db,'SELECT 1 ok FROM vendors WHERE VENDOR_ID=? AND ACTIVE=1 AND STITCHING_VENDOR=1',vendor))throw err('Select a valid active Stitching Vendor.',400);
   let items=Array.isArray(r.items)?r.items:await issueLinesForChallan(db,id),lines=[],seen=new Set();
-  const prod=await row(db,'SELECT STATUS FROM production_batches WHERE PRODUCTION_BATCH_ID=?',old.PRODUCTION_BATCH_ID),combined=/CUTTING\s*&\s*STITCHING/i.test(String(prod?.STATUS||''));
+  const prod=await row(db,'SELECT * FROM production_batches WHERE PRODUCTION_BATCH_ID=?',old.PRODUCTION_BATCH_ID),combined=/CUTTING\s*&\s*STITCHING/i.test(String(prod?.STATUS||''));
+  const oldAllocated=n(prod?.ALLOCATED_MTR||0),newAllocated=combined?n(r.ALLOCATED_MTR??oldAllocated):oldAllocated;
+  if(combined)requirePos(newAllocated,'Fabric meter');
   let available={};
   if(!combined){
     const base=await cutBalanceLines(db,old.PRODUCTION_BATCH_ID),current=await issueLinesForChallan(db,id);
@@ -1454,8 +1460,14 @@ async function editStitching(db,r,a,req=''){
     if(qty>0)lines.push({SIZE_ID:sid,QTY:qty})
   }
   const total=lines.reduce((s,x)=>s+x.QTY,0);if(total<=0)throw err('Total stitching issue must be greater than 0.',400);
+  const dyeBatch=String(prod?.DYE_BATCH_ID||'');
+  if(combined&&dyeBatch)await acquireLock(db,'dye:'+dyeBatch,req);
   await acquireLock(db,'production:'+old.PRODUCTION_BATCH_ID,req);
   try{
+    if(combined&&dyeBatch){
+      const available=await dyeBalance(db,dyeBatch)+oldAllocated;
+      if(newAllocated>available+.0001)throw err('Fabric meter exceeds dyed usable balance. Available including current allocation: '+available.toFixed(2)+' m.',409)
+    }
     const t=now(),legacy={M:0,L:0,XL:0,'2XL':0,'3XL':0,OTHER:0};
     for(const x of lines){const sr=await sizeMasterRow(db,x.SIZE_ID),nm=legacySizeName(sr?.SIZE_NAME||x.SIZE_ID);if(nm)legacy[nm]+=x.QTY}
     const stmts=[
@@ -1464,10 +1476,13 @@ async function editStitching(db,r,a,req=''){
       db.prepare('DELETE FROM stitching_issue_lines WHERE CHALLAN_ID=?').bind(id)
     ];
     for(const x of lines)stmts.push(db.prepare('INSERT INTO stitching_issue_lines(LINE_ID,CHALLAN_ID,SIZE_ID,QTY,CREATED_AT,UPDATED_AT) VALUES(?,?,?,?,?,?)').bind(uuid(),id,x.SIZE_ID,x.QTY,t,t));
-    if(combined)stmts.push(db.prepare('UPDATE production_batches SET PLANNED_QTY=?,UPDATED_BY=?,UPDATED_AT=? WHERE PRODUCTION_BATCH_ID=?').bind(total,a.userId,t,old.PRODUCTION_BATCH_ID));
-    stmts.push(expectationStmt(db,'STITCHING',id,r.EXPECTED_DATE??await expectedDate(db,'STITCHING',id),a.userId,'Vendor expected return'));stmts.push(auditStmt(db,a,'EDIT_STITCHING','STITCHING',id,JSON.stringify(old),JSON.stringify({vendor,total,lines,expectedDate:String(r.EXPECTED_DATE||'')})));
+    if(combined)stmts.push(db.prepare('UPDATE production_batches SET PLANNED_QTY=?,ALLOCATED_MTR=?,UPDATED_BY=?,UPDATED_AT=? WHERE PRODUCTION_BATCH_ID=?').bind(total,newAllocated,a.userId,t,old.PRODUCTION_BATCH_ID));
+    stmts.push(expectationStmt(db,'STITCHING',id,r.EXPECTED_DATE??await expectedDate(db,'STITCHING',id),a.userId,'Vendor expected return'));stmts.push(auditStmt(db,a,'EDIT_STITCHING','STITCHING',id,JSON.stringify(old),JSON.stringify({vendor,total,lines,allocatedMtr:newAllocated,oldAllocatedMtr:oldAllocated,expectedDate:String(r.EXPECTED_DATE||'')})));
     await db.batch(stmts);return await getStitchingDetail(db,id)
-  }finally{await releaseLock(db,'production:'+old.PRODUCTION_BATCH_ID)}
+  }finally{
+    await releaseLock(db,'production:'+old.PRODUCTION_BATCH_ID);
+    if(combined&&dyeBatch)await releaseLock(db,'dye:'+dyeBatch)
+  }
 }
 
 async function refreshStitchingHeader(db,challan,a){
