@@ -654,3 +654,21 @@ button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justif
   box-shadow:0 0 0 3px rgba(15,143,134,.14)!important;
   background:#fff!important;
 }
+
+/* v0.42 Sticker Maker batch-wise selection */
+.docs-sticker-head{display:flex;justify-content:space-between;align-items:end;gap:12px;margin:8px 0 10px}
+.docs-sticker-head h4{margin:0 0 3px;font-size:13px}.docs-sticker-head small{color:var(--muted);font-size:9px}
+.docs-sticker-filters{display:grid;grid-template-columns:minmax(220px,1.4fr) repeat(5,minmax(120px,.8fr)) 130px 130px auto;gap:8px;align-items:end;margin-bottom:12px}
+.docs-sticker-filters input,.docs-sticker-filters select{height:38px;border:1px solid var(--line);border-radius:9px;padding:0 9px;background:#fff;font-size:9px}
+.docs-batch-list{display:grid;gap:9px;max-height:56vh;overflow:auto;padding-right:3px}
+.docs-batch-card{border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden}
+.docs-batch-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 12px;background:#f8fafc}
+.docs-batch-head label{display:flex;align-items:center;gap:9px;cursor:pointer}.docs-batch-head input{width:16px;height:16px}
+.docs-batch-head b{display:block;font-size:10px}.docs-batch-head small{display:block;margin-top:2px;color:var(--muted);font-size:8px}
+.docs-batch-items{display:none;padding:8px;border-top:1px solid var(--line);grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+.docs-batch-card.open .docs-batch-items{display:grid}
+.docs-sticker-item{display:grid;grid-template-columns:auto 1fr auto;gap:9px;align-items:center;border:1px solid var(--line);border-radius:9px;padding:8px 9px;background:#fff;cursor:pointer}
+.docs-sticker-item:hover{background:#fafcfd}.docs-sticker-item input{width:15px;height:15px}.docs-sticker-item b{display:block;font-size:9px}.docs-sticker-item small{display:block;color:var(--muted);font-size:7px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.docs-sticker-item em{font-style:normal;font-size:8px;font-weight:850;white-space:nowrap}
+.docs-sticker-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}.docs-sticker-footer span{font-size:9px;font-weight:850;color:#536173}
+@media(max-width:1180px){.docs-sticker-filters{grid-template-columns:repeat(4,minmax(0,1fr))}.docs-sticker-filters #stickerSearch{grid-column:1/-1}.docs-batch-items{grid-template-columns:1fr 1fr}}
+@media(max-width:720px){.docs-sticker-filters{grid-template-columns:1fr 1fr}.docs-sticker-filters #stickerSearch{grid-column:1/-1}.docs-batch-items{grid-template-columns:1fr}.docs-sticker-footer{align-items:stretch;flex-direction:column}.docs-sticker-footer .btn{width:100%}}
