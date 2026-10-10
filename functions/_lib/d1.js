@@ -56,7 +56,7 @@ async function ensureIssueIdModel(db){
   return report
 }
 
-async function ensureSchema(env){
+export async function ensureSchema(env){
   if(!env?.DB)return;
   if(!schemaReadyPromise)schemaReadyPromise=(async()=>{
     const ready=await env.DB.prepare("SELECT 1 ok FROM users LIMIT 1").first();
