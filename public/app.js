@@ -1,4 +1,4 @@
-const APP_BUILD='0.38';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.39';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -1146,6 +1146,7 @@ async function openStitchingEdit(d){
     <form id="stitchEditForm"><div class="form-grid">
       <div class="field"><label>Issue Date</label><input name="ISSUE_DATE" type="date" value="${esc(String(d.ISSUE_DATE||'').slice(0,10))}" required></div>
       <div class="field"><label>Vendor</label><select name="STITCHING_VENDOR_ID" required>${vendors.map(v=>`<option value="${esc(v.VENDOR_ID)}" ${String(v.VENDOR_ID)===String(d.STITCHING_VENDOR_ID)?'selected':''}>${esc(v.VENDOR_NAME)}</option>`).join('')}</select></div>
+      ${d.DYE_BATCH_ID?`<div class="field"><label>Fabric Meter</label><input name="ALLOCATED_MTR" type="number" min="0.01" step="0.01" value="${Number(d.ALLOCATED_MTR||0).toFixed(2)}" required><small>${esc(d.DYE_BATCH_ID)} · ${esc(d.FABRIC||'')}</small></div>`:''}
       <div class="field wide"><label>Notes</label><input name="NOTES" value="${esc(d.NOTES||'')}"></div>
     </div><div class="subsection"><h4>Size-wise Issue</h4><div class="dynamic-size-grid">${sizeLineFields(sizes,vals,'size-qty',mx)}</div></div>
     <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary">Save Correction</button></div></form>`;
