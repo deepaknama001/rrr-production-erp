@@ -1454,7 +1454,7 @@ async function editStitching(db,r,a,req=''){
     for(const x of lines){const sr=await sizeMasterRow(db,x.SIZE_ID),nm=legacySizeName(sr?.SIZE_NAME||x.SIZE_ID);if(nm)legacy[nm]+=x.QTY}
     const stmts=[
       db.prepare('UPDATE stitching_jobs SET ISSUE_DATE=?,STITCHING_VENDOR_ID=?,M_ISSUED=?,L_ISSUED=?,XL_ISSUED=?,"2XL_ISSUED"=?,"3XL_ISSUED"=?,OTHER_ISSUED=?,TOTAL_ISSUED=?,PENDING_QTY=?,STATUS=?,NOTES=?,UPDATED_BY=?,UPDATED_AT=? WHERE CHALLAN_ID=?')
-        .bind(dateOnly(r.ISSUE_DATE||old.ISSUE_DATE),vendor,legacy.M,legacy.L,legacy.XL,legacy['2XL'],legacy['3XL'],legacy.OTHER,total,total,'PENDING FROM VENDOR',String(r.NOTES??old.NOTES??''),a.userId,t,id),
+        .bind(dateOnly(r.ISSUE_DATE||old.ISSUE_DATE),vendor,legacy.M,legacy.L,legacy.XL,legacy['2XL'],legacy['3XL'],legacy.OTHER,total,total,combined?'AT CUTTING & STITCHING':'PENDING FROM VENDOR',String(r.NOTES??old.NOTES??''),a.userId,t,id),
       db.prepare('DELETE FROM stitching_issue_lines WHERE CHALLAN_ID=?').bind(id)
     ];
     for(const x of lines)stmts.push(db.prepare('INSERT INTO stitching_issue_lines(LINE_ID,CHALLAN_ID,SIZE_ID,QTY,CREATED_AT,UPDATED_AT) VALUES(?,?,?,?,?,?)').bind(uuid(),id,x.SIZE_ID,x.QTY,t,t));
