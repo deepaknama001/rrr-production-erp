@@ -1,4 +1,4 @@
-const APP_BUILD='0.48';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.49';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -253,7 +253,7 @@ function saveGridPrefs(page,prefs){
     try{await fetch('/api/preferences',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+state.token},body:JSON.stringify({page,prefs})})}catch{}
   },650))
 }
-function gridLabel(k){return String(k||'').replace(/^__/,'').replaceAll('_',' ').replace(/\b\w/g,x=>x.toUpperCase())}
+function gridLabel(k){const key=String(k||'');if(key==='CHALLAN_ID')return'Issue ID';if(key==='DOC_NO')return'Document No.';return key.replace(/^__/,'').replaceAll('_',' ').replace(/\b\w/g,x=>x.toUpperCase())}
 function gridCell(k,v){
   if(['ACTIVE','FABRIC_SUPPLIER','DYE_VENDOR','STITCHING_VENDOR','CUTTING_VENDOR','admin','active'].includes(k))return boolText(v);
   return displayCell(k,v)
@@ -1124,12 +1124,12 @@ async function openStitchingManage(row){
   try{d=await fetchDetail('stitching',id)}catch(e){return toast(e.message,'bad',4500)}
   const pending=(d.pendingLines||[]).reduce((s,x)=>s+Number(x.PENDING_QTY||0),0);
   $('#modalBody').innerHTML=`
-    <div class="panel-head"><div><h3>Manage Stitching</h3><small>${esc(id)} · ${esc(d.STITCHING_VENDOR||'')}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <div class="panel-head"><div><h3>Manage Cutting & Stitching Issue</h3><small>${esc(id)} · ${esc(d.STITCHING_VENDOR||'')}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
     <div class="manage-kpis"><div><span>Issued</span><b>${(d.issueLines||[]).reduce((s,x)=>s+x.QTY,0)}</b></div><div><span>Received</span><b>${(d.receivedLines||[]).reduce((s,x)=>s+x.QTY,0)}</b></div><div><span>Pending Vendor</span><b>${pending}</b></div><div><span>Receipts</span><b>${(d.receipts||[]).length}</b></div></div>
     <div class="manage-actions">
       ${canAction('stitching','edit')?'<button class="btn ghost" id="editStitch">Edit Issue</button>':''}
       ${pending>0&&canAction('stitching','create')?'<button class="btn teal" id="receiveStitch">Receive Garments</button>':''}
-      ${canAction('stitching','cancel')?'<button class="btn danger" id="cancelStitch">Cancel Challan</button>':''}
+      ${canAction('stitching','cancel')?'<button class="btn danger" id="cancelStitch">Cancel Issue</button>':''}
     </div>
     <div class="subsection"><h4>Size Balance</h4><div class="mini-pills">${(d.pendingLines||[]).map(x=>`<span>${esc(x.SIZE_NAME)} · Issued <b>${x.QTY}</b> · Rec. <b>${x.RECEIVED_QTY}</b> · Pending <b>${x.PENDING_QTY}</b></span>`).join('')||'—'}</div></div>
     ${(d.receipts||[]).length?`<div class="subsection"><h4>Receipt History</h4><div class="history-list">${d.receipts.map(x=>`<div><b>${esc(x.RECEIPT_ID)}</b><span>${fmtDate(x.RECEIPT_DATE)}</span>${d.qcCount===0&&canAction('stitching','cancel')?`<button class="link-danger cancel-stitch-receipt" data-id="${esc(x.RECEIPT_ID)}">Cancel</button>`:''}</div>`).join('')}</div></div>`:''}
@@ -1137,7 +1137,7 @@ async function openStitchingManage(row){
   $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;mountAttachmentPanel('stitching',id);
   $('#editStitch')?.addEventListener('click',()=>{closeModal();openStitchingEdit(d)});
   $('#receiveStitch')?.addEventListener('click',()=>{closeModal();openStitchingReceipt(d)});
-  $('#cancelStitch')?.addEventListener('click',()=>cancelRecord('stitching_cancel',{CHALLAN_ID:id},'stitching challan','stitching'));
+  $('#cancelStitch')?.addEventListener('click',()=>cancelRecord('stitching_cancel',{CHALLAN_ID:id},'cutting & stitching issue','stitching'));
   document.querySelectorAll('.cancel-stitch-receipt').forEach(b=>b.onclick=()=>cancelRecord('stitching_receipt_cancel',{RECEIPT_ID:b.dataset.id},'stitching receipt','stitching'))
 }
 async function openStitchingEdit(d){
@@ -1159,7 +1159,7 @@ async function openStitchingEdit(d){
 async function openStitchingReceipt(d){
   const pending=(d.pendingLines||[]).filter(x=>Number(x.PENDING_QTY)>0);
   $('#modalBody').innerHTML=`
-    <div class="panel-head"><div><h3>Receive from Stitching</h3><small>${esc(d.CHALLAN_ID)} · partial receipts allowed</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <div class="panel-head"><div><h3>Receive from Cutting & Stitching</h3><small>${esc(d.CHALLAN_ID)} · partial receipts allowed</small></div><button class="btn ghost" id="closeModal">Close</button></div>
     <form id="stitchReceiptForm"><div class="form-grid"><div class="field"><label>Receipt Date</label><input name="RECEIPT_DATE" type="date" required value="${todayLocal()}"></div><div class="field wide"><label>Notes</label><input name="NOTES"></div></div>
     <div class="subsection"><h4>Size-wise Receipt</h4><div class="dynamic-size-grid">${pending.map(x=>`<div class="field"><label>${esc(x.SIZE_NAME)} · ${x.PENDING_QTY} pending</label><input class="receipt-size" data-size-id="${esc(x.SIZE_ID)}" type="number" min="0" max="${x.PENDING_QTY}" step="1" value="0"></div>`).join('')}</div></div>
     <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary">Save Receipt</button></div></form>`;
@@ -1517,11 +1517,11 @@ async function openQcEntry(){
   const challans=l.stitchingChallans||[],defects=(l.defects||[]).filter(x=>isTrue(x.ACTIVE));
   if(!challans.length)return toast('No stitching receipt is pending QC. Receive garments from stitching first.','bad',4500);
   $('#modalBody').innerHTML=`
-    <div class="panel-head"><div><h3>QC Entry</h3><small>Received pieces pending QC are loaded size-wise from the selected challan.</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <div class="panel-head"><div><h3>QC Entry</h3><small>Received pieces pending QC are loaded size-wise from the selected issue.</small></div><button class="btn ghost" id="closeModal">Close</button></div>
     <form id="qcSmartForm"><div class="form-grid">
       <div class="field"><label>QC Date</label><input name="QC_DATE" type="date" required value="${todayLocal()}"></div>
-      <div class="field"><label>Stitching Challan</label><select name="CHALLAN_ID" id="qcChallan" required><option value="">Select challan</option>${challans.map(x=>`<option value="${esc(x.CHALLAN_ID)}">${esc(x.CHALLAN_ID)} · ${esc(x.VENDOR_NAME||'')} · ${esc(x.STYLE_NAME||'')} · ${Number(x.QC_PENDING||0)} pcs pending QC</option>`).join('')}</select></div>
-      <div class="field"><label>Size</label><select name="SIZE" id="qcSize" required><option value="">Select challan first</option></select></div>
+      <div class="field"><label>Cutting & Stitching Issue</label><select name="CHALLAN_ID" id="qcChallan" required><option value="">Select issue</option>${challans.map(x=>`<option value="${esc(x.CHALLAN_ID)}">${esc(x.CHALLAN_ID)} · ${esc(x.VENDOR_NAME||'')} · ${esc(x.STYLE_NAME||'')} · ${Number(x.QC_PENDING||0)} pcs pending QC</option>`).join('')}</select></div>
+      <div class="field"><label>Size</label><select name="SIZE" id="qcSize" required><option value="">Select issue first</option></select></div>
       <div class="field"><label>Pending QC Qty</label><input id="qcPending" readonly value="—"></div>
       <div class="field"><label>QC Qty</label><input name="QC_QTY" id="qcQty" type="number" min="1" step="1" required></div>
       <div class="field"><label>Pass</label><input name="PASS_QTY" id="qcPass" type="number" min="0" step="1" value="0"></div>
