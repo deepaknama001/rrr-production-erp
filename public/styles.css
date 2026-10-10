@@ -672,3 +672,19 @@ button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justif
 .docs-sticker-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}.docs-sticker-footer span{font-size:9px;font-weight:850;color:#536173}
 @media(max-width:1180px){.docs-sticker-filters{grid-template-columns:repeat(4,minmax(0,1fr))}.docs-sticker-filters #stickerSearch{grid-column:1/-1}.docs-batch-items{grid-template-columns:1fr 1fr}}
 @media(max-width:720px){.docs-sticker-filters{grid-template-columns:1fr 1fr}.docs-sticker-filters #stickerSearch{grid-column:1/-1}.docs-batch-items{grid-template-columns:1fr}.docs-sticker-footer{align-items:stretch;flex-direction:column}.docs-sticker-footer .btn{width:100%}}
+
+/* v0.44 Sticker Maker readability */
+.docs-sticker-head h4{font-size:16px!important}
+.docs-sticker-head small{font-size:11px!important}
+.docs-sticker-filters input,
+.docs-sticker-filters select{font-size:11px!important;height:42px!important}
+.docs-batch-head{padding:13px 14px!important}
+.docs-batch-head b{font-size:13px!important}
+.docs-batch-head small{font-size:10px!important;margin-top:3px!important}
+.docs-batch-head .btn{font-size:10px!important;min-height:38px!important;padding:0 14px!important}
+.docs-sticker-item{padding:11px 12px!important}
+.docs-sticker-item b{font-size:12px!important}
+.docs-sticker-item small{font-size:9px!important;line-height:1.35!important;margin-top:3px!important}
+.docs-sticker-item em{font-size:10px!important}
+.docs-sticker-footer span{font-size:11px!important}
+.docs-sticker-footer .btn{font-size:11px!important;min-height:42px!important}
