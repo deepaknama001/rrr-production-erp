@@ -1134,7 +1134,7 @@ async function openStitchingManage(row){
     <div class="subsection"><h4>Size Balance</h4><div class="mini-pills">${(d.pendingLines||[]).map(x=>`<span>${esc(x.SIZE_NAME)} · Issued <b>${x.QTY}</b> · Rec. <b>${x.RECEIVED_QTY}</b> · Pending <b>${x.PENDING_QTY}</b></span>`).join('')||'—'}</div></div>
     ${(d.receipts||[]).length?`<div class="subsection"><h4>Receipt History</h4><div class="history-list">${d.receipts.map(x=>`<div><b>${esc(x.RECEIPT_ID)}</b><span>${fmtDate(x.RECEIPT_DATE)}</span>${d.qcCount===0&&canAction('stitching','cancel')?`<button class="link-danger cancel-stitch-receipt" data-id="${esc(x.RECEIPT_ID)}">Cancel</button>`:''}</div>`).join('')}</div></div>`:''}
   `;
-  $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;mountAttachmentPanel('stitching',id);
+  $('#modalBody').dataset.recordModule='stitching';$('#modalBody').dataset.recordId=id;$('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;mountAttachmentPanel('stitching',id);
   $('#editStitch')?.addEventListener('click',()=>{closeModal();openStitchingEdit(d)});
   $('#receiveStitch')?.addEventListener('click',()=>{closeModal();openStitchingReceipt(d)});
   $('#cancelStitch')?.addEventListener('click',()=>cancelRecord('stitching_cancel',{CHALLAN_ID:id},'cutting & stitching issue','stitching'));
