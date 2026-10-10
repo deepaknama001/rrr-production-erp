@@ -1,4 +1,4 @@
-const APP_BUILD='0.45';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.46';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -200,27 +200,44 @@ async function renderDocsMaker(force=false){
         const rows=d.sources?.stitching||[];
         const groupKey=x=>String(x.CREATED_AT||x.ISSUE_DATE||'')+'|'+String(x.STITCHING_VENDOR_ID||x.VENDOR||'');
         const groups=new Map();
-        rows.forEach(x=>{const k=groupKey(x);if(!groups.has(k))groups.set(k,{key:k,date:x.ISSUE_DATE,createdAt:x.CREATED_AT,vendor:x.VENDOR||'',items:[]});groups.get(k).items.push(x)});
+        rows.forEach(x=>{const k=groupKey(x);if(!groups.has(k))groups.set(k,{key:k,date:x.ISSUE_DATE,createdAt:x.CREATED_AT,vendor:x.VENDOR||'',vendorId:x.STITCHING_VENDOR_ID||'',items:[]});groups.get(k).items.push(x)});
         const list=[...groups.values()];
-        body.innerHTML='<div class="docs-form docs-stitch-batch-form">'+
-          '<div class="field"><label>Cutting & Stitching Issue Batch</label><select id="docStitchBatch"><option value="">Select issue batch…</option>'+list.map((g,i)=>'<option value="'+i+'">Issue Batch '+(i+1)+' · '+esc(fmtDate(g.date))+' · '+esc(g.vendor)+' · '+g.items.length+' line(s)</option>').join('')+'</select></div>'+
-          '<div class="field"><label>Document Date</label><input id="docDate" type="date" value="'+todayLocal()+'"></div>'+
-          '<div class="field wide"><label>Notes</label><input id="docNotes" placeholder="Optional vendor instruction"></div>'+
-          '<div class="docs-stitch-preview wide" id="docStitchPreview"><div class="smart-empty"><b>Select an issue batch</b><span>All lines from that bulk issue will print on one challan.</span></div></div>'+
-          '<div class="form-actions wide"><button class="btn teal" id="makeStitchDoc">Generate & Print Batch Challan</button></div></div>';
+        body.innerHTML='<div class="docs-stitch-multi">'+
+          '<div class="docs-stitch-top"><div><h4>Build Cutting & Stitching Challan</h4><small>Select one or more issue batches for the same vendor.</small></div><div class="field"><label>Document Date</label><input id="docDate" type="date" value="'+todayLocal()+'"></div></div>'+
+          '<div class="docs-stitch-batch-select" id="docStitchBatchList">'+
+            list.map((g,i)=>'<label class="docs-stitch-batch-option" data-vendor="'+esc(g.vendorId||g.vendor)+'"><input type="checkbox" value="'+i+'"><span><b>Issue Batch '+(i+1)+'</b><small>'+esc(fmtDate(g.date))+' · '+esc(g.vendor)+' · '+g.items.length+' line(s)</small></span><em>'+docsMeter(g.items.reduce((s,x)=>s+Number(x.FABRIC_QTY||0),0))+' m · '+docsNum(g.items.reduce((s,x)=>s+Number(x.TOTAL_PCS||0),0))+' pcs</em></label>').join('')+
+          '</div>'+
+          '<div class="field"><label>Notes</label><input id="docNotes" placeholder="Optional vendor instruction"></div>'+
+          '<div class="docs-stitch-preview" id="docStitchPreview"><div class="smart-empty"><b>Select issue batch(es)</b><span>Selected batches will combine into one vendor challan.</span></div></div>'+
+          '<div class="docs-stitch-footer"><span id="docStitchSelected">0 batches selected</span><button class="btn teal" id="makeStitchDoc">Generate & Print Combined Challan</button></div>'+
+        '</div>';
+
+        const selectedGroups=()=>[...document.querySelectorAll('#docStitchBatchList input:checked')].map(x=>list[Number(x.value)]).filter(Boolean);
         const renderPreview=()=>{
-          const idx=$('#docStitchBatch').value;
-          if(idx===''){ $('#docStitchPreview').innerHTML='<div class="smart-empty"><b>Select an issue batch</b><span>All lines from that bulk issue will print on one challan.</span></div>';return}
-          const g=list[Number(idx)];
-          $('#docStitchPreview').innerHTML='<div class="docs-batch-preview-head"><b>'+esc(g.vendor)+'</b><span>'+esc(fmtDate(g.date))+' · '+g.items.length+' issue line(s)</span></div>'+
-            '<div class="table-wrap"><table class="data"><thead><tr><th>Challan Line</th><th>Style</th><th>Color</th><th>Fabric</th><th>Meter</th><th>Pieces</th></tr></thead><tbody>'+
-            g.items.map(x=>'<tr><td>'+esc(x.CHALLAN_ID)+'</td><td>'+esc(x.STYLE||'')+'</td><td>'+esc(x.COLOR||'')+'</td><td>'+esc(x.FABRIC||'')+'</td><td>'+docsMeter(x.FABRIC_QTY)+'</td><td>'+docsNum(x.TOTAL_PCS)+'</td></tr>').join('')+
-            '<tr><td colspan="4" class="tot">Batch Total</td><td class="tot">'+docsMeter(g.items.reduce((s,x)=>s+Number(x.FABRIC_QTY||0),0))+'</td><td class="tot">'+docsNum(g.items.reduce((s,x)=>s+Number(x.TOTAL_PCS||0),0))+'</td></tr></tbody></table></div>'
+          const chosen=selectedGroups();
+          $('#docStitchSelected').textContent=chosen.length+' batch'+(chosen.length===1?'':'es')+' selected';
+          if(!chosen.length){
+            $('#docStitchPreview').innerHTML='<div class="smart-empty"><b>Select issue batch(es)</b><span>Selected batches will combine into one vendor challan.</span></div>';
+            document.querySelectorAll('.docs-stitch-batch-option').forEach(x=>x.classList.remove('disabled'));
+            return
+          }
+          const vendorId=chosen[0].vendorId||chosen[0].vendor;
+          document.querySelectorAll('.docs-stitch-batch-option').forEach(x=>{
+            const input=x.querySelector('input'),mismatch=String(x.dataset.vendor)!==String(vendorId)&&!input.checked;
+            x.classList.toggle('disabled',mismatch);input.disabled=mismatch
+          });
+          const all=chosen.flatMap(g=>g.items);
+          $('#docStitchPreview').innerHTML='<div class="docs-batch-preview-head"><b>'+esc(chosen[0].vendor)+'</b><span>'+chosen.length+' batch(es) · '+all.length+' issue line(s)</span></div>'+
+            '<div class="table-wrap"><table class="data"><thead><tr><th>Source</th><th>Style</th><th>Color</th><th>Fabric</th><th>Meter</th><th>Pieces</th></tr></thead><tbody>'+
+            all.map(x=>'<tr><td>'+esc(x.CHALLAN_ID)+'</td><td>'+esc(x.STYLE||'')+'</td><td>'+esc(x.COLOR||'')+'</td><td>'+esc(x.FABRIC||'')+'</td><td>'+docsMeter(x.FABRIC_QTY)+'</td><td>'+docsNum(x.TOTAL_PCS)+'</td></tr>').join('')+
+            '<tr><td colspan="4" class="tot">Grand Total</td><td class="tot">'+docsMeter(all.reduce((s,x)=>s+Number(x.FABRIC_QTY||0),0))+'</td><td class="tot">'+docsNum(all.reduce((s,x)=>s+Number(x.TOTAL_PCS||0),0))+'</td></tr></tbody></table></div>'
         };
-        $('#docStitchBatch').onchange=renderPreview;
+        document.querySelectorAll('#docStitchBatchList input').forEach(ch=>ch.onchange=renderPreview);
         $('#makeStitchDoc').onclick=()=>{
-          const idx=$('#docStitchBatch').value;if(idx==='')return toast('Select a Cutting & Stitching issue batch.','bad');
-          const g=list[Number(idx)],ids=g.items.map(x=>x.CHALLAN_ID);
+          const chosen=selectedGroups();if(!chosen.length)return toast('Select at least one issue batch.','bad');
+          const vendor=String(chosen[0].vendorId||chosen[0].vendor);
+          if(chosen.some(g=>String(g.vendorId||g.vendor)!==vendor))return toast('Select issue batches for one vendor only.','bad');
+          const ids=chosen.flatMap(g=>g.items.map(x=>x.CHALLAN_ID));
           generateDocAndPrint('STITCHING_CHALLAN',ids,{docDate:$('#docDate').value,notes:$('#docNotes').value})
         }
       }else if(tab==='stickers'){
