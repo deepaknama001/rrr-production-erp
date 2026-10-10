@@ -550,6 +550,8 @@ async function mountDataGrid(container,opt){
     const foot=hasTotals?`<tfoot><tr><td class="select-col"></td>${visible.map((k,i)=>`<td>${i===0?'<b>Filtered Total</b>':totals[k]!==undefined?`<b>${displayCell(k,totals[k])}</b>`:''}</td>`).join('')}${columns.includes('__ACTION')?'<td class="action-sticky"></td>':''}</tr></tfoot>`:'';
 
     const activeFilters=visible.filter(k=>filterIsActive(prefs.filters?.[k],isDateColumn(k,items))).length;
+    const selectedRows=[...selected].map(i=>items[i]).filter(Boolean);
+    const selectionActions=selectedRows.length&&opt.renderSelectionActions?opt.renderSelectionActions(selectedRows):'';
     container.innerHTML=`
       <div class="smart-grid-toolbar">
         <div class="grid-search-wrap"><span>⌕</span><input class="grid-search" placeholder="Search..." value="${esc(prefs.search||'')}"></div>
@@ -558,7 +560,7 @@ async function mountDataGrid(container,opt){
       <div class="grid-active-meta"><span>Showing ${filtered.length?`${start+1}–${end}`:'0'} of ${filtered.length} filtered · ${items.length} total${activeFilters?` · ${activeFilters} filter${activeFilters>1?'s':''}`:''}${prefs.sortKey?` · Sorted by ${gridLabel(prefs.sortKey)} ${prefs.sortDir==='asc'?'↑':'↓'}`:''}</span><button class="clear-grid-filters ${(!prefs.search&&!activeFilters&&!prefs.sortKey)?'hidden':''}">Reset view</button></div>
       <div class="table-wrap grid-scroll density-${prefs.density}"><table class="data"><thead><tr>${head}</tr></thead><tbody>${body}</tbody>${foot}</table></div>
       <div class="grid-footer">
-        <div class="rows-control"><span>Rows per page</span><select class="page-size">${[10,25,50,100].map(n=>`<option value="${n}" ${n===prefs.pageSize?'selected':''}>${n}</option>`).join('')}</select>${selected.size?`<button class="clear-selection">Clear ${selected.size} selected</button>`:''}</div>
+        <div class="rows-control"><span>Rows per page</span><select class="page-size">${[10,25,50,100].map(n=>`<option value="${n}" ${n===prefs.pageSize?'selected':''}>${n}</option>`).join('')}</select>${selected.size?`<button class="clear-selection">Clear ${selected.size} selected</button>`:''}${selectionActions?`<span class="grid-selection-actions">${selectionActions}</span>`:''}</div>
         <div class="pagination"><button class="page-btn prev" ${prefs.page<=1?'disabled':''}>‹</button>${buttons.join('')}<button class="page-btn next" ${prefs.page>=pages?'disabled':''}>›</button></div>
         <div class="page-count">Page ${prefs.page} of ${pages}</div>
       </div>`;
@@ -656,6 +658,7 @@ async function mountDataGrid(container,opt){
     container.querySelector('.next').onclick=()=>{if(prefs.page<pages){prefs.page++;saveGridPrefs(key,prefs);render()}};
     container.querySelector('.clear-grid-filters')?.addEventListener('click',()=>{prefs.search='';prefs.filters={};prefs.sortKey='';prefs.sortDir='asc';prefs.page=1;saveGridPrefs(key,prefs);render()});
     if(opt.bindActions)opt.bindActions(pageRows,container);
+    if(selectedRows.length&&opt.bindSelectionActions)opt.bindSelectionActions(selectedRows,container,rt);
   }
   rt.render=render;render();return rt
 }
