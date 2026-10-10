@@ -122,15 +122,29 @@ function dyePrintHtml(doc){
   return docsPrintBase(doc.DOC_NO,body)
 }
 function stitchPrintHtml(doc){
-  const p=doc.payload||{},sizes=p.sizes||[],company=p.company||{};
-  const body='<div class="doc">'+docsHeader(p,doc,'STITCHING ISSUE CHALLAN')+
+  const p=doc.payload||{},items=p.items||[],company=p.company||{};
+  const sizeNames=[];
+  items.forEach(x=>(x.sizes||[]).forEach(z=>{const n=String(z.size||'');if(n&&!sizeNames.includes(n))sizeNames.push(n)}));
+  const preferred=['M','L','XL','2XL','3XL'];sizeNames.sort((a,b)=>{const ai=preferred.indexOf(a.toUpperCase()),bi=preferred.indexOf(b.toUpperCase());return(ai<0?99:ai)-(bi<0?99:bi)||a.localeCompare(b)});
+  const rows=items.map((x,i)=>{
+    const sm=new Map((x.sizes||[]).map(z=>[String(z.size||''),Number(z.qty||0)]));
+    return '<tr><td>'+(i+1)+'</td><td>'+esc(x.style||'')+'</td><td>'+esc(x.color||'')+'</td><td>'+esc(x.fabric||'')+'</td><td class="right">'+docsMeter(x.fabricQty)+'</td>'+
+      sizeNames.map(s=>'<td class="right">'+docsNum(sm.get(s)||0)+'</td>').join('')+
+      '<td class="right tot">'+docsNum(x.totalPcs)+'</td></tr>'
+  }).join('');
+  const body='<div class="doc">'+docsHeader(p,doc,'CUTTING & STITCHING ISSUE CHALLAN')+
     '<div class="party-grid-wrap">'+
       docsPartyBlock('Issued By',company.name||'RARE RICH RIGHT (RRR)',company.address||'',company.phone||'',company.gst||'',company.email||'')+
-      docsPartyBlock('Stitching Vendor',p.vendor||'',p.vendorAddress||'',p.vendorPhone||'',p.vendorGst||'')+
+      docsPartyBlock('Cutting & Stitching Vendor',p.vendor||'',p.vendorAddress||'',p.vendorPhone||'',p.vendorGst||'')+
     '</div>'+
-    '<div class="meta"><div><b>Source</b>'+esc(p.sourceId||'')+'</div><div><b>Item / Style</b>'+esc(p.style||'')+'</div><div><b>Colour</b>'+esc(p.color||'')+'</div><div><b>Fabric</b>'+esc(p.fabric||'')+'</div><div><b>Fabric Qty.</b>'+docsNum(p.fabricQty)+' Mtr</div></div>'+
-    '<div class="doc-section"><h3>Size-wise Issue</h3><table><thead><tr><th>Size</th><th class="right">Pieces</th></tr></thead><tbody>'+sizes.map(x=>'<tr><td>'+esc(x.size)+'</td><td class="right">'+docsNum(x.qty)+'</td></tr>').join('')+'<tr><td class="right tot">Total Pieces</td><td class="right tot">'+docsNum(p.totalPcs)+'</td></tr></tbody></table></div>'+
-    '<div class="notes"><b>Notes:</b><br>'+esc(p.notes||'')+'</div><div class="footer-note">'+esc(company.footer||'Material issued for processing / job work only.')+'</div><div class="sign"><div>Authorised Signatory / Issued By</div><div>Received By / Vendor</div></div></div>';
+    '<div class="summary-strip"><div><b>Issue Date:</b> '+esc(fmtDate(p.date||doc.DOC_DATE))+'</div><div><b>Issue Lines:</b> '+items.length+'</div></div>'+
+    '<div class="doc-section"><h3>Fabric / Production Issue Details</h3><table><thead><tr><th>#</th><th>Style / Item</th><th>Colour</th><th>Fabric</th><th class="right">Mtr</th>'+
+      sizeNames.map(s=>'<th class="right">'+esc(s)+'</th>').join('')+'<th class="right">Total Pcs</th></tr></thead><tbody>'+rows+
+      '<tr><td colspan="'+(5+sizeNames.length)+'" class="right tot">Grand Total Fabric / Pieces</td><td class="right tot">'+docsNum(p.totalPcs)+'</td></tr></tbody></table></div>'+
+    '<div class="summary-strip"><div><b>Total Fabric:</b> '+docsMeter(p.totalFabricMtr)+' Mtr</div><div><b>Total Pieces:</b> '+docsNum(p.totalPcs)+'</div></div>'+
+    '<div class="notes"><b>Notes / Instructions:</b><br>'+esc(p.notes||'')+'</div>'+
+    '<div class="footer-note">'+esc(company.footer||'Material issued for processing / job work only.')+'</div>'+
+    '<div class="sign"><div>Authorised Signatory / Issued By</div><div>Received By / Vendor</div></div></div>';
   return docsPrintBase(doc.DOC_NO,body)
 }
 function stickerPrintHtml(doc){
@@ -184,8 +198,31 @@ async function renderDocsMaker(force=false){
         $('#makeDyeDoc').onclick=()=>{const id=$('#docDyeSource').value;if(!id)return toast('Select a dye plan.','bad');generateDocAndPrint('DYE_CHALLAN',[id],{docDate:$('#docDate').value,notes:$('#docNotes').value})}
       }else if(tab==='stitch'){
         const rows=d.sources?.stitching||[];
-        body.innerHTML='<div class="docs-form"><div class="field"><label>Stitching Challan</label><select id="docStitchSource"><option value="">Select challan…</option>'+rows.map(x=>'<option value="'+esc(x.CHALLAN_ID)+'">'+esc(x.CHALLAN_ID)+' · '+esc(x.STYLE||'')+' · '+esc(x.VENDOR||'')+'</option>').join('')+'</select></div><div class="field"><label>Document Date</label><input id="docDate" type="date" value="'+todayLocal()+'"></div><div class="field"><label>Fabric Qty Override (Mtr)</label><input id="docFabricQty" type="number" min="0" step="0.01" placeholder="Auto from production"></div><div class="field wide"><label>Notes</label><input id="docNotes" placeholder="Optional vendor instruction"></div><div class="form-actions"><button class="btn teal" id="makeStitchDoc">Generate & Print Stitching Challan</button></div></div>';
-        $('#makeStitchDoc').onclick=()=>{const id=$('#docStitchSource').value;if(!id)return toast('Select a stitching challan.','bad');const fq=$('#docFabricQty').value;generateDocAndPrint('STITCHING_CHALLAN',[id],{docDate:$('#docDate').value,notes:$('#docNotes').value,overrides:fq?{fabricQty:Number(fq)}:{}})}
+        const groupKey=x=>String(x.CREATED_AT||x.ISSUE_DATE||'')+'|'+String(x.STITCHING_VENDOR_ID||x.VENDOR||'');
+        const groups=new Map();
+        rows.forEach(x=>{const k=groupKey(x);if(!groups.has(k))groups.set(k,{key:k,date:x.ISSUE_DATE,createdAt:x.CREATED_AT,vendor:x.VENDOR||'',items:[]});groups.get(k).items.push(x)});
+        const list=[...groups.values()];
+        body.innerHTML='<div class="docs-form docs-stitch-batch-form">'+
+          '<div class="field"><label>Cutting & Stitching Issue Batch</label><select id="docStitchBatch"><option value="">Select issue batch…</option>'+list.map((g,i)=>'<option value="'+i+'">Issue Batch '+(i+1)+' · '+esc(fmtDate(g.date))+' · '+esc(g.vendor)+' · '+g.items.length+' line(s)</option>').join('')+'</select></div>'+
+          '<div class="field"><label>Document Date</label><input id="docDate" type="date" value="'+todayLocal()+'"></div>'+
+          '<div class="field wide"><label>Notes</label><input id="docNotes" placeholder="Optional vendor instruction"></div>'+
+          '<div class="docs-stitch-preview wide" id="docStitchPreview"><div class="smart-empty"><b>Select an issue batch</b><span>All lines from that bulk issue will print on one challan.</span></div></div>'+
+          '<div class="form-actions wide"><button class="btn teal" id="makeStitchDoc">Generate & Print Batch Challan</button></div></div>';
+        const renderPreview=()=>{
+          const idx=$('#docStitchBatch').value;
+          if(idx===''){ $('#docStitchPreview').innerHTML='<div class="smart-empty"><b>Select an issue batch</b><span>All lines from that bulk issue will print on one challan.</span></div>';return}
+          const g=list[Number(idx)];
+          $('#docStitchPreview').innerHTML='<div class="docs-batch-preview-head"><b>'+esc(g.vendor)+'</b><span>'+esc(fmtDate(g.date))+' · '+g.items.length+' issue line(s)</span></div>'+
+            '<div class="table-wrap"><table class="data"><thead><tr><th>Challan Line</th><th>Style</th><th>Color</th><th>Fabric</th><th>Meter</th><th>Pieces</th></tr></thead><tbody>'+
+            g.items.map(x=>'<tr><td>'+esc(x.CHALLAN_ID)+'</td><td>'+esc(x.STYLE||'')+'</td><td>'+esc(x.COLOR||'')+'</td><td>'+esc(x.FABRIC||'')+'</td><td>'+docsMeter(x.FABRIC_QTY)+'</td><td>'+docsNum(x.TOTAL_PCS)+'</td></tr>').join('')+
+            '<tr><td colspan="4" class="tot">Batch Total</td><td class="tot">'+docsMeter(g.items.reduce((s,x)=>s+Number(x.FABRIC_QTY||0),0))+'</td><td class="tot">'+docsNum(g.items.reduce((s,x)=>s+Number(x.TOTAL_PCS||0),0))+'</td></tr></tbody></table></div>'
+        };
+        $('#docStitchBatch').onchange=renderPreview;
+        $('#makeStitchDoc').onclick=()=>{
+          const idx=$('#docStitchBatch').value;if(idx==='')return toast('Select a Cutting & Stitching issue batch.','bad');
+          const g=list[Number(idx)],ids=g.items.map(x=>x.CHALLAN_ID);
+          generateDocAndPrint('STITCHING_CHALLAN',ids,{docDate:$('#docDate').value,notes:$('#docNotes').value})
+        }
       }else if(tab==='stickers'){
         const rows=d.sources?.stitching||[];
         const groupKey=x=>String(x.CREATED_AT||x.ISSUE_DATE||'')+'|'+String(x.STITCHING_VENDOR_ID||x.VENDOR||'');
