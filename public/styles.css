@@ -623,3 +623,34 @@ button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justif
 
 .cs-default-fabric{width:220px;margin:0}.cs-default-fabric select{height:40px!important;font-size:10px!important}
 @media(max-width:900px){.cs-default-fabric{width:min(100%,260px)}}
+
+/* Global focus / active-field visibility */
+:where(input,select,textarea,[contenteditable="true"]):focus{
+  outline:none!important;
+  border-color:#0f8f86!important;
+  box-shadow:0 0 0 3px rgba(15,143,134,.14)!important;
+  background:#fbfffe!important;
+}
+:where(input,select,textarea,[contenteditable="true"]):focus-visible{
+  outline:none!important;
+}
+.field:focus-within label,
+.cs-size-box:focus-within span,
+.cs-row-sizes label:focus-within span,
+.cs-default-size:focus-within span{
+  color:#0b766f!important;
+  font-weight:900!important;
+}
+:where(button,a,[role="button"],.icon-btn,.link-action,.link-danger):focus-visible{
+  outline:2px solid #0f8f86!important;
+  outline-offset:2px!important;
+  box-shadow:0 0 0 3px rgba(15,143,134,.12)!important;
+}
+.data th select:focus,
+.data th input:focus,
+.filter-pop input:focus,
+.filter-pop select:focus{
+  border-color:#0f8f86!important;
+  box-shadow:0 0 0 3px rgba(15,143,134,.14)!important;
+  background:#fff!important;
+}
