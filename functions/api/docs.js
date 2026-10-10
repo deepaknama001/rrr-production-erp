@@ -1,5 +1,6 @@
 import {json,errorResponse,readJson} from '../_lib/common.js';
 import {requireAuth} from '../_lib/auth.js';
+import {ensureSchema} from '../_lib/d1.js';
 
 async function ensureDocs(db){
   const ddl=[
@@ -396,7 +397,7 @@ async function buildPayload(db,type,sourceIds,overrides={}){
 export async function onRequestGet(context){
   try{
     const user=await requireAuth(context);if(!context.env.DB)return json({error:'D1 unavailable.'},503);
-    await ensureDocs(context.env.DB);
+    await ensureSchema(context.env);await ensureDocs(context.env.DB);
     const u=new URL(context.request.url),action=u.searchParams.get('action')||'home';
     if(action==='settings')return json({company:await getCompany(context.env.DB)});
     if(action==='id_audit'){
@@ -430,7 +431,7 @@ export async function onRequestGet(context){
 export async function onRequestPost(context){
   try{
     const user=await requireAuth(context);if(!context.env.DB)return json({error:'D1 unavailable.'},503);
-    await ensureDocs(context.env.DB);
+    await ensureSchema(context.env);await ensureDocs(context.env.DB);
     const b=await readJson(context.request),action=String(b.action||'generate');
     if(action==='save_settings'){
       if(!user.admin)return json({error:'Admin permission required.'},403);
