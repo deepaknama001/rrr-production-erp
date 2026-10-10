@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const BUILD='0.49';
+const BUILD='0.50';
 const MOD_BY_TITLE={
   'Raw Fabric':'raw','Dyeing':'dye','Production':'production','Production / Cutting':'production',
   'Stitching':'stitching','Cutting & Stitching':'stitching','QC & Rework':'qc','Warehouse Handover':'handover'
@@ -44,11 +44,11 @@ function injectExpectedField(){
 
 function inferManageRecord(){
   const body=document.getElementById('modalBody');if(!body)return null;
+  if(body.dataset.recordModule&&body.dataset.recordId)return{module:body.dataset.recordModule,id:body.dataset.recordId};
   const h=(body.querySelector('.panel-head h3')?.textContent||'').trim();
   const small=(body.querySelector('.panel-head small')?.textContent||'').trim();
   const id=(small.split('·')[0]||'').trim();
   if(h==='Manage Dye Batch'&&id)return{module:'dye',id};
-  if(h==='Manage Stitching'&&id)return{module:'stitching',id};
   return null;
 }
 async function mountExpectationPanel(){
