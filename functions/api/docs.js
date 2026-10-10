@@ -212,7 +212,7 @@ async function identifierAudit(db){
   let storedIssue={},storedDocs={};
   try{storedIssue=JSON.parse((await db.prepare("SELECT VALUE FROM settings WHERE KEY='IDMODEL:STITCHING'").first())?.VALUE||'{}')}catch{}
   try{storedDocs=JSON.parse((await db.prepare("SELECT VALUE FROM settings WHERE KEY='IDMODEL:DOCUMENTS'").first())?.VALUE||'{}')}catch{}
-  const verified=missingIssue===0&&invalidIssue===0&&duplicateIssue===0&&invalidDocs===0&&duplicateDocs===0;
+  const verified=missingIssue===0&&invalidIssue===0&&duplicateIssue===0&&invalidDocs===0&&duplicateDocs===0&&unresolvedStickerRefs===0;
   return{
     verified,
     stitching:{rows:stitch.length,missingIssue,invalidIssue,duplicateIssue,stored:storedIssue},
@@ -241,7 +241,7 @@ async function listSources(db){
     ORDER BY MAX(d.ISSUE_DATE) DESC,d.DYE_PLAN_ID DESC LIMIT 250
   `).all()).results||[];
   const stitching=(await db.prepare(`
-    SELECT s.CHALLAN_ID,COALESCE(s.ISSUE_ID,s.CHALLAN_ID) ISSUE_ID,s.ISSUE_DATE,s.CREATED_AT,s.STATUS,s.STITCHING_VENDOR_ID,COALESCE(v.VENDOR_NAME,s.STITCHING_VENDOR_ID) VENDOR,
+    SELECT s.CHALLAN_ID,s.ISSUE_DATE,s.CREATED_AT,s.STATUS,s.STITCHING_VENDOR_ID,COALESCE(v.VENDOR_NAME,s.STITCHING_VENDOR_ID) VENDOR,
       s.PRODUCTION_BATCH_ID,p.DYE_BATCH_ID,COALESCE(st.STYLE_NAME,s.STYLE_ID) STYLE,COALESCE(c.COLOR_NAME,s.COLOR_ID) COLOR,
       COALESCE(f.FABRIC_NAME,p.FABRIC_ID) FABRIC,
       COALESCE(NULLIF(ca.CONSUMED_MTR,0),NULLIF(p.CONSUMED_MTR,0),p.ALLOCATED_MTR,0) FABRIC_QTY,
