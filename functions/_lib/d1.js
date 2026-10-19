@@ -564,6 +564,45 @@ async function viewQcReceiptQueue(db){
     return {...r,RECEIVED_QTY:qty,QC_DONE:count,QC_PENDING:pending,PASS_QTY:pass,REWORK_QTY:rework,REJECT_QTY:reject,QC_RECORDS:qcRecords.get(key)||[],STATUS:pending?'PENDING QC':'QC DONE'}
   });
 }
+async function qcPassSelectedRows(db,r,a,req=''){
+  const input=Array.isArray(r.items)?r.items:[];
+  if(!input.length||input.length>100)throw err('Select between 1 and 100 QC rows.',400);
+  const keys=new Set(),selected=[];
+  for(const x of input){
+    const receiptId=String(x.RECEIPT_ID||''),sizeId=String(x.SIZE_ID||''),key=receiptId+'|'+sizeId;
+    if(!receiptId||!sizeId||keys.has(key))throw err('Missing or duplicate QC receipt size.',409);
+    keys.add(key);
+    selected.push({receiptId,sizeId,pass:intQty(x.PASS_QTY,'Pass quantity'),disposition:String(x.DISPOSITION||'').toUpperCase()});
+  }
+  const challans=new Set();
+  for(const x of selected){
+    const src=await row(db,"SELECT CHALLAN_ID FROM stitching_receipts WHERE RECEIPT_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",x.receiptId);
+    if(!src)throw err('Receipt '+x.receiptId+' is no longer active.',409);
+    x.challan=String(src.CHALLAN_ID);challans.add(x.challan);
+  }
+  const locked=[];
+  try{
+    for(const ch of [...challans].sort()){await acquireLock(db,'stitching:'+ch,req);locked.push(ch)}
+    const queue=await viewQcReceiptQueue(db),byKey=new Map(queue.map(x=>[String(x.RECEIPT_ID)+'|'+String(x.SIZE_ID),x]));
+    const jobs=new Map(),stmt=[],out=[],t=now(),date=dateOnly(r.QC_DATE);
+    for(const x of selected){
+      const line=byKey.get(x.receiptId+'|'+x.sizeId);
+      if(!line||Number(line.QC_PENDING)<=0)throw err('QC pending changed for receipt '+x.receiptId+' / '+x.sizeId+'. Refresh and retry.',409);
+      const q=intQty(line.QC_PENDING,'QC pending',false);
+      if(x.pass>q)throw err('Pass exceeds pending QC for '+x.receiptId+' / '+x.sizeId,409);
+      const rest=q-x.pass;
+      if(rest&&!['REWORK','REJECT'].includes(x.disposition))throw err('Select Rework or Reject for '+rest+' pieces of '+x.sizeId,409);
+      const st=jobs.get(x.challan)||await row(db,"SELECT * FROM stitching_jobs WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",x.challan);
+      if(!st)throw err('Stitching issue unavailable.',409);jobs.set(x.challan,st);
+      const rw=x.disposition==='REWORK'?rest:0,rej=x.disposition==='REJECT'?rest:0,id=await nextId(db,'QC');
+      stmt.push(db.prepare('INSERT INTO qc_events(QC_ID,QC_DATE,CHALLAN_ID,PRODUCTION_BATCH_ID,VENDOR_ID,STYLE_ID,COLOR_ID,SIZE,QC_QTY,PASS_QTY,REWORK_QTY,REJECT_QTY,SHORT_QTY,DEFECT_REASON,REWORK_CHALLAN_ID,REWORK_RETURNED_QTY,FINAL_ACCEPTED_QTY,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(id,date,x.challan,st.PRODUCTION_BATCH_ID,st.STITCHING_VENDOR_ID,st.STYLE_ID,st.COLOR_ID,x.sizeId,q,x.pass,rw,rej,0,'','',0,x.pass,'QC COMPLETE','Bulk QC | Receipt '+x.receiptId,a.userId,t,a.userId,t));
+      stmt.push(auditStmt(db,a,'BULK_QC_PASS','QC',id,'',JSON.stringify({receiptId:x.receiptId,size:x.sizeId,q,pass:x.pass,rework:rw,reject:rej})));
+      out.push({QC_ID:id,RECEIPT_ID:x.receiptId,SIZE_ID:x.sizeId,QC_QTY:q,PASS_QTY:x.pass,REWORK_QTY:rw,REJECT_QTY:rej});
+    }
+    await db.batch(stmt);
+    return{count:out.length,items:out,totalPassed:out.reduce((sum,x)=>sum+x.PASS_QTY,0)};
+  }finally{for(const ch of locked.reverse())await releaseLock(db,'stitching:'+ch)}
+}
 async function qcPassReceiptRow(db,r,a,req=''){
   const receiptId=String(r.RECEIPT_ID||''),sizeId=String(r.SIZE_ID||'');
   const source=await row(db,"SELECT CHALLAN_ID FROM stitching_receipts WHERE RECEIPT_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",receiptId);
@@ -1789,7 +1828,7 @@ export async function saveRecordD1(env,p){
     dye:'dye',dye_bulk:'dye',dye_plan:'dye',dye_receive:'dye',dye_edit_batch:'dye',dye_edit_receipt:'dye',dye_cancel_batch:'dye',
     production:'production',production_edit:'production',cutting_complete:'production',production_cancel:'production',
     cutstitch_bulk:'stitching',stitching:'stitching',stitching_edit:'stitching',stitching_receive:'stitching',stitching_receipt_cancel:'stitching',stitching_cancel:'stitching',
-    qc:'qc',qc_receipts:'qc',qc_row_pass:'qc',qc_quick_pass:'qc',qc_edit:'qc',rework_issue:'qc',rework_receive:'qc',rework_cancel:'qc',qc_cancel:'qc',
+    qc:'qc',qc_receipts:'qc',qc_row_pass:'qc',qc_bulk_pass:'qc',qc_quick_pass:'qc',qc_edit:'qc',rework_issue:'qc',rework_receive:'qc',rework_cancel:'qc',qc_cancel:'qc',
     handover:'qc',handover_edit:'qc',warehouse_receive:'qc',warehouse_receipt_cancel:'qc',handover_cancel:'qc'
   },perm=moduleMap[m]||null,a=await actor(db,p.actorUserId,perm,false),req=String(p.requestId||'');a.auditMeta=p.auditMeta||{};
   const actionMap={
@@ -1797,7 +1836,7 @@ export async function saveRecordD1(env,p){
     dye:'create',dye_bulk:'create',dye_plan:'create',dye_receive:'create',dye_edit_batch:'edit',dye_edit_receipt:'edit',dye_cancel_batch:'cancel',
     production:'create',production_edit:'edit',cutting_complete:'edit',production_cancel:'cancel',
     cutstitch_bulk:'create',stitching:'create',stitching_edit:'edit',stitching_receive:'create',stitching_receipt_cancel:'cancel',stitching_cancel:'cancel',
-    qc:'create',qc_row_pass:'create',qc_quick_pass:'create',qc_edit:'edit',rework_issue:'create',rework_receive:'edit',rework_cancel:'cancel',qc_cancel:'cancel',
+    qc:'create',qc_row_pass:'create',qc_bulk_pass:'create',qc_quick_pass:'create',qc_edit:'edit',rework_issue:'create',rework_receive:'edit',rework_cancel:'cancel',qc_cancel:'cancel',
     handover:'create',handover_edit:'edit',warehouse_receive:'create',warehouse_receipt_cancel:'cancel',handover_cancel:'cancel'
   };
   if(perm)await requireAction(db,a,perm,actionMap[m]||'create');
@@ -1827,6 +1866,7 @@ export async function saveRecordD1(env,p){
     else if(m==='stitching_cancel')record=await cancelStitching(db,p.record||{},a);
     else if(m==='qc')record=await saveQc(db,p.record||{},a,req);
     else if(m==='qc_row_pass')record=await qcPassReceiptRow(db,p.record||{},a,req);
+    else if(m==='qc_bulk_pass')record=await qcPassSelectedRows(db,p.record||{},a,req);
     else if(m==='qc_quick_pass')record=await quickQcPass(db,p.record||{},a,req);
     else if(m==='qc_edit')record=await editQc(db,p.record||{},a);
     else if(m==='rework_issue')record=await saveReworkIssue(db,p.record||{},a,req);
