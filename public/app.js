@@ -657,6 +657,37 @@ async function renderQcReceiptTable(force=false){
       key:'module:qc:receipt-queue',title:'QC Receipt Queue',items,
       columns:['RECEIPT_ID','RECEIPT_DATE','ISSUE_ID','VENDOR','STYLE','COLOR','SIZE_NAME','RECEIVED_QTY','QC_DONE','PASS_QTY','REWORK_QTY','REJECT_QTY','QC_PENDING','STATUS','__ACTION'],
       filters:['STYLE','COLOR','VENDOR','STATUS'],
+      renderSelectionActions:rows=>canAction('qc','create')?'<button type="button" class="btn teal qc-bulk-open">QC Pass Selected</button>':'',
+      bindSelectionActions:(rows,host)=>{
+        const btn=host.querySelector('.qc-bulk-open');if(!btn)return;
+        btn.onclick=()=>{
+          const eligible=rows.filter(x=>Number(x.QC_PENDING)>0);
+          if(!eligible.length)return toast('Select at least one pending QC row. Completed rows cannot be processed again.','bad',4500);
+          if(eligible.length>100)return toast('Select up to 100 pending rows at a time.','bad',4500);
+          $('#modalBody').innerHTML=`<div class="panel-head"><div><h3>QC Pass Selected</h3><small>${eligible.length} pending rows selected · completed rows excluded</small></div><button type="button" class="btn ghost" id="closeModal">Close</button></div><form id="bulkQcForm"><div class="field"><label>QC Date</label><input type="date" name="QC_DATE" value="${todayLocal()}" required></div><div class="table-wrap"><table class="data"><thead><tr><th>Receipt</th><th>Size</th><th>Pending</th><th>Pass</th><th>Balance Action</th></tr></thead><tbody>${eligible.map((x,i)=>`<tr data-qc-row="${i}"><td>${esc(x.RECEIPT_ID)}</td><td>${esc(x.SIZE_NAME)}</td><td>${x.QC_PENDING}</td><td><input class="qc-bulk-pass" type="number" min="0" max="${x.QC_PENDING}" step="1" value="${x.QC_PENDING}" style="width:75px"></td><td><select class="qc-bulk-disposition"><option value="">All pass</option><option value="REWORK">Rework</option><option value="REJECT">Reject</option></select></td></tr>`).join('')}</tbody></table></div><div class="smart-note" id="bulkQcSummary">Review quantities before saving. All selected rows save together.</div><div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary" id="bulkQcSubmit">Save Selected QC</button></div></form>`;
+          $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+          const form=$('#bulkQcForm');
+          const review=()=>{
+            const trs=[...form.querySelectorAll('[data-qc-row]')];let total=0,passed=0,fail='';
+            for(const tr of trs){const i=Number(tr.dataset.qcRow),max=Number(eligible[i].QC_PENDING),pass=Number(tr.querySelector('.qc-bulk-pass').value),disp=tr.querySelector('.qc-bulk-disposition').value;
+              if(!Number.isInteger(pass)||pass<0||pass>max)fail='Invalid Pass Qty for '+eligible[i].SIZE_NAME;
+              else if(pass<max&&!disp)fail='Choose Rework/Reject for '+eligible[i].SIZE_NAME;
+              total+=max;passed+=pass}
+            $('#bulkQcSummary').textContent=fail||('QC '+total+' pieces · Pass '+passed+' · Rework/Reject '+(total-passed)+' · '+eligible.length+' rows');
+            $('#bulkQcSubmit').disabled=!!fail;
+            return !fail
+          };
+          form.addEventListener('input',review);form.addEventListener('change',review);review();
+          form.onsubmit=async e=>{
+            e.preventDefault();if(!review())return;
+            const items=eligible.map((x,i)=>{const tr=form.querySelector('[data-qc-row="'+i+'"]');return{RECEIPT_ID:x.RECEIPT_ID,SIZE_ID:x.SIZE_ID,PASS_QTY:Number(tr.querySelector('.qc-bulk-pass').value),DISPOSITION:tr.querySelector('.qc-bulk-disposition').value}});
+            if(!confirm('Save QC for '+items.length+' selected pending rows?'))return;
+            const save=$('#bulkQcSubmit');save.disabled=true;
+            try{await api('/api/data',{method:'POST',activity:'Saving selected QC rows…',success:'Selected QC entries saved',body:JSON.stringify({module:'qc_bulk_pass',record:{items,QC_DATE:form.elements.QC_DATE.value},requestId:newRequestId()})});dropCaches();closeModal();go('qc',true)}
+            catch(err){toast(err.message,'bad',5500);review()}
+          }
+        }
+      },
       actionRenderer:r=>Number(r.QC_PENDING)>0&&canAction('qc','create')?
         `<div class="qc-inline-action"><label>Pass <input class="qc-inline-pass" type="number" min="0" max="${r.QC_PENDING}" step="1" value="${r.QC_PENDING}" aria-label="Pass quantity"></label><select class="qc-inline-disposition" aria-label="Non-pass disposition"><option value="">Remaining…</option><option value="REWORK">Rework</option><option value="REJECT">Reject</option></select><button class="btn teal qc-inline-save" type="button" data-idx="${r.__gridIndex}">QC Pass</button>${Number(r.QC_DONE)>0?`<button class="btn ghost qc-manage-row" type="button" data-idx="${r.__gridIndex}">Manage</button>`:''}</div>`:
         (Number(r.QC_DONE)>0&&canAction('qc','view')?`<button class="btn ghost qc-manage-row" type="button" data-idx="${r.__gridIndex}">Manage QC</button>`:'<span class="badge ok">QC Done</span>'),
