@@ -647,9 +647,40 @@ async function renderStitchingSizeView(host,onTrail){
   }catch(e){host.innerHTML='';toast(e.message,'bad',4500)}
 }
 
+async function renderQcReceiptTable(force=false){
+  const panel=$('#stage');
+  panel.innerHTML=`<section class="panel"><div class="panel-head"><div><h3>QC & Rework — Stitching Receipts</h3><small>Received garments appear here automatically. Edit Pass Qty and click QC Pass; remaining pieces must be marked Rework or Reject.</small></div></div><div id="gridHost">Loading receipts…</div></section>`;
+  try{
+    const d=await api('/api/data?module=qc_receipts',{activity:'Loading received garments for QC…'});
+    const items=d.items||[];
+    await mountDataGrid($('#gridHost'),{
+      key:'module:qc:receipt-queue',title:'QC Receipt Queue',items,
+      columns:['RECEIPT_ID','RECEIPT_DATE','ISSUE_ID','VENDOR','STYLE','COLOR','SIZE_NAME','RECEIVED_QTY','QC_DONE','QC_PENDING','STATUS','__ACTION'],
+      filters:['STYLE','COLOR','VENDOR','STATUS'],
+      actionRenderer:r=>Number(r.QC_PENDING)>0&&canAction('qc','create')?
+        `<div class="qc-inline-action"><label>Pass <input class="qc-inline-pass" type="number" min="0" max="${r.QC_PENDING}" step="1" value="${r.QC_PENDING}" aria-label="Pass quantity"></label><select class="qc-inline-disposition" aria-label="Non-pass disposition"><option value="">Remaining…</option><option value="REWORK">Rework</option><option value="REJECT">Reject</option></select><button class="btn teal qc-inline-save" type="button" data-idx="${r.__gridIndex}">QC Pass</button></div>`:
+        '<span class="badge ok">QC Done</span>',
+      bindActions:(pageRows,host)=>{
+        host.querySelectorAll('.qc-inline-save').forEach(btn=>btn.onclick=async()=>{
+          const r=items[Number(btn.dataset.idx)],wrap=btn.closest('.qc-inline-action'),passInput=wrap.querySelector('.qc-inline-pass'),pass=Number(passInput.value),disposition=wrap.querySelector('.qc-inline-disposition').value;
+          if(!Number.isInteger(pass)||pass<0||pass>Number(r.QC_PENDING))return toast('Pass quantity must be between 0 and '+r.QC_PENDING,'bad',4000);
+          const remainder=Number(r.QC_PENDING)-pass;
+          if(remainder&&!disposition)return toast('Select Rework or Reject for remaining '+remainder+' pieces.','bad',4500);
+          if(!confirm('QC Pass '+pass+' pieces of '+r.SIZE_NAME+' from receipt '+r.RECEIPT_ID+(remainder?' and mark '+remainder+' as '+disposition:'')+'?'))return;
+          btn.disabled=true;
+          try{
+            await api('/api/data',{method:'POST',activity:'Saving QC result…',success:'QC saved for '+r.SIZE_NAME,body:JSON.stringify({module:'qc_row_pass',record:{RECEIPT_ID:r.RECEIPT_ID,SIZE_ID:r.SIZE_ID,PASS_QTY:pass,DISPOSITION:disposition,QC_DATE:todayLocal()},requestId:newRequestId()})});
+            dropCaches();go('qc',true)
+          }catch(err){toast(err.message,'bad',5000);btn.disabled=false}
+        })
+      }
+    });
+  }catch(e){toast(e.message,'bad',4500);$('#gridHost').textContent='Could not load stitching receipts: '+e.message}
+}
 async function renderModule(m,force=false){
   const cfg=configs[m],s=$('#stage');
   if(m==='dye')return renderDyeModule(force);
+  if(m==='qc')return renderQcReceiptTable(force);
   s.innerHTML=`<section class="panel">
     <div class="panel-head"><div><h3>${cfg.title}</h3><small>Summary, transaction detail and full genealogy</small></div>${canAction(m,'create')?`<button class="btn teal" id="newBtn">+ ${cfg.action}</button>`:''}</div>
     <div class="master-tabs module-view-tabs" id="moduleViewTabs">
