@@ -549,6 +549,9 @@ async function viewQcReceiptQueue(db){
   const qc=await rows(db,`SELECT CHALLAN_ID,SIZE,SUM(QC_QTY) QC_QTY,SUM(PASS_QTY) PASS_QTY,SUM(REWORK_QTY) REWORK_QTY,SUM(REJECT_QTY) REJECT_QTY
     FROM qc_events WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' AND COALESCE(REWORK_CHALLAN_ID,'')=''
     GROUP BY CHALLAN_ID,SIZE`);
+  const records=await rows(db,"SELECT QC_ID,CHALLAN_ID,SIZE,QC_QTY,PASS_QTY,REWORK_QTY,REJECT_QTY,QC_DATE,NOTES FROM qc_events WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%' AND COALESCE(REWORK_CHALLAN_ID,'')='' ORDER BY CREATED_AT,QC_ID");
+  const qcRecords=new Map();
+  for(const x of records){const k=String(x.CHALLAN_ID)+'|'+String(x.SIZE);if(!qcRecords.has(k))qcRecords.set(k,[]);qcRecords.get(k).push(x)}
   const done=new Map(qc.map(x=>[String(x.CHALLAN_ID)+'|'+String(x.SIZE),{qc:n(x.QC_QTY),pass:n(x.PASS_QTY),rework:n(x.REWORK_QTY),reject:n(x.REJECT_QTY)}]));
   return receipts.map(r=>{
     const key=String(r.CHALLAN_ID)+'|'+String(r.SIZE_ID),d=done.get(key)||{qc:0,pass:0,rework:0,reject:0};
@@ -558,7 +561,7 @@ async function viewQcReceiptQueue(db){
     const pass=Math.min(count,d.pass),rework=Math.min(count-pass,d.rework),reject=Math.min(count-pass-rework,d.reject);
     d.qc-=count;d.pass-=pass;d.rework-=rework;d.reject-=reject;
     const pending=Math.max(0,qty-count);
-    return {...r,RECEIVED_QTY:qty,QC_DONE:count,QC_PENDING:pending,PASS_QTY:pass,REWORK_QTY:rework,REJECT_QTY:reject,STATUS:pending?'PENDING QC':'QC DONE'}
+    return {...r,RECEIVED_QTY:qty,QC_DONE:count,QC_PENDING:pending,PASS_QTY:pass,REWORK_QTY:rework,REJECT_QTY:reject,QC_RECORDS:qcRecords.get(key)||[],STATUS:pending?'PENDING QC':'QC DONE'}
   });
 }
 async function qcPassReceiptRow(db,r,a,req=''){
