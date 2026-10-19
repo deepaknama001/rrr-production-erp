@@ -649,7 +649,7 @@ async function renderStitchingSizeView(host,onTrail){
 
 async function renderQcReceiptTable(force=false){
   const panel=$('#stage');
-  panel.innerHTML=`<section class="panel"><div class="panel-head"><div><h3>QC & Rework — Stitching Receipts</h3><small>Received garments appear here automatically. Edit Pass Qty and click QC Pass; remaining pieces must be marked Rework or Reject.</small></div></div><div id="gridHost">Loading receipts…</div></section>`;
+  panel.innerHTML=`<section class="panel qc-receipt-panel"><div class="panel-head"><div><h3>QC & Rework — Stitching Receipts</h3><small>Received garments appear here automatically. Edit Pass Qty and click QC Pass; remaining pieces must be marked Rework or Reject.</small></div></div><div id="gridHost">Loading receipts…</div></section>`;
   try{
     const d=await api('/api/data?module=qc_receipts',{activity:'Loading received garments for QC…'});
     const items=d.items||[];
