@@ -659,8 +659,16 @@ async function renderQcReceiptTable(force=false){
       filters:['STYLE','COLOR','VENDOR','STATUS'],
       actionRenderer:r=>Number(r.QC_PENDING)>0&&canAction('qc','create')?
         `<div class="qc-inline-action"><label>Pass <input class="qc-inline-pass" type="number" min="0" max="${r.QC_PENDING}" step="1" value="${r.QC_PENDING}" aria-label="Pass quantity"></label><select class="qc-inline-disposition" aria-label="Non-pass disposition"><option value="">Remaining…</option><option value="REWORK">Rework</option><option value="REJECT">Reject</option></select><button class="btn teal qc-inline-save" type="button" data-idx="${r.__gridIndex}">QC Pass</button></div>`:
-        '<span class="badge ok">QC Done</span>',
+        (Number(r.QC_DONE)>0&&canAction('qc','view')?`<button class="btn ghost qc-manage-row" type="button" data-idx="${r.__gridIndex}">Manage QC</button>`:'<span class="badge ok">QC Done</span>'),
       bindActions:(pageRows,host)=>{
+        host.querySelectorAll('.qc-manage-row').forEach(btn=>btn.onclick=()=>{
+          const r=items[Number(btn.dataset.idx)],records=r.QC_RECORDS||[];
+          if(!records.length)return toast('No linked QC record found. Refresh and retry.','bad',4000);
+          if(records.length===1)return openQcManage({QC_ID:records[0].QC_ID});
+          $('#modalBody').innerHTML=`<div class="panel-head"><div><h3>Manage QC Entries</h3><small>${esc(r.ISSUE_ID)} · ${esc(r.SIZE_NAME)} · multiple QC entries</small></div><button class="btn ghost" id="closeModal">Close</button></div><div class="history-list">${records.map(x=>`<div><b>${esc(x.QC_ID)}</b><span>Checked ${Number(x.QC_QTY)} · Pass ${Number(x.PASS_QTY)} · Rework ${Number(x.REWORK_QTY)} · Reject ${Number(x.REJECT_QTY)}</span><button type="button" class="btn ghost qc-open-specific" data-qc="${esc(x.QC_ID)}">Manage</button></div>`).join('')}</div><div class="smart-note">Historical QC records are linked to issue and size. Select the correct QC entry before editing.</div>`;
+          $('#modal').classList.remove('hidden');$('#closeModal').onclick=closeModal;
+          document.querySelectorAll('.qc-open-specific').forEach(b=>b.onclick=()=>openQcManage({QC_ID:b.dataset.qc}));
+        });
         host.querySelectorAll('.qc-inline-save').forEach(btn=>btn.onclick=async()=>{
           const r=items[Number(btn.dataset.idx)],wrap=btn.closest('.qc-inline-action'),passInput=wrap.querySelector('.qc-inline-pass'),pass=Number(passInput.value),disposition=wrap.querySelector('.qc-inline-disposition').value;
           if(!Number.isInteger(pass)||pass<0||pass>Number(r.QC_PENDING))return toast('Pass quantity must be between 0 and '+r.QC_PENDING,'bad',4000);
