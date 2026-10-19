@@ -847,8 +847,12 @@ document.addEventListener('click',e=>{
   const btn=e.target.closest('.compact-action-btn');
   if(btn){
     e.stopPropagation();
-    const menu=btn.parentElement?.querySelector('.compact-action-menu');if(!menu)return;
+    // Portal the dropdown to <body>, outside sticky table cells and scroll clipping.
+    // The existing action button handlers stay attached when the node is moved.
+    const menu=btn._rrrActionMenu||(btn._rrrActionMenu=btn.parentElement?.querySelector('.compact-action-menu'));
+    if(!menu)return;
     const opening=menu.classList.contains('hidden');closeCompactActionMenus(menu);
+    if(opening&&menu.parentElement!==document.body)document.body.appendChild(menu);
     menu.classList.toggle('hidden');
     if(opening){
       const r=btn.getBoundingClientRect(),w=170,gap=5;
