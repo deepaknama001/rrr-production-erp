@@ -657,6 +657,13 @@ async function renderModule(m,force=false){
     </div>
     <div id="gridHost">Loading…</div>
   </section>`;
+  if(m==='qc'&&canAction('qc','create')){
+    const header=$('#newBtn')?.parentElement;
+    if(header){
+      const q=document.createElement('button');q.type='button';q.className='btn teal';q.textContent='✓ Quick QC Pass';q.style.marginRight='8px';q.onclick=openQuickQcPass;
+      $('#newBtn').before(q);
+    }
+  }
   if($('#newBtn'))$('#newBtn').onclick=()=>openActionForm(m);
   try{
     const d=await getCachedModule(m,force),items=d.items||[],summaries=summaryForModule(m,items);
@@ -1544,6 +1551,44 @@ async function openStitchingIssue(){
   };
 }
 
+async function openQuickQcPass(){
+  let l;
+  try{l=await getLookups(true)}catch(e){return toast(e.message,'bad',4500)}
+  const challans=l.stitchingChallans||[];
+  if(!challans.length)return toast('No received garments pending QC. Receive from Stitching first.','bad',4500);
+  $('#modalBody').innerHTML=`
+    <div class="panel-head"><div><h3>Quick QC Pass</h3><small>Pass all received garments pending QC, size-wise, in one action.</small></div><button type="button" class="btn ghost" id="closeModal">Close</button></div>
+    <form id="quickQcForm"><div class="form-grid">
+      <div class="field"><label>QC Date</label><input name="QC_DATE" type="date" value="${todayLocal()}" required></div>
+      <div class="field"><label>Cutting & Stitching Issue</label><select id="quickQcChallan" required><option value="">Select issue</option>${challans.map(x=>`<option value="${esc(x.CHALLAN_ID)}">${esc(x.ISSUE_ID||x.CHALLAN_ID)} · ${esc(x.VENDOR_NAME||'')} · ${Number(x.QC_PENDING||0)} pending</option>`).join('')}</select></div>
+      <div class="field wide"><label>Notes (optional)</label><input name="NOTES" placeholder="All garments checked and passed"></div>
+    </div><div id="quickQcPreview" class="smart-note">Select an issue to review received quantities pending QC.</div>
+    <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button id="quickQcSubmit" class="btn primary" disabled>Pass All Pending Sizes</button></div></form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  let lines=[],selected='';
+  $('#quickQcChallan').onchange=async e=>{
+    selected=e.target.value;lines=[];$('#quickQcSubmit').disabled=true;$('#quickQcPreview').textContent='Loading received sizes…';
+    if(!selected){$('#quickQcPreview').textContent='Select an issue.';return}
+    try{
+      const id=selected,d=await fetchDetail('stitching',id);if(id!==selected)return;
+      lines=(d.qcPendingLines||[]).filter(x=>Number(x.PENDING_QTY)>0);
+      const total=lines.reduce((n,x)=>n+Number(x.PENDING_QTY),0);
+      $('#quickQcPreview').innerHTML=lines.length?`<b>${lines.length} sizes · ${total} pieces will PASS QC</b><div class="mini-pills" style="margin-top:12px">${lines.map(x=>`<span>${esc(x.SIZE_NAME)} <b>${Number(x.PENDING_QTY)}</b></span>`).join('')}</div><small>Any defective pieces? Use the detailed QC Entry instead. This action passes all listed pieces.</small>`:'No received garments remain pending QC.';
+      $('#quickQcSubmit').disabled=!lines.length;
+    }catch(err){$('#quickQcPreview').textContent=err.message;toast(err.message,'bad',4000)}
+  };
+  $('#quickQcForm').onsubmit=async e=>{
+    e.preventDefault();if(!selected||!lines.length)return;
+    const btn=$('#quickQcSubmit'),total=lines.reduce((n,x)=>n+Number(x.PENDING_QTY),0);
+    if(!confirm('Pass QC for all '+total+' pending pieces across '+lines.length+' sizes?'))return;
+    btn.disabled=true;
+    try{
+      const data=Object.fromEntries(new FormData(e.target).entries());
+      await api('/api/data',{method:'POST',activity:'Passing QC for all sizes…',success:total+' pieces passed QC',body:JSON.stringify({module:'qc_quick_pass',record:{CHALLAN_ID:selected,QC_DATE:data.QC_DATE,NOTES:data.NOTES},requestId:newRequestId()})});
+      dropCaches();closeModal();go('qc',true);
+    }catch(err){toast(err.message,'bad',5000);btn.disabled=false}
+  }
+}
 async function openQcEntry(){
   const requestId=newRequestId();let l;try{l=await getLookups(false)}catch(e){return toast(e.message,'bad',3500)}
   const challans=l.stitchingChallans||[],defects=(l.defects||[]).filter(x=>isTrue(x.ACTIVE));
