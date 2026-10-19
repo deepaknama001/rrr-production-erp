@@ -1027,6 +1027,8 @@ async function editRaw(db,r,a,req=''){
   const roll=String(r.ROLL_ID||''),old=await row(db,'SELECT * FROM raw_inward WHERE ROLL_ID=?',roll);
   if(!old)throw err('Raw roll not found.',404);
   const issued=n((await row(db,'SELECT COALESCE(SUM(ISSUE_MTR),0) q FROM dye_jobs WHERE ROLL_ID=? AND COALESCE(STATUS,\'\') NOT LIKE \'CANCELLED%\'',roll))?.q);
+  if(String(old.STATUS||'').toUpperCase().startsWith('CANCELLED'))throw err('Cancelled raw inward cannot be edited.',409);
+  if(issued>0.0001)throw err('Trail dependency lock: Raw roll issued to Dyeing ('+issued+' m). Reverse all linked active dye batches first, then edit the raw inward.',409);
   const newQty=n(r.INWARD_MTR??old.INWARD_MTR);requirePos(newQty,'Inward meter');
   if(newQty+0.0001<issued)throw err('Inward meter cannot be less than already-issued '+issued+' m.',409);
   const newFabric=String(r.FABRIC_ID??old.FABRIC_ID);
