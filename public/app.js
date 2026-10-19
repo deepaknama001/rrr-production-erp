@@ -484,9 +484,30 @@ async function mountDataGrid(container,opt){
     container.querySelector('.density-btn').onclick=()=>{prefs.density=prefs.density==='compact'?'comfortable':'compact';saveGridPrefs(key,prefs);render()};
     container.querySelector('.export-scope').onchange=e=>{prefs.exportScope=e.target.value;saveGridPrefs(key,prefs)};
     container.querySelectorAll('.col-resizer').forEach(grip=>grip.onmousedown=e=>{e.preventDefault();e.stopPropagation();const k=grip.dataset.resize,th=grip.closest('th'),sx=e.clientX,sw=th.getBoundingClientRect().width;const move=ev=>{prefs.columnWidths[k]=Math.max(70,Math.min(520,sw+ev.clientX-sx));th.style.width=prefs.columnWidths[k]+'px';th.style.minWidth=prefs.columnWidths[k]+'px';th.style.maxWidth=prefs.columnWidths[k]+'px'};const up=()=>{document.removeEventListener('mousemove',move);document.removeEventListener('mouseup',up);saveGridPrefs(key,prefs);render()};document.addEventListener('mousemove',move);document.addEventListener('mouseup',up)});
-    const pageIds=pageRows.map(r=>r.__gridIndex),selectPage=container.querySelector('.select-page');if(selectPage){const all=pageIds.length&&pageIds.every(x=>selected.has(x));selectPage.checked=all;selectPage.indeterminate=!all&&pageIds.some(x=>selected.has(x));selectPage.onchange=()=>{for(const x of pageIds)selectPage.checked?selected.add(x):selected.delete(x);render()}}
-    container.querySelectorAll('.row-select').forEach(cb=>cb.onchange=()=>{const x=Number(cb.dataset.ridx);cb.checked?selected.add(x):selected.delete(x);render()});
-    container.querySelector('.clear-selection')?.addEventListener('click',()=>{selected.clear();render()});
+    const pageIds=pageRows.map(r=>r.__gridIndex),selectPage=container.querySelector('.select-page');
+    // Keep existing table rows, sort and scroll positions stable when selecting.
+    // Only the footer selection controls change (no grid re-render).
+    const refreshSelection=()=>{
+      const all=pageIds.length&&pageIds.every(x=>selected.has(x));
+      if(selectPage){selectPage.checked=!!all;selectPage.indeterminate=!all&&pageIds.some(x=>selected.has(x))}
+      const selectedRows=[...selected].map(i=>items[i]).filter(Boolean);
+      const controls=container.querySelector('.rows-control');
+      controls.querySelector('.clear-selection')?.remove();
+      controls.querySelector('.grid-selection-actions')?.remove();
+      if(selectedRows.length){
+        const clear=document.createElement('button');clear.className='clear-selection';clear.type='button';clear.textContent='Clear '+selectedRows.length+' selected';
+        clear.onclick=()=>{selected.clear();container.querySelectorAll('.row-select').forEach(cb=>cb.checked=false);refreshSelection()};
+        controls.appendChild(clear);
+        const actions=opt.renderSelectionActions?opt.renderSelectionActions(selectedRows):'';
+        if(actions){
+          const wrap=document.createElement('span');wrap.className='grid-selection-actions';wrap.innerHTML=actions;controls.appendChild(wrap);
+          opt.bindSelectionActions?.(selectedRows,container,rt);
+        }
+      }
+    };
+    if(selectPage)selectPage.onchange=()=>{for(const x of pageIds)selectPage.checked?selected.add(x):selected.delete(x);container.querySelectorAll('.row-select').forEach(cb=>cb.checked=selected.has(Number(cb.dataset.ridx)));refreshSelection()};
+    container.querySelectorAll('.row-select').forEach(cb=>cb.onchange=()=>{const x=Number(cb.dataset.ridx);cb.checked?selected.add(x):selected.delete(x);refreshSelection()});
+    container.querySelector('.clear-selection')?.addEventListener('click',()=>{selected.clear();container.querySelectorAll('.row-select').forEach(cb=>cb.checked=false);refreshSelection()});
     container.querySelector('.page-size').onchange=e=>{prefs.pageSize=Number(e.target.value);prefs.page=1;saveGridPrefs(key,prefs);render()};
     container.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>{prefs.page=Number(b.dataset.page);saveGridPrefs(key,prefs);render()});
     container.querySelector('.prev').onclick=()=>{if(prefs.page>1){prefs.page--;saveGridPrefs(key,prefs);render()}};
