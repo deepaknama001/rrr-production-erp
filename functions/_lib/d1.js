@@ -1483,7 +1483,7 @@ async function editProduction(db,r,a,req=''){
   const stitch=n((await row(db,"SELECT COUNT(*) c FROM stitching_jobs WHERE PRODUCTION_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",id))?.c);
   const newAlloc=n(r.ALLOCATED_MTR??old.ALLOCATED_MTR),newStyle=String(r.STYLE_ID??old.STYLE_ID),newBatch=String(r.DYE_BATCH_ID??old.DYE_BATCH_ID),newDate=dateOnly(r.PLAN_DATE||old.PLAN_DATE),planned=intQty(r.PLANNED_QTY??old.PLANNED_QTY,'Planned garment quantity');let source={FABRIC_ID:old.FABRIC_ID,COLOR_ID:old.COLOR_ID};
   if(cut||stitch){
-    if(Math.abs(newAlloc-n(old.ALLOCATED_MTR))>.0001||newStyle!==String(old.STYLE_ID)||newBatch!==String(old.DYE_BATCH_ID))throw err('Source batch, style and allocated meter are locked after cutting/stitching starts.',409)
+    throw err('Trail dependency lock: Production has active Cutting/Stitching records. Reverse linked downstream records before editing Production.',409);
   }else{
     requirePos(newAlloc,'Allocated meter');
     const st=await row(db,'SELECT * FROM styles WHERE STYLE_ID=? AND ACTIVE=1',newStyle);if(!st)throw err('Select a valid active style.',400);
