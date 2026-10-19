@@ -666,6 +666,58 @@ async function warehouseReady(db){
     FROM q LEFT JOIN h USING(PRODUCTION_BATCH_ID,STYLE_ID,COLOR_ID,SIZE)
     WHERE q.ACCEPTED_QTY-COALESCE(h.HANDED_QTY,0)>0`)
 }
+async function warehouseReadyQueue(db){
+  return rows(db,`WITH ready AS (
+      SELECT PRODUCTION_BATCH_ID,STYLE_ID,COLOR_ID,SIZE,SUM(FINAL_ACCEPTED_QTY) QC_PASSED
+      FROM qc_events WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'
+      GROUP BY PRODUCTION_BATCH_ID,STYLE_ID,COLOR_ID,SIZE
+    ), handed AS (
+      SELECT PRODUCTION_BATCH_ID,STYLE_ID,COLOR_ID,SIZE,SUM(ACCEPTED_QTY) HANDED_QTY
+      FROM warehouse_handover WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'
+      GROUP BY PRODUCTION_BATCH_ID,STYLE_ID,COLOR_ID,SIZE
+    )
+    SELECT q.PRODUCTION_BATCH_ID,q.STYLE_ID,q.COLOR_ID,q.SIZE AS SIZE_ID,COALESCE(st.STYLE_NAME,q.STYLE_ID) STYLE,
+    COALESCE(c.COLOR_NAME,q.COLOR_ID) COLOR,COALESCE(sz.SIZE_NAME,q.SIZE) SIZE_NAME,
+    q.QC_PASSED,COALESCE(h.HANDED_QTY,0) HANDED_QTY,
+    MAX(0,q.QC_PASSED-COALESCE(h.HANDED_QTY,0)) READY_QTY
+    FROM ready q LEFT JOIN handed h USING(PRODUCTION_BATCH_ID,STYLE_ID,COLOR_ID,SIZE)
+    LEFT JOIN styles st ON st.STYLE_ID=q.STYLE_ID LEFT JOIN colors c ON c.COLOR_ID=q.COLOR_ID
+    LEFT JOIN sizes sz ON sz.SIZE_ID=q.SIZE
+    WHERE q.QC_PASSED>COALESCE(h.HANDED_QTY,0)
+    ORDER BY q.PRODUCTION_BATCH_ID,st.STYLE_NAME,c.COLOR_NAME,sz.SORT_ORDER`);
+}
+async function saveWarehouseBulk(db,r,a,req=''){
+  const input=Array.isArray(r.items)?r.items:[];
+  if(!input.length||input.length>100)throw err('Select 1 to 100 warehouse-ready rows.',400);
+  const items=[],seen=new Set();
+  for(const x of input){
+    const pb=String(x.PRODUCTION_BATCH_ID||''),style=String(x.STYLE_ID||''),color=String(x.COLOR_ID||''),size=String(x.SIZE_ID||'');
+    const key=[pb,style,color,size].join('|');
+    if(!pb||!style||!color||!size||seen.has(key))throw err('Missing or duplicated warehouse stock row.',409);
+    seen.add(key);
+    items.push({pb,style,color,size,key,qty:intQty(x.QTY,'Handover quantity',false)});
+  }
+  const locked=[];
+  try{
+    for(const x of [...items].sort((a,b)=>a.key.localeCompare(b.key))){
+      await acquireLock(db,'warehouse-ready:'+x.pb+':'+x.style+':'+x.color+':'+x.size,req);
+      locked.push(x);
+    }
+    const ready=await warehouseReadyQueue(db),balance=new Map(ready.map(x=>[[x.PRODUCTION_BATCH_ID,x.STYLE_ID,x.COLOR_ID,x.SIZE_ID].join('|'),Number(x.READY_QTY)]));
+    const date=dateOnly(r.HANDOVER_DATE),ref=String(r.WAREHOUSE_REF||''),notes=String(r.NOTES||''),t=now(),stmts=[],out=[];
+    for(const x of items){
+      const available=balance.get(x.key)||0;
+      if(x.qty>available)throw err('Warehouse-ready quantity changed for '+x.pb+' / '+x.size+'. Available: '+available+'. Refresh and retry.',409);
+      const id=await nextId(db,'WH');
+      stmts.push(db.prepare('INSERT INTO warehouse_handover(HANDOVER_ID,HANDOVER_DATE,PRODUCTION_BATCH_ID,STYLE_ID,COLOR_ID,SIZE,ACCEPTED_QTY,WAREHOUSE_RECEIVED_QTY,PENDING_QTY,WAREHOUSE_REF,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .bind(id,date,x.pb,x.style,x.color,x.size,x.qty,x.qty,0,ref,'RECEIVED',notes,a.userId,t,a.userId,t));
+      stmts.push(auditStmt(db,a,'BULK_HANDOVER','HANDOVER',id,'',JSON.stringify({key:x.key,qty:x.qty,received:x.qty})));
+      out.push({HANDOVER_ID:id,QTY:x.qty});
+    }
+    await db.batch(stmts);
+    return{count:out.length,total:out.reduce((sum,x)=>sum+x.QTY,0),items:out};
+  }finally{for(const x of locked.reverse())await releaseLock(db,'warehouse-ready:'+x.pb+':'+x.style+':'+x.color+':'+x.size)}
+}
 async function kpisD1(db){
   const raw=await row(db,`SELECT MAX(0,
     (SELECT COALESCE(SUM(INWARD_MTR),0) FROM raw_inward WHERE COALESCE(STATUS,'') NOT LIKE 'CANCELLED%')-
@@ -1058,8 +1110,8 @@ async function traceRecord(db,type,id){
   }
 }
 export async function getDataD1(env,{module,actorUserId,id='',type='',limit=100,offset=0,search='',user='',action='',dateFrom='',dateTo=''}){
-  await ensureSchema(env);const db=env.DB,m=String(module||'dashboard'),trailPerm=m==='trail'?({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[String(type||'').toLowerCase()]||null):null,perm=trailPerm||({raw:'raw',dye:'dye',dye_detail:'dye',production:'production',production_detail:'production',stitching:'stitching',stitching_size:'stitching',stitching_detail:'stitching',qc:'qc',qc_receipts:'qc',qc_detail:'qc',handover:'qc',handover_detail:'qc',reports:'reports'}[m]||null),a=await actor(db,actorUserId,perm,false);if(perm&&m!=='trail')await requireAction(db,a,perm,'view');
-  if(m==='dashboard'){a.actions=await actionPerms(db,a.userId);const canReports=a.admin||((a.permissions?.reports)&&a.actions?.reports?.view!==false),analytics=canReports?await operationsAnalytics(db):null;return{user:a,kpis:await kpisD1(db),alerts:analytics?{exceptionCount:analytics.exceptionCount,rates:analytics.rates,exceptions:analytics.exceptions.slice(0,8)}:{exceptionCount:0,rates:{},exceptions:[]}}};if(m==='trail'){await requireAction(db,a,trailPerm,'view');return{trail:await traceRecord(db,type,id)}};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='production_detail')return{detail:await getProductionDetail(db,String(id||''))};if(m==='stitching_detail')return{detail:await getStitchingDetail(db,String(id||''))};if(m==='qc_detail')return{detail:await getQcDetail(db,String(id||''))};if(m==='handover_detail')return{detail:await getHandoverDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='stitching_size')return await viewStitchSize(db);if(m==='qc')return{items:await viewQc(db)};if(m==='qc_receipts')return{items:await viewQcReceiptQueue(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db),analytics:await operationsAnalytics(db)};if(m==='audit'){
+  await ensureSchema(env);const db=env.DB,m=String(module||'dashboard'),trailPerm=m==='trail'?({raw:'raw',dye:'dye',production:'production',stitching:'stitching',qc:'qc',handover:'qc'}[String(type||'').toLowerCase()]||null):null,perm=trailPerm||({raw:'raw',dye:'dye',dye_detail:'dye',production:'production',production_detail:'production',stitching:'stitching',stitching_size:'stitching',stitching_detail:'stitching',qc:'qc',qc_receipts:'qc',qc_detail:'qc',handover:'qc',handover_ready:'qc',handover_detail:'qc',reports:'reports'}[m]||null),a=await actor(db,actorUserId,perm,false);if(perm&&m!=='trail')await requireAction(db,a,perm,'view');
+  if(m==='dashboard'){a.actions=await actionPerms(db,a.userId);const canReports=a.admin||((a.permissions?.reports)&&a.actions?.reports?.view!==false),analytics=canReports?await operationsAnalytics(db):null;return{user:a,kpis:await kpisD1(db),alerts:analytics?{exceptionCount:analytics.exceptionCount,rates:analytics.rates,exceptions:analytics.exceptions.slice(0,8)}:{exceptionCount:0,rates:{},exceptions:[]}}};if(m==='trail'){await requireAction(db,a,trailPerm,'view');return{trail:await traceRecord(db,type,id)}};if(m==='dye_detail')return{detail:await getDyeBatchDetail(db,String(id||''))};if(m==='production_detail')return{detail:await getProductionDetail(db,String(id||''))};if(m==='stitching_detail')return{detail:await getStitchingDetail(db,String(id||''))};if(m==='qc_detail')return{detail:await getQcDetail(db,String(id||''))};if(m==='handover_detail')return{detail:await getHandoverDetail(db,String(id||''))};if(m==='lookups')return{lookups:await lookupData(db)};if(m==='raw')return{items:await viewRaw(db)};if(m==='dye')return{items:await viewDye(db)};if(m==='production')return{items:await viewProd(db)};if(m==='stitching')return{items:await viewStitch(db)};if(m==='stitching_size')return await viewStitchSize(db);if(m==='qc')return{items:await viewQc(db)};if(m==='qc_receipts')return{items:await viewQcReceiptQueue(db)};if(m==='handover')return{items:await viewHandover(db)};if(m==='handover_ready')return{items:await warehouseReadyQueue(db)};if(m==='reports')return{items:[],kpis:await kpisD1(db),analytics:await operationsAnalytics(db)};if(m==='audit'){
     await requireAction(db,a,'reports','audit');
     const lim=Math.min(250,Math.max(10,Number(limit)||100)),off=Math.max(0,Number(offset)||0),w=[],b=[];
     if(search){w.push('(RECORD_ID LIKE ? OR MODULE LIKE ? OR ACTION LIKE ? OR USER_NAME LIKE ?)');const q='%'+String(search).slice(0,80)+'%';b.push(q,q,q,q)}
@@ -1829,7 +1881,7 @@ export async function saveRecordD1(env,p){
     production:'production',production_edit:'production',cutting_complete:'production',production_cancel:'production',
     cutstitch_bulk:'stitching',stitching:'stitching',stitching_edit:'stitching',stitching_receive:'stitching',stitching_receipt_cancel:'stitching',stitching_cancel:'stitching',
     qc:'qc',qc_receipts:'qc',qc_row_pass:'qc',qc_bulk_pass:'qc',qc_quick_pass:'qc',qc_edit:'qc',rework_issue:'qc',rework_receive:'qc',rework_cancel:'qc',qc_cancel:'qc',
-    handover:'qc',handover_edit:'qc',warehouse_receive:'qc',warehouse_receipt_cancel:'qc',handover_cancel:'qc'
+    handover:'qc',handover_ready:'qc',handover_bulk:'qc',handover_edit:'qc',warehouse_receive:'qc',warehouse_receipt_cancel:'qc',handover_cancel:'qc'
   },perm=moduleMap[m]||null,a=await actor(db,p.actorUserId,perm,false),req=String(p.requestId||'');a.auditMeta=p.auditMeta||{};
   const actionMap={
     raw:'create',raw_bulk:'create',raw_edit:'edit',raw_cancel:'cancel',
@@ -1837,7 +1889,7 @@ export async function saveRecordD1(env,p){
     production:'create',production_edit:'edit',cutting_complete:'edit',production_cancel:'cancel',
     cutstitch_bulk:'create',stitching:'create',stitching_edit:'edit',stitching_receive:'create',stitching_receipt_cancel:'cancel',stitching_cancel:'cancel',
     qc:'create',qc_row_pass:'create',qc_bulk_pass:'create',qc_quick_pass:'create',qc_edit:'edit',rework_issue:'create',rework_receive:'edit',rework_cancel:'cancel',qc_cancel:'cancel',
-    handover:'create',handover_edit:'edit',warehouse_receive:'create',warehouse_receipt_cancel:'cancel',handover_cancel:'cancel'
+    handover:'create',handover_bulk:'create',handover_edit:'edit',warehouse_receive:'create',warehouse_receipt_cancel:'cancel',handover_cancel:'cancel'
   };
   if(perm)await requireAction(db,a,perm,actionMap[m]||'create');
   if(m==='master')await actor(db,p.actorUserId,null,true);
@@ -1874,6 +1926,7 @@ export async function saveRecordD1(env,p){
     else if(m==='rework_cancel')record=await cancelRework(db,p.record||{},a);
     else if(m==='qc_cancel')record=await cancelQc(db,p.record||{},a);
     else if(m==='handover')record=await saveHandover(db,p.record||{},a,req);
+    else if(m==='handover_bulk')record=await saveWarehouseBulk(db,p.record||{},a,req);
     else if(m==='handover_edit')record=await editHandover(db,p.record||{},a);
     else if(m==='warehouse_receive')record=await saveWarehouseReceipt(db,p.record||{},a,req);
     else if(m==='warehouse_receipt_cancel')record=await cancelWarehouseReceipt(db,p.record||{},a);
