@@ -1025,7 +1025,7 @@ async function openRawManage(row){
   const suppliers=(l.vendors||[]).filter(v=>isTrue(v.ACTIVE)&&isTrue(v.FABRIC_SUPPLIER));
   const fabrics=(l.fabrics||[]).filter(x=>isTrue(x.ACTIVE));
   $('#modalBody').innerHTML=`
-    <div class="panel-head"><div><h3>Manage Raw Fabric</h3><small>${esc(row.ROLL_ID)} · ${locked?'partially locked because dye issue exists':'fully editable'}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
+    <div class="panel-head"><div><h3>Manage Raw Fabric</h3><small>${esc(row.ROLL_ID)} · ${locked?'locked: reverse linked Dyeing issues first':'fully editable'}</small></div><button class="btn ghost" id="closeModal">Close</button></div>
     <form id="rawManageForm"><div class="form-grid">
       <div class="field"><label>Inward Date</label><input name="INWARD_DATE" type="date" value="${esc(String(row.INWARD_DATE||'').slice(0,10))}"></div>
       <div class="field"><label>Supplier</label><select name="SUPPLIER_ID">${suppliers.map(v=>`<option value="${esc(v.VENDOR_ID)}" ${String(v.VENDOR_ID)===String(row.SUPPLIER_ID)?'selected':''}>${esc(v.VENDOR_NAME)}</option>`).join('')}</select></div>
@@ -1038,8 +1038,8 @@ async function openRawManage(row){
       <div class="field"><label>Lot Ref</label><input name="LOT_REF" value="${esc(row.LOT_REF||'')}"></div>
       <div class="field wide"><label>Notes</label><input name="NOTES" value="${esc(row.NOTES||'')}"></div>
     </div>
-    ${locked?'<div class="smart-note"><b>Dependency lock:</b> Fabric type and cancellation are blocked because some quantity is already issued to dye. Inward meter can still be corrected, but not below issued meter.</div>':''}
-    <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary">Save Correction</button></div></form>
+    ${locked?'<div class="smart-note"><b>Dependency lock:</b> Raw edit and cancel are blocked because this roll is already issued to Dyeing. Reverse the linked active dye batches first, then return to Raw Fabric.</div>':''}
+    <div class="form-actions"><button type="button" class="btn ghost" id="cancelModal">Close</button><button class="btn primary" ${locked?'disabled title="Reverse linked Dyeing issues first"':''}>Save Correction</button></div></form>
     ${!locked?'<div class="danger-zone"><div><b>Cancel mistaken inward</b><small>Removes this roll from usable stock while preserving audit history.</small></div><button class="btn danger" id="cancelRawBtn">Cancel Inward</button></div>':''}
   `;
   $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;mountAttachmentPanel('raw',row.ROLL_ID);
