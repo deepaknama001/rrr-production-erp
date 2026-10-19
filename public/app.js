@@ -655,7 +655,7 @@ async function renderQcReceiptTable(force=false){
     const items=d.items||[];
     await mountDataGrid($('#gridHost'),{
       key:'module:qc:receipt-queue',title:'QC Receipt Queue',items,
-      columns:['RECEIPT_ID','RECEIPT_DATE','ISSUE_ID','VENDOR','STYLE','COLOR','SIZE_NAME','RECEIVED_QTY','QC_DONE','QC_PENDING','STATUS','__ACTION'],
+      columns:['RECEIPT_ID','RECEIPT_DATE','ISSUE_ID','VENDOR','STYLE','COLOR','SIZE_NAME','RECEIVED_QTY','QC_DONE','PASS_QTY','REWORK_QTY','REJECT_QTY','QC_PENDING','STATUS','__ACTION'],
       filters:['STYLE','COLOR','VENDOR','STATUS'],
       actionRenderer:r=>Number(r.QC_PENDING)>0&&canAction('qc','create')?
         `<div class="qc-inline-action"><label>Pass <input class="qc-inline-pass" type="number" min="0" max="${r.QC_PENDING}" step="1" value="${r.QC_PENDING}" aria-label="Pass quantity"></label><select class="qc-inline-disposition" aria-label="Non-pass disposition"><option value="">Remaining…</option><option value="REWORK">Rework</option><option value="REJECT">Reject</option></select><button class="btn teal qc-inline-save" type="button" data-idx="${r.__gridIndex}">QC Pass</button></div>`:
