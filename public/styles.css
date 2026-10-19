@@ -724,3 +724,12 @@ button.is-busy{pointer-events:none;display:inline-flex;align-items:center;justif
 /* v0.52 Cutting & Stitching Size View */
 .size-view-legend{display:inline-flex;align-items:center;gap:5px;margin:0 0 8px;padding:7px 10px;border:1px solid var(--line);border-radius:9px;background:#f8fafc;font-size:9px;color:#677386}
 .size-view-legend b{color:#263244}
+
+/* QC receipt queue: editable inline pass control without cramped sticky action column */
+.qc-receipt-panel .data th.action-sticky,.qc-receipt-panel .data td.action-sticky{width:310px!important;min-width:310px!important;max-width:340px!important;text-align:left!important}
+.qc-inline-action{display:flex;align-items:center;gap:7px;min-width:295px}
+.qc-inline-action label{display:flex;align-items:center;gap:5px;font-size:10px;font-weight:800;white-space:nowrap}
+.qc-inline-pass{width:62px;height:34px;border:1px solid #cbd5e1;border-radius:7px;padding:5px;font-weight:800}
+.qc-inline-disposition{width:96px;height:34px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;font-size:10px}
+.qc-inline-save{white-space:nowrap;min-height:34px;padding:5px 10px}
+@media(max-width:760px){.qc-receipt-panel .data td.action-sticky{width:auto!important;max-width:none!important;min-width:0!important}.qc-inline-action{flex-wrap:wrap;min-width:0}}
