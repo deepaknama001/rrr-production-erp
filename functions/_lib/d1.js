@@ -1207,10 +1207,10 @@ async function editDyeBatch(db,r,a){
   }
 
   const t=now();
-  await db.prepare('DELETE FROM dye_jobs WHERE DYE_BATCH_ID=?').bind(batch).run();
   const stmts=resolved.map(({rr,qty})=>db.prepare(
     'INSERT INTO dye_jobs(ROW_ID,DYE_BATCH_ID,ISSUE_DATE,DYE_VENDOR_ID,ROLL_ID,VENDOR_ROLL_NO,FABRIC_ID,COLOR_ID,ISSUE_MTR,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT,DYE_PLAN_ID) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
   ).bind(uuid(),batch,issueDate,vendor,rr.ROLL_ID,rr.VENDOR_ROLL_NO||'',old.FABRIC_ID,color,qty,'AT DYE VENDOR',notes,a.userId,t,a.userId,t,old.DYE_PLAN_ID));
+  stmts.unshift(db.prepare("UPDATE dye_jobs SET STATUS='CANCELLED',UPDATED_BY=?,UPDATED_AT=? WHERE DYE_BATCH_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'").bind(a.userId,t,batch));
   if(r.EXPECTED_DATE!==undefined)stmts.push(expectationStmt(db,'DYE',batch,r.EXPECTED_DATE,a.userId,'Dye expected return'));
   await db.batch(stmts);
   const after=await getDyeBatchDetail(db,batch);
