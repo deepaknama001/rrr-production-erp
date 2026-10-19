@@ -1558,7 +1558,7 @@ async function refreshStitchingHeader(db,challan,a){
   const received=await receivedLinesForChallan(db,challan),total=received.reduce((s,x)=>s+x.QTY,0),issued=(await issueLinesForChallan(db,challan)).reduce((s,x)=>s+x.QTY,0),pending=Math.max(0,issued-total),legacy={M:0,L:0,XL:0,'2XL':0,'3XL':0,OTHER:0};
   for(const x of received){const nm=legacySizeName(x.SIZE_NAME||x.SIZE_ID);if(nm)legacy[nm]+=x.QTY}
   const prod=await row(db,'SELECT STATUS FROM production_batches WHERE PRODUCTION_BATCH_ID=?',st.PRODUCTION_BATCH_ID),combined=/CUTTING\s*&\s*STITCHING/i.test(String(prod?.STATUS||''));
-  const nextStatus=total<=0?(combined?'AT CUTTING & STITCHING':'PENDING FROM VENDOR'):(pending>0?'PARTIAL RECEIVED':'RECEIVED COMPLETE');
+  const nextStatus=total<=0?(combined?'AT CUTTING & STITCHING':'PENDING FROM VENDOR'):(total>issued?'RECEIVED EXCESS':pending>0?'PARTIAL RECEIVED':'RECEIVED COMPLETE');
   assertTransition('stitching',st.STATUS,nextStatus);
   await db.prepare('UPDATE stitching_jobs SET M_RECEIVED=?,L_RECEIVED=?,XL_RECEIVED=?,"2XL_RECEIVED"=?,"3XL_RECEIVED"=?,OTHER_RECEIVED=?,TOTAL_RECEIVED=?,PENDING_QTY=?,STATUS=?,UPDATED_BY=?,UPDATED_AT=? WHERE CHALLAN_ID=?')
     .bind(legacy.M,legacy.L,legacy.XL,legacy['2XL'],legacy['3XL'],legacy.OTHER,total,pending,nextStatus,a.userId,now(),challan).run()
@@ -1566,11 +1566,11 @@ async function refreshStitchingHeader(db,challan,a){
 async function saveStitchingReceipt(db,r,a,req=''){
   const challan=String(r.CHALLAN_ID||''),st=await row(db,"SELECT * FROM stitching_jobs WHERE CHALLAN_ID=? AND COALESCE(STATUS,'') NOT LIKE 'CANCELLED%'",challan);if(!st)throw err('Invalid cutting & stitching issue.',400);
   const pending=await stitchingPendingLines(db,challan),bal=Object.fromEntries(pending.map(x=>[x.SIZE_ID,x.PENDING_QTY])),items=Array.isArray(r.items)?r.items:[],lines=[],seen=new Set();
-  for(const x of items){const sid=String(x.SIZE_ID||'');if(!sid)continue;if(seen.has(sid))throw err('Same size cannot appear twice.',409);seen.add(sid);const qty=intQty(x.QTY,'Receipt quantity');if(qty>(bal[sid]||0))throw err('Receipt exceeds pending quantity for selected size. Pending: '+(bal[sid]||0),409);if(qty>0)lines.push({SIZE_ID:sid,QTY:qty})}
+  for(const x of items){const sid=String(x.SIZE_ID||'');if(!sid)continue;if(seen.has(sid))throw err('Same size cannot appear twice.',409);seen.add(sid);const qty=intQty(x.QTY,'Receipt quantity');if(!Object.prototype.hasOwnProperty.call(bal,sid))throw err('Size is not issued on this challan.',409);if(qty>0)lines.push({SIZE_ID:sid,QTY:qty})}
   const total=lines.reduce((s,x)=>s+x.QTY,0);if(total<=0)throw err('Enter at least one received piece.',400);
   await acquireLock(db,'stitching:'+challan,req);
   try{
-    const fresh=await stitchingPendingLines(db,challan),fb=Object.fromEntries(fresh.map(x=>[x.SIZE_ID,x.PENDING_QTY]));for(const x of lines)if(x.QTY>(fb[x.SIZE_ID]||0))throw err('Pending quantity changed. Refresh and retry.',409);
+    const fresh=await stitchingPendingLines(db,challan),fb=new Set(fresh.map(x=>String(x.SIZE_ID)));for(const x of lines)if(!fb.has(String(x.SIZE_ID)))throw err('Issued sizes changed. Refresh and retry.',409);
     const id=await nextId(db,'SR'),t=now(),stmts=[db.prepare('INSERT INTO stitching_receipts(RECEIPT_ID,CHALLAN_ID,RECEIPT_DATE,STATUS,NOTES,CREATED_BY,CREATED_AT,UPDATED_BY,UPDATED_AT) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,challan,dateOnly(r.RECEIPT_DATE),'RECEIVED',String(r.NOTES||''),a.userId,t,a.userId,t)];
     for(const x of lines)stmts.push(db.prepare('INSERT INTO stitching_receipt_lines(LINE_ID,RECEIPT_ID,CHALLAN_ID,SIZE_ID,QTY,CREATED_AT,UPDATED_AT) VALUES(?,?,?,?,?,?,?)').bind(uuid(),id,challan,x.SIZE_ID,x.QTY,t,t));
     stmts.push(auditStmt(db,a,'STITCHING_RECEIVE','STITCHING',challan,'',JSON.stringify({receiptId:id,lines,total})));
