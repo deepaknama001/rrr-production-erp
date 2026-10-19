@@ -737,10 +737,65 @@ async function renderQcReceiptTable(force=false){
     });
   }catch(e){toast(e.message,'bad',4500);$('#gridHost').textContent='Could not load stitching receipts: '+e.message}
 }
+async function renderWarehouseReadyTable(){
+  const panel=$('#stage');
+  panel.innerHTML=`<section class="panel"><div class="panel-head"><div><h3>Warehouse Handover — QC Passed Stock</h3><small>Choose rows for handover. QC accepted stock and returned rework passes are included. Selected quantities are also marked Warehouse Received.</small></div><button class="btn ghost" id="whHistoryBtn">Handover History</button></div><div id="gridHost">Loading QC passed stock…</div></section>`;
+  $('#whHistoryBtn').onclick=()=>renderModuleWarehouseHistory();
+  try{
+    const data=await api('/api/data?module=handover_ready',{activity:'Loading warehouse-ready QC stock…'}),items=data.items||[];
+    await mountDataGrid($('#gridHost'),{
+      key:'module:warehouse:ready',title:'Warehouse Ready Stock',items,
+      columns:['PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE_NAME','QC_PASSED','HANDED_QTY','READY_QTY','__ACTION'],
+      filters:['STYLE','COLOR','SIZE_NAME'],
+      actionRenderer:r=>canAction('handover','create')?`<button type="button" class="btn teal warehouse-single" data-idx="${r.__gridIndex}">Handover</button>`:'—',
+      renderSelectionActions:rows=>canAction('handover','create')?'<button type="button" class="btn teal warehouse-bulk">Handover Selected</button>':'',
+      bindSelectionActions:(rows,host)=>{host.querySelector('.warehouse-bulk')?.addEventListener('click',()=>openWarehouseBulkReview(rows))},
+      bindActions:(pageRows,host)=>{host.querySelectorAll('.warehouse-single').forEach(b=>b.onclick=()=>openWarehouseBulkReview([items[Number(b.dataset.idx)]]))}
+    });
+  }catch(e){toast(e.message,'bad',5000);$('#gridHost').textContent='Could not load warehouse-ready stock: '+e.message}
+}
+async function renderModuleWarehouseHistory(){
+  const panel=$('#stage');panel.innerHTML=`<section class="panel"><div class="panel-head"><div><h3>Warehouse Handover History</h3><small>Existing handovers and linked receipts</small></div><button type="button" id="whBack" class="btn ghost">← Ready Stock</button></div><div id="gridHost">Loading…</div></section>`;
+  $('#whBack').onclick=()=>renderWarehouseReadyTable();
+  try{
+    const data=await api('/api/data?module=handover'),items=data.items||[];
+    await mountDataGrid($('#gridHost'),{key:'module:warehouse:history',items,title:'Handover History',
+      columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE_NAME','ACCEPTED_QTY','TOTAL_WAREHOUSE_RECEIVED','PENDING_QTY','STATUS','__ACTION'],
+      actionRenderer:r=>`<button type="button" class="btn ghost warehouse-manage" data-idx="${r.__gridIndex}">Manage</button>`,
+      bindActions:(rows,host)=>host.querySelectorAll('.warehouse-manage').forEach(b=>b.onclick=()=>openHandoverManage(items[Number(b.dataset.idx)]))
+    })
+  }catch(e){toast(e.message,'bad',4500)}
+}
+function openWarehouseBulkReview(rows){
+  const items=rows.filter(x=>Number(x.READY_QTY)>0);
+  if(!items.length)return toast('No QC passed stock selected.','bad',4000);
+  if(items.length>100)return toast('Select up to 100 rows.', 'bad',4000);
+  $('#modalBody').innerHTML=`<div class="panel-head"><div><h3>Warehouse Handover</h3><small>${items.length} rows selected · quantity editable</small></div><button type="button" class="btn ghost" id="closeModal">Close</button></div>
+    <form id="warehouseBulkForm"><div class="form-grid"><div class="field"><label>Handover / Received Date</label><input type="date" name="HANDOVER_DATE" value="${todayLocal()}" required></div><div class="field"><label>Warehouse Reference</label><input name="WAREHOUSE_REF" placeholder="Optional"></div><div class="field wide"><label>Notes</label><input name="NOTES" placeholder="Optional"></div></div>
+    <div class="table-wrap"><table class="data"><thead><tr><th>Batch</th><th>Style</th><th>Color</th><th>Size</th><th>Ready</th><th>Handover</th></tr></thead><tbody>${items.map((x,i)=>`<tr data-wh-row="${i}"><td>${esc(x.PRODUCTION_BATCH_ID)}</td><td>${esc(x.STYLE)}</td><td>${esc(x.COLOR)}</td><td>${esc(x.SIZE_NAME)}</td><td>${x.READY_QTY}</td><td><input class="wh-qty" type="number" min="1" max="${x.READY_QTY}" step="1" value="${x.READY_QTY}" style="width:78px"></td></tr>`).join('')}</tbody></table></div>
+    <div class="smart-note" id="whBulkSummary"></div><div class="form-actions"><button type="button" id="cancelModal" class="btn ghost">Close</button><button type="submit" id="whBulkSave" class="btn primary">Confirm Handover & Receive</button></div></form>`;
+  $('#modal').classList.remove('hidden');$('#closeModal').onclick=$('#cancelModal').onclick=closeModal;
+  const form=$('#warehouseBulkForm'),review=()=>{
+    let total=0,invalid=false;
+    form.querySelectorAll('.wh-qty').forEach((el,i)=>{const q=Number(el.value);if(!Number.isInteger(q)||q<1||q>Number(items[i].READY_QTY))invalid=true;total+=q});
+    $('#whBulkSave').disabled=invalid;$('#whBulkSummary').textContent=invalid?'Enter a valid quantity for every row.':items.length+' rows · '+total+' pieces will be handed over and marked received in Warehouse.';
+    return !invalid
+  };
+  form.addEventListener('input',review);review();
+  form.onsubmit=async e=>{
+    e.preventDefault();if(!review())return;
+    const chosen=items.map((x,i)=>({PRODUCTION_BATCH_ID:x.PRODUCTION_BATCH_ID,STYLE_ID:x.STYLE_ID,COLOR_ID:x.COLOR_ID,SIZE_ID:x.SIZE_ID,QTY:Number(form.querySelector('[data-wh-row="'+i+'"] .wh-qty').value)}));
+    if(!confirm('Confirm warehouse handover and receipt of '+chosen.reduce((s,x)=>s+x.QTY,0)+' pieces?'))return;
+    const save=$('#whBulkSave');save.disabled=true;
+    try{await api('/api/data',{method:'POST',activity:'Saving warehouse handovers…',success:'Warehouse handover saved',body:JSON.stringify({module:'handover_bulk',record:{items:chosen,HANDOVER_DATE:form.elements.HANDOVER_DATE.value,WAREHOUSE_REF:form.elements.WAREHOUSE_REF.value,NOTES:form.elements.NOTES.value},requestId:newRequestId()})});dropCaches();closeModal();go('handover',true)}
+    catch(err){toast(err.message,'bad',5500);review()}
+  }
+}
 async function renderModule(m,force=false){
   const cfg=configs[m],s=$('#stage');
   if(m==='dye')return renderDyeModule(force);
   if(m==='qc')return renderQcReceiptTable(force);
+  if(m==='handover')return renderWarehouseReadyTable();
   s.innerHTML=`<section class="panel">
     <div class="panel-head"><div><h3>${cfg.title}</h3><small>Summary, transaction detail and full genealogy</small></div>${canAction(m,'create')?`<button class="btn teal" id="newBtn">+ ${cfg.action}</button>`:''}</div>
     <div class="master-tabs module-view-tabs" id="moduleViewTabs">
