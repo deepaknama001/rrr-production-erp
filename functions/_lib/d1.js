@@ -552,9 +552,13 @@ async function viewQcReceiptQueue(db){
   const done=new Map(qc.map(x=>[String(x.CHALLAN_ID)+'|'+String(x.SIZE),{qc:n(x.QC_QTY),pass:n(x.PASS_QTY),rework:n(x.REWORK_QTY),reject:n(x.REJECT_QTY)}]));
   return receipts.map(r=>{
     const key=String(r.CHALLAN_ID)+'|'+String(r.SIZE_ID),d=done.get(key)||{qc:0,pass:0,rework:0,reject:0};
-    const qty=intQty(r.RECEIVED_QTY,'Received quantity'),count=Math.min(qty,d.qc),portion=d.qc?count/d.qc:0;
-    d.qc-=count;const pending=Math.max(0,qty-count);
-    return {...r,RECEIVED_QTY:qty,QC_DONE:count,QC_PENDING:pending,PASS_QTY:Math.round(d.pass*portion),STATUS:pending?'PENDING QC':'QC DONE'}
+    const qty=intQty(r.RECEIVED_QTY,'Received quantity'),count=Math.min(qty,d.qc);
+    // Distribute previously recorded QC outcomes across receipt rows without duplicating totals.
+    // QC records historically belong to challan+size, rather than a specific receipt.
+    const pass=Math.min(count,d.pass),rework=Math.min(count-pass,d.rework),reject=Math.min(count-pass-rework,d.reject);
+    d.qc-=count;d.pass-=pass;d.rework-=rework;d.reject-=reject;
+    const pending=Math.max(0,qty-count);
+    return {...r,RECEIVED_QTY:qty,QC_DONE:count,QC_PENDING:pending,PASS_QTY:pass,REWORK_QTY:rework,REJECT_QTY:reject,STATUS:pending?'PENDING QC':'QC DONE'}
   });
 }
 async function qcPassReceiptRow(db,r,a,req=''){
