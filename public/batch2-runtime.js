@@ -165,7 +165,17 @@ async function openServerMode(module,panel){
     drawServer(shell,st,d);
   }catch(e){shell.innerHTML='<div class="b2-state error"><b>Could not load Large Data Mode</b><span>'+esc(e.message)+'</span><button class="btn ghost b2-standard">Back to Standard View</button></div>';shell.querySelector('.b2-standard').onclick=()=>document.getElementById('refreshBtn')?.click()}
 }
+window.rrrLargeGridExportData=async function(){
+  const active=document.querySelector('#stage [data-b2-server="1"] .b2-server-shell');
+  const ctx=window.__rrrActiveLargeGrid;
+  if(!active||!ctx||ctx.shell!==active)return null;
+  const d=await api('/api/grid?'+qs(ctx.state,false,true));
+  const cols=d.columns||ctx.state.columns||[];
+  if(Number(d.total||0)>d.items.length)throw new Error('Only '+d.items.length+' of '+d.total+' rows returned. Export cancelled to avoid incomplete report.');
+  return {title:'RRR '+ctx.state.module+' - Full Filtered',headers:cols,rows:(d.items||[]).map(r=>cols.map(c=>String(r[c]??'')))};
+};
 function drawServer(shell,st,d){
+  window.__rrrActiveLargeGrid={shell,state:st};
   const total=Number(d.total||0),pages=Math.max(1,Math.ceil(total/st.pageSize));
   const rows=d.items||[];
   shell.innerHTML='<div class="b2-server-toolbar"><div class="b2-search"><input class="b2-search-input" placeholder="Server search…" value="'+esc(st.search)+'"></div>'+
