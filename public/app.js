@@ -1065,7 +1065,9 @@ function safeFileName(s){return String(s||'report').replace(/[^a-z0-9-_]+/gi,'-'
 function exportStamp(){const d=new Date();return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')}
 function currentPageLabel(){return NAV.find(x=>x[0]===state.current)?.[2]||$('#pageTitle')?.textContent||'Report'}
 function htmlText(el){return String(el?.textContent||'').replace(/\s+/g,' ').trim()}
-function getVisibleExportData(){
+async function getVisibleExportData(){
+  const large=await window.rrrLargeGridExportData?.();
+  if(large)return large;
   const rt=state.grids[state.activeGridKey];
   if(rt&&rt.filtered){
     const title=rt.opt.title||currentPageLabel(),cols=(rt.prefs.columnOrder||rt.prefs.visibleColumns||rt.opt.columns||[]).filter(k=>k!=='__ACTION'&&(rt.prefs.visibleColumns||[]).includes(k));
@@ -1104,8 +1106,9 @@ async function ensurePdfLib(){
   await loadScriptFallback(['https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js','https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js'],()=>!!window.jspdf?.jsPDF?.API?.autoTable);
 }
 async function exportExcel(){
-  const btn=$('#exportExcelBtn'),data=getVisibleExportData(),slow=activityStart('Preparing Excel export…',btn);
+  const btn=$('#exportExcelBtn'),slow=activityStart('Preparing Excel export…',btn);
   try{
+    const data=await getVisibleExportData();
     await ensureExcelLib();
     const aoa=[[data.title],['Generated',new Date().toLocaleString()],[],data.headers,...data.rows];
     const ws=XLSX.utils.aoa_to_sheet(aoa);
@@ -1116,8 +1119,9 @@ async function exportExcel(){
   }catch(e){activityEnd(slow,btn,false,e.message||'Excel export failed')}
 }
 async function exportPdf(){
-  const btn=$('#exportPdfBtn'),data=getVisibleExportData(),slow=activityStart('Preparing PDF export…',btn);
+  const btn=$('#exportPdfBtn'),slow=activityStart('Preparing PDF export…',btn);
   try{
+    const data=await getVisibleExportData();
     await ensurePdfLib();
     const {jsPDF}=window.jspdf;
     const landscape=data.headers.length>6;
