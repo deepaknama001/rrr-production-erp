@@ -50,11 +50,13 @@ async function openBulkIssuePage(){
     if(!batches.length)throw new Error('No dyed fabric balance is available. Receive dyed fabric first.');
     if(!sizes.length)throw new Error('Create active Sizes in Masters → Sizes.');
 
-    const preferredOrder=['M','L','XL','2XL','3XL'];
+    // Follow the sequence configured in Masters → Sizes; never hardcode size names.
     sizes.sort(function(a,b){
-      const ai=preferredOrder.indexOf(String(a.SIZE_NAME||'').toUpperCase()),bi=preferredOrder.indexOf(String(b.SIZE_NAME||'').toUpperCase());
-      if(ai>=0||bi>=0)return (ai<0?99:ai)-(bi<0?99:bi);
-      return num(a.SORT_ORDER)-num(b.SORT_ORDER)
+      const orderA=Number(a.SORT_ORDER),orderB=Number(b.SORT_ORDER);
+      const validA=Number.isFinite(orderA),validB=Number.isFinite(orderB);
+      if(validA&&validB&&orderA!==orderB)return orderA-orderB;
+      if(validA!==validB)return validA?-1:1;
+      return String(a.SIZE_NAME||'').localeCompare(String(b.SIZE_NAME||''),undefined,{numeric:true});
     });
 
     stage.innerHTML='<section class="cs-page">'+
