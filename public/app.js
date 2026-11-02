@@ -1,4 +1,4 @@
-const APP_BUILD='0.52';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.53';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -918,7 +918,7 @@ async function renderDyeModule(force=false){
   </section>`;
   if($('#newBtn'))$('#newBtn').onclick=()=>openActionForm('dye');
   try{
-    const d=await getCachedModule('dye',force),items=d.items||[];
+    const d=await getCachedModule('dye',true),items=d.items||[];
     let view='plan',selectedTrail=null;
     try{const lv=localStorage.getItem(prefLocalKey('dye:view'));if(['plan','batch','trail'].includes(lv))view=lv}catch{}
     fetch('/api/preferences?page='+encodeURIComponent('dye:view'),{headers:{authorization:'Bearer '+state.token}})
