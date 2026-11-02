@@ -525,7 +525,7 @@ document.addEventListener('click',e=>{
 });
 const configs={
 raw:{title:'Raw Fabric',columns:['ROLL_ID','INWARD_DATE','SUPPLIER','VENDOR_ROLL_NO','FABRIC','INWARD_MTR','ISSUED_MTR','BALANCE_MTR','STATUS','__ACTION'],filters:['SUPPLIER','FABRIC','STATUS'],action:'New Inward',fields:['INWARD_DATE','SUPPLIER_ID','VENDOR_ROLL_NO','FABRIC_ID','INWARD_MTR','INVOICE_CHALLAN','LOT_REF','NOTES']},
-dye:{title:'Dyeing',columns:['DYE_PLAN_ID','DYE_BATCH_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR','ROLL_COUNT','ISSUE_MTR','RECEIVED_MTR','VARIANCE_MTR','USABLE_MTR','STATUS','__ACTION'],filters:['DYE_VENDOR','FABRIC','COLOR','STATUS'],action:'New Dye Plan',fields:['ISSUE_DATE','DYE_VENDOR_ID','ROLL_ID','COLOR_ID','ISSUE_MTR','NOTES']},
+dye:{title:'Dyeing',columns:['DYE_PLAN_ID','DYE_BATCH_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR','ROLL_COUNT','ISSUE_MTR','RECEIVED_MTR','VARIANCE_MTR','USABLE_MTR','STITCHING_ISSUED_MTR','BALANCE_MTR','STATUS','__ACTION'],filters:['DYE_VENDOR','FABRIC','COLOR','STATUS'],action:'New Dye Plan',fields:['ISSUE_DATE','DYE_VENDOR_ID','ROLL_ID','COLOR_ID','ISSUE_MTR','NOTES']},
 production:{title:'Production / Cutting',columns:['PRODUCTION_BATCH_ID','PLAN_DATE','STYLE','COLOR','DYE_BATCH_ID','PLANNED_QTY','ALLOCATED_MTR','ACTUAL_CONSUMED_MTR','ACTUAL_CUT_QTY','CUT_BALANCE','STATUS','__ACTION'],filters:['STYLE','DYE_BATCH_ID','STATUS'],action:'New Production Batch',fields:['PLAN_DATE','DYE_BATCH_ID','STYLE_ID','PLANNED_QTY','ALLOCATED_MTR','NOTES']},
 stitching:{title:'Cutting & Stitching',columns:['ISSUE_ID','ISSUE_DATE','STITCHING_VENDOR','DYE_BATCH_ID','FABRIC','STYLE','COLOR','ALLOCATED_MTR','ACTUAL_ISSUED','ACTUAL_RECEIVED','PENDING_QTY','EXPECTED_DATE','OVERDUE_DAYS','STATUS','__ACTION'],filters:['STITCHING_VENDOR','FABRIC','STYLE','COLOR','STATUS'],action:'Bulk Issue',fields:['ISSUE_DATE','STITCHING_VENDOR_ID','NOTES']},
 qc:{title:'QC & Rework',columns:['QC_ID','QC_DATE','ISSUE_ID','SIZE_NAME','STYLE','COLOR','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','FINAL_ACCEPTED_QTY','STATUS','__ACTION'],filters:['SIZE','ISSUE_ID','STATUS'],action:'New QC Entry',fields:['QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','DEFECT_REASON','NOTES']},
@@ -869,7 +869,7 @@ function buildDyePlans(items){
     const id=String(r.DYE_PLAN_ID||'UNPLANNED');
     let p=map.get(id);
     if(!p){
-      p={DYE_PLAN_ID:id,ISSUE_DATE:r.ISSUE_DATE||'',vendors:new Set(),fabrics:new Set(),colors:new Set(),BATCH_COUNT:0,ISSUE_MTR:0,RECEIVED_MTR:0,PENDING_MTR:0,USABLE_MTR:0,OPEN_BATCHES:0,batches:[]};
+      p={DYE_PLAN_ID:id,ISSUE_DATE:r.ISSUE_DATE||'',vendors:new Set(),fabrics:new Set(),colors:new Set(),BATCH_COUNT:0,ISSUE_MTR:0,RECEIVED_MTR:0,PENDING_MTR:0,USABLE_MTR:0,STITCHING_ISSUED_MTR:0,BALANCE_MTR:0,OPEN_BATCHES:0,batches:[]};
       map.set(id,p)
     }
     if(r.DYE_VENDOR)p.vendors.add(String(r.DYE_VENDOR));
@@ -880,6 +880,8 @@ function buildDyePlans(items){
     p.RECEIVED_MTR+=Number(r.RECEIVED_MTR||0);
     p.PENDING_MTR+=Number(r.PENDING_MTR||0);
     p.USABLE_MTR+=Number(r.USABLE_MTR||0);
+    p.STITCHING_ISSUED_MTR+=Number(r.STITCHING_ISSUED_MTR||0);
+    p.BALANCE_MTR+=Number(r.BALANCE_MTR||0);
     if(!isTrue(r.CLOSED))p.OPEN_BATCHES++;
     p.batches.push(r)
   }
@@ -894,7 +896,7 @@ function buildDyePlans(items){
       DYE_VENDOR:[...p.vendors].join(', '),FABRIC:[...p.fabrics].join(', '),
       COLOR_COUNT:p.colors.size,BATCH_COUNT:p.BATCH_COUNT,OPEN_BATCHES:p.OPEN_BATCHES,
       ISSUE_MTR:p.ISSUE_MTR,RECEIVED_MTR:p.RECEIVED_MTR,PENDING_MTR:p.PENDING_MTR,
-      USABLE_MTR:p.USABLE_MTR,FINAL_NET_VARIANCE_MTR:complete?variance:'',PLAN_STATUS:status,
+      USABLE_MTR:p.USABLE_MTR,STITCHING_ISSUED_MTR:p.STITCHING_ISSUED_MTR,BALANCE_MTR:p.BALANCE_MTR,FINAL_NET_VARIANCE_MTR:complete?variance:'',PLAN_STATUS:status,
       __batches:p.batches
     }
   }).sort((a,b)=>String(b.ISSUE_DATE).localeCompare(String(a.ISSUE_DATE))||String(b.DYE_PLAN_ID).localeCompare(String(a.DYE_PLAN_ID)))
@@ -954,7 +956,7 @@ async function renderDyePlanGrid(batchItems,onTrail){
   const plans=buildDyePlans(batchItems);
   await mountDataGrid($('#gridHost'),{
     key:'module:dye:plan',title:'Dyeing - Plan View',items:plans,
-    columns:['DYE_PLAN_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR_COUNT','BATCH_COUNT','OPEN_BATCHES','ISSUE_MTR','RECEIVED_MTR','PENDING_MTR','USABLE_MTR','FINAL_NET_VARIANCE_MTR','PLAN_STATUS','__ACTION'],
+    columns:['DYE_PLAN_ID','ISSUE_DATE','DYE_VENDOR','FABRIC','COLOR_COUNT','BATCH_COUNT','OPEN_BATCHES','ISSUE_MTR','RECEIVED_MTR','PENDING_MTR','USABLE_MTR','STITCHING_ISSUED_MTR','BALANCE_MTR','FINAL_NET_VARIANCE_MTR','PLAN_STATUS','__ACTION'],
     filters:['DYE_VENDOR','FABRIC','PLAN_STATUS'],
     actionRenderer:r=>actionMenuHtml([{cls:'dye-plan-detail-btn',label:'View Details'},{cls:'dye-plan-trail-btn',label:'Trail'}],r.__gridIndex),
     renderSelectionActions:rows=>canAction('dye','create')?documentSelectionButton('Generate Dye Challan','grid-dye-doc'): '',
@@ -974,16 +976,18 @@ function openDyePlanDetails(plan,onTrail){
       <div><span>Total Issued</span><strong>${moneyless(plan.ISSUE_MTR)} m</strong></div>
       <div><span>Total Received</span><strong>${moneyless(plan.RECEIVED_MTR)} m</strong></div>
       <div><span>Pending</span><strong>${moneyless(plan.PENDING_MTR)} m</strong></div>
-      <div><span>Usable</span><strong>${moneyless(plan.USABLE_MTR)} m</strong></div>
+      <div><span>Usable Received</span><strong>${moneyless(plan.USABLE_MTR)} m</strong></div>
+      <div><span>Sent to Cutting / Stitching</span><strong>${moneyless(plan.STITCHING_ISSUED_MTR)} m</strong></div>
+      <div><span>Remaining Dyed Fabric</span><strong>${moneyless(plan.BALANCE_MTR)} m</strong></div>
       <div><span>Open Batches</span><strong>${esc(plan.OPEN_BATCHES)}</strong></div>
       <div><span>Final Net Variance</span><strong>${complete?moneyless(plan.FINAL_NET_VARIANCE_MTR)+' m':'Pending'}</strong></div>
     </div>
     <div class="smart-note"><b>Plan Status:</b> ${badge(plan.PLAN_STATUS)} ${complete?'All color batches are final. Net variance is now meaningful.':'Net variance will be finalized only after every color batch is closed.'}</div>
     <div class="table-wrap plan-detail-table"><table class="data">
-      <thead><tr><th>Batch ID</th><th>Color</th><th>Issued Mtr</th><th>Received Mtr</th><th>Variance Mtr</th><th>Usable Mtr</th><th>Status</th><th>Action</th></tr></thead>
+      <thead><tr><th>Batch ID</th><th>Color</th><th>Issued Mtr</th><th>Received Mtr</th><th>Variance Mtr</th><th>Usable Mtr</th><th>Sent to Stitching Mtr</th><th>Balance Mtr</th><th>Status</th><th>Action</th></tr></thead>
       <tbody>${batches.map((r,i)=>`<tr>
         <td>${esc(r.DYE_BATCH_ID)}</td><td>${esc(r.COLOR||'')}</td><td>${moneyless(r.ISSUE_MTR)}</td><td>${moneyless(r.RECEIVED_MTR)}</td>
-        <td>${moneyless(r.VARIANCE_MTR)}</td><td>${moneyless(r.USABLE_MTR)}</td><td>${badge(r.STATUS)}</td>
+        <td>${moneyless(r.VARIANCE_MTR)}</td><td>${moneyless(r.USABLE_MTR)}</td><td>${moneyless(r.STITCHING_ISSUED_MTR)}</td><td>${moneyless(r.BALANCE_MTR)}</td><td>${badge(r.STATUS)}</td>
         <td>${actionMenuHtml([!/^RECEIVED/.test(String(r.STATUS))?{cls:'plan-receive',label:'Receive'}:null,{cls:'plan-manage',label:'Manage'},{cls:'plan-trail',label:'Trail'}],i).replaceAll('data-idx','data-i')}</td>
       </tr>`).join('')}</tbody>
     </table></div>
