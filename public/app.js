@@ -1,4 +1,4 @@
-const APP_BUILD='0.55';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.56';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -755,22 +755,29 @@ async function renderWarehouseReadyTable(){
     });
   }catch(e){toast(e.message,'bad',5000);$('#gridHost').textContent='Could not load warehouse-ready stock: '+e.message}
 }
-// Temporary, read-only style-code lookup for the Warehouse Handover History report.
-// Map only verified style/color combinations; unmatched rows remain visibly unmapped.
+// Temporary read-only mapping for all 40 confirmed RRR style/color codes.
+// SKU is a style-color code, not a size-specific SKU. No persisted stock data is changed.
+const warehouseSkuColors=[
+  ['olive green','OLGRN'],['wine','WN'],['light grey','LIGRY'],
+  ['navy blue','NVBL'],['chocolate brown','CHOBR'],['charcoal grey','CHRGRY'],
+  ['beige','BEI'],['light blue','LIBL'],['white','WH'],['black','BLK']
+];
+const warehouseSkuFamilies=[
+  {prefix:'MP',base:1,aliases:['mens pant','men pant','mens pants','men pants','mens relaxed trouser','men relaxed trouser','mens relaxed trousers','men relaxed trousers','relaxed trouser','relaxed trousers','mens everyday pant','men everyday pant','mens everyday pants','men everyday pants','everyday pant','everyday pants']},
+  {prefix:'MRSK',base:21,aliases:['mens roll up sleeves short kurta','men roll up sleeves short kurta','mens roll up sleeve short kurta','men roll up sleeve short kurta','mens short kurta','men short kurta','mens short kurtas','men short kurtas','short kurta','roll up sleeves short kurta']},
+  {prefix:'LMBT',base:51,aliases:['cotton linen mens button trouser','cotton linen men button trouser','cotton linen mens button trousers','cotton linen men button trousers','mens button trouser','men button trouser','mens button trousers','men button trousers','button trouser','button trousers']},
+  {prefix:'MFS',base:71,aliases:['mens full sleeve shirt','men full sleeve shirt','mens full sleeves shirt','men full sleeves shirt','mens full sleeve shirts','men full sleeve shirts','full sleeve shirt','full sleeves shirt']}
+];
+function normalizeWarehouseSkuText(value){
+  return String(value||'').toLowerCase().replace(/&/g,' and ').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();
+}
 function warehouseHistoryStyleCode(row){
-  const style=String(row.STYLE||'').trim().toLowerCase().replace(/[^a-z0-9]+/g,' ');
-  const color=String(row.COLOR||'').trim().toLowerCase().replace(/[^a-z0-9]+/g,' ');
-  const colors=['olive green','wine','light grey','navy blue','chocolate brown','charcoal grey','beige','light blue','white','black'];
-  const index=colors.indexOf(color);
-  if(index<0)return 'UNMAPPED';
-  let prefix='',first=0;
-  if(['mens pant','men pant'].includes(style)){prefix='MP';first=1}
-  else if(['mens roll up sleeves short kurta','men roll up sleeves short kurta','mens short kurta','men short kurta'].includes(style)){prefix='MRSK';first=21}
-  else if(['cotton linen mens button trouser','men button trouser','mens button trouser'].includes(style)){prefix='LMBT';first=51}
-  else if(['mens full sleeve shirt','men full sleeve shirt'].includes(style)){prefix='MFS';first=71}
-  else return 'UNMAPPED';
-  const colorCodes=['OLGRN','WN','LIGRY','NVBL','CHOBR','CHRGRY','BEI','LIBL','WH','BLK'];
-  return prefix+'-'+colorCodes[index]+'-'+String(first+index).padStart(4,'0');
+  const style=normalizeWarehouseSkuText(row.STYLE||row.STYLE_NAME);
+  const color=normalizeWarehouseSkuText(row.COLOR||row.COLOR_NAME);
+  const index=warehouseSkuColors.findIndex(c=>c[0]===color);
+  const family=warehouseSkuFamilies.find(f=>f.aliases.includes(style));
+  if(index<0||!family)return 'UNMAPPED';
+  return family.prefix+'-'+warehouseSkuColors[index][1]+'-'+String(family.base+index).padStart(4,'0');
 }
 async function renderModuleWarehouseHistory(){
   const panel=$('#stage');panel.innerHTML=`<section class="panel"><div class="panel-head"><div><h3>Warehouse Handover History</h3><small>Existing handovers and linked receipts</small></div><button type="button" id="whBack" class="btn ghost">← Ready Stock</button></div><div id="gridHost">Loading…</div></section>`;
