@@ -1,4 +1,4 @@
-const APP_BUILD='0.54';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.55';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -778,7 +778,7 @@ async function renderModuleWarehouseHistory(){
   try{
     const data=await api('/api/data?module=handover'),items=(data.items||[]).map(r=>({...r,STYLE_CODE:warehouseHistoryStyleCode(r)}));
     await mountDataGrid($('#gridHost'),{key:'module:warehouse:history',items,title:'Handover History',
-      columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE_NAME','ACCEPTED_QTY','TOTAL_WAREHOUSE_RECEIVED','PENDING_QTY','STATUS','__ACTION'],
+      columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','STYLE_CODE','COLOR','SIZE_NAME','ACCEPTED_QTY','TOTAL_WAREHOUSE_RECEIVED','PENDING_QTY','STATUS','__ACTION'],
       actionRenderer:r=>`<button type="button" class="btn ghost warehouse-manage" data-idx="${r.__gridIndex}">Manage</button>`,
       bindActions:(rows,host)=>host.querySelectorAll('.warehouse-manage').forEach(b=>b.onclick=()=>openHandoverManage(items[Number(b.dataset.idx)]))
     })
