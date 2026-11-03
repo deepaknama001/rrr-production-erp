@@ -1,4 +1,4 @@
-const APP_BUILD='0.56';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.58';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -763,7 +763,7 @@ const warehouseSkuColors=[
   ['beige','BEI'],['light blue','LIBL'],['white','WH'],['black','BLK']
 ];
 const warehouseSkuFamilies=[
-  {prefix:'MP',base:1,aliases:['mens pant','men pant','mens pants','men pants','mens relaxed trouser','men relaxed trouser','mens relaxed trousers','men relaxed trousers','relaxed trouser','relaxed trousers','mens everyday pant','men everyday pant','mens everyday pants','men everyday pants','everyday pant','everyday pants']},
+  {prefix:'MP',base:1,aliases:['mens pant','men pant','mens pants','men pants','mens relaxed trouser','men relaxed trouser','mens relaxed trousers','men relaxed trousers','relaxed trouser','relaxed trousers','relax fit men pant','relax fit mens pant','mens relax fit pant','men relax fit pant','mens everyday pant','men everyday pant','mens everyday pants','men everyday pants','everyday pant','everyday pants']},
   {prefix:'MRSK',base:21,aliases:['mens roll up sleeves short kurta','men roll up sleeves short kurta','mens roll up sleeve short kurta','men roll up sleeve short kurta','mens short kurta','men short kurta','mens short kurtas','men short kurtas','short kurta','roll up sleeves short kurta']},
   {prefix:'LMBT',base:51,aliases:['cotton linen mens button trouser','cotton linen men button trouser','cotton linen mens button trousers','cotton linen men button trousers','mens button trouser','men button trouser','mens button trousers','men button trousers','button trouser','button trousers']},
   {prefix:'MFS',base:71,aliases:['mens full sleeve shirt','men full sleeve shirt','mens full sleeves shirt','men full sleeves shirt','mens full sleeve shirts','men full sleeve shirts','full sleeve shirt','full sleeves shirt']}
