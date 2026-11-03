@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const BUILD='0.52';
+const BUILD='0.57';
 const MOD_BY_TITLE={
   'Raw Fabric':'raw','Dyeing':'dye','Production':'production','Production / Cutting':'production',
   'Stitching':'stitching','Cutting & Stitching':'stitching','QC & Rework':'qc','Warehouse Handover':'handover'
@@ -153,6 +153,15 @@ function qs(state,facets=false,exportAll=false){
   const p=new URLSearchParams({module:state.module,page:String(state.page),pageSize:String(state.pageSize),search:state.search||'',sort:state.sort||'',dir:state.dir||'desc',dateFrom:state.dateFrom||'',dateTo:state.dateTo||'',filters:JSON.stringify(state.filters||{})});
   if(facets)p.set('facets','1');if(exportAll)p.set('export','1');return p.toString()
 }
+function mappedHandoverGrid(st,d){
+  if(st.module!=='handover'||!Array.isArray(d.items)||typeof window.rrrHandoverSkuLookup!=='function')return d;
+  const columns=[...(d.columns||st.columns||[])];
+  if(!columns.includes('STYLE_CODE')){
+    const i=columns.indexOf('STYLE');
+    columns.splice(i<0?columns.length:i+1,0,'STYLE_CODE');
+  }
+  return {...d,columns,items:d.items.map(r=>({...r,STYLE_CODE:window.rrrHandoverSkuLookup(r)}))};
+}
 async function openServerMode(module,panel){
   const host=panel.querySelector('#gridHost')||panel.querySelector('#dyeGridHost')||panel.querySelector('[id$="GridHost"]')||panel.querySelector('.table-wrap')?.parentElement;
   if(!host)return toast('Large Data Mode host not found.',true);
@@ -161,7 +170,7 @@ async function openServerMode(module,panel){
   host.innerHTML='<div class="b2-server-shell"><div class="batch2-inline-state">Loading server-side grid…</div></div>';
   const shell=host.firstElementChild;
   try{
-    const d=await api('/api/grid?'+qs(st,true));Object.assign(st,{columns:d.columns||[],filterColumns:d.filterColumns||[],dateColumn:d.dateColumn||'',facets:d.facets||{}});
+    const d=mappedHandoverGrid(st,await api('/api/grid?'+qs(st,true)));Object.assign(st,{columns:d.columns||[],filterColumns:d.filterColumns||[],dateColumn:d.dateColumn||'',facets:d.facets||{}});
     drawServer(shell,st,d);
   }catch(e){shell.innerHTML='<div class="b2-state error"><b>Could not load Large Data Mode</b><span>'+esc(e.message)+'</span><button class="btn ghost b2-standard">Back to Standard View</button></div>';shell.querySelector('.b2-standard').onclick=()=>document.getElementById('refreshBtn')?.click()}
 }
@@ -169,7 +178,7 @@ window.rrrLargeGridExportData=async function(){
   const active=document.querySelector('#stage [data-b2-server="1"] .b2-server-shell');
   const ctx=window.__rrrActiveLargeGrid;
   if(!active||!ctx||ctx.shell!==active)return null;
-  const d=await api('/api/grid?'+qs(ctx.state,false,true));
+  const d=mappedHandoverGrid(ctx.state,await api('/api/grid?'+qs(ctx.state,false,true)));
   const cols=d.columns||ctx.state.columns||[];
   if(Number(d.total||0)>d.items.length)throw new Error('Only '+d.items.length+' of '+d.total+' rows returned. Export cancelled to avoid incomplete report.');
   return {title:'RRR '+ctx.state.module+' - Full Filtered',headers:cols,rows:(d.items||[]).map(r=>cols.map(c=>String(r[c]??'')))};
@@ -217,7 +226,7 @@ function cell(k,v){
 }
 async function reload(shell,st,patch){
   Object.assign(st,patch);shell.classList.add('is-loading');
-  try{const d=await api('/api/grid?'+qs(st));drawServer(shell,st,d)}catch(e){toast(e.message,true)}finally{shell.classList.remove('is-loading')}
+  try{const d=mappedHandoverGrid(st,await api('/api/grid?'+qs(st)));drawServer(shell,st,d)}catch(e){toast(e.message,true)}finally{shell.classList.remove('is-loading')}
 }
 function openStandardRecord(id){
   document.getElementById('refreshBtn')?.click();
@@ -229,7 +238,7 @@ function openStandardRecord(id){
 }
 async function exportFiltered(st){
   try{
-    const d=await api('/api/grid?'+qs(st,false,true)),rows=d.items||[];
+    const d=mappedHandoverGrid(st,await api('/api/grid?'+qs(st,false,true))),rows=d.items||[];
     if(!rows.length)return toast('No rows to export.',true);
     const cols=d.columns||st.columns;
     const csv=[cols.join(','),...rows.map(r=>cols.map(c=>csvCell(r[c])).join(','))].join('\r\n');
