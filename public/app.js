@@ -800,6 +800,7 @@ function warehouseUnmappedSummary(items){
   }
   return{total:unmatched.length,entries:[...groups.entries()].sort((a,b)=>b[1]-a[1])};
 }
+window.rrrHandoverSkuLookup=warehouseHistoryStyleCode;
 async function renderModuleWarehouseHistory(){
   const panel=$('#stage');panel.innerHTML=`<section class="panel"><div class="panel-head"><div><h3>Warehouse Handover History</h3><small>Existing handovers and linked receipts</small></div><button type="button" id="whBack" class="btn ghost">← Ready Stock</button></div><div id="gridHost">Loading…</div></section>`;
   $('#whBack').onclick=()=>renderWarehouseReadyTable();
@@ -813,7 +814,7 @@ async function renderModuleWarehouseHistory(){
       btn.textContent=review.total+' unmapped rows · View unmatched combinations';
       const details=document.createElement('pre');details.hidden=true;
       details.style.cssText='white-space:pre-wrap;max-height:240px;overflow:auto;background:#f4f6fa;padding:12px;border-radius:10px';
-      details.textContent=review.entries.map(([key,n])=>key+' ('+n+' rows)').join('\\n');
+      details.textContent=review.entries.map(([key,n])=>key+' ('+n+' rows)').join('\n');
       btn.onclick=()=>{details.hidden=!details.hidden};
       count.append(btn,details);
     }else count.textContent='All '+items.length+' handover rows mapped to a confirmed style-color code.';
