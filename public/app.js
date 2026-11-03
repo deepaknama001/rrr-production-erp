@@ -1,4 +1,4 @@
-const APP_BUILD='0.53';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.54';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -352,6 +352,7 @@ function buildHeaderFilterPopup(k,items,prefs){
 async function mountDataGrid(container,opt){
   const key=opt.key,columns=opt.columns||[],dataCols=columns.filter(x=>x!=='__ACTION'),items=(opt.items||[]).map((r,i)=>({...r,__gridIndex:i}));
   let prefs=await loadGridPrefs(key,columns);
+  if(key==='module:warehouse:history' && !(prefs.visibleColumns||[]).includes('STYLE_CODE'))prefs.visibleColumns=[...(prefs.visibleColumns||dataCols),'STYLE_CODE'];
   prefs.columnOrder=(prefs.columnOrder||[]).filter(x=>dataCols.includes(x));for(const x of dataCols)if(!prefs.columnOrder.includes(x))prefs.columnOrder.push(x);
   prefs.visibleColumns=(prefs.visibleColumns||dataCols).filter(x=>dataCols.includes(x));if(!prefs.visibleColumns.length)prefs.visibleColumns=[...dataCols];
   prefs.pageSize=[10,25,50,100].includes(Number(prefs.pageSize))?Number(prefs.pageSize):25;
@@ -529,7 +530,7 @@ dye:{title:'Dyeing',columns:['DYE_PLAN_ID','DYE_BATCH_ID','ISSUE_DATE','DYE_VEND
 production:{title:'Production / Cutting',columns:['PRODUCTION_BATCH_ID','PLAN_DATE','STYLE','COLOR','DYE_BATCH_ID','PLANNED_QTY','ALLOCATED_MTR','ACTUAL_CONSUMED_MTR','ACTUAL_CUT_QTY','CUT_BALANCE','STATUS','__ACTION'],filters:['STYLE','DYE_BATCH_ID','STATUS'],action:'New Production Batch',fields:['PLAN_DATE','DYE_BATCH_ID','STYLE_ID','PLANNED_QTY','ALLOCATED_MTR','NOTES']},
 stitching:{title:'Cutting & Stitching',columns:['ISSUE_ID','ISSUE_DATE','STITCHING_VENDOR','DYE_BATCH_ID','FABRIC','STYLE','COLOR','ALLOCATED_MTR','ACTUAL_ISSUED','ACTUAL_RECEIVED','PENDING_QTY','EXPECTED_DATE','OVERDUE_DAYS','STATUS','__ACTION'],filters:['STITCHING_VENDOR','FABRIC','STYLE','COLOR','STATUS'],action:'Bulk Issue',fields:['ISSUE_DATE','STITCHING_VENDOR_ID','NOTES']},
 qc:{title:'QC & Rework',columns:['QC_ID','QC_DATE','ISSUE_ID','SIZE_NAME','STYLE','COLOR','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','FINAL_ACCEPTED_QTY','STATUS','__ACTION'],filters:['SIZE','ISSUE_ID','STATUS'],action:'New QC Entry',fields:['QC_DATE','CHALLAN_ID','SIZE','QC_QTY','PASS_QTY','REWORK_QTY','REJECT_QTY','DEFECT_REASON','NOTES']},
-handover:{title:'Warehouse Handover',columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE_NAME','ACCEPTED_QTY','TOTAL_WAREHOUSE_RECEIVED','PENDING_QTY','STATUS','__ACTION'],filters:['STYLE','COLOR','SIZE','STATUS'],action:'New Handover',fields:['HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE_ID','COLOR_ID','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','WAREHOUSE_REF','NOTES']}
+handover:{title:'Warehouse Handover',columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','STYLE_CODE','COLOR','SIZE_NAME','ACCEPTED_QTY','TOTAL_WAREHOUSE_RECEIVED','PENDING_QTY','STATUS','__ACTION'],filters:['STYLE','COLOR','SIZE','STATUS'],action:'New Handover',fields:['HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE_ID','COLOR_ID','SIZE','ACCEPTED_QTY','WAREHOUSE_RECEIVED_QTY','WAREHOUSE_REF','NOTES']}
 };
 
 function moduleRecordIdentity(m,r){
@@ -754,11 +755,28 @@ async function renderWarehouseReadyTable(){
     });
   }catch(e){toast(e.message,'bad',5000);$('#gridHost').textContent='Could not load warehouse-ready stock: '+e.message}
 }
+// Temporary, read-only style-code lookup for the Warehouse Handover History report.
+// Map only verified style/color combinations; unmatched rows remain visibly unmapped.
+function warehouseHistoryStyleCode(row){
+  const style=String(row.STYLE||'').trim().toLowerCase().replace(/[^a-z0-9]+/g,' ');
+  const color=String(row.COLOR||'').trim().toLowerCase().replace(/[^a-z0-9]+/g,' ');
+  const colors=['olive green','wine','light grey','navy blue','chocolate brown','charcoal grey','beige','light blue','white','black'];
+  const index=colors.indexOf(color);
+  if(index<0)return 'UNMAPPED';
+  let prefix='',first=0;
+  if(['mens pant','men pant'].includes(style)){prefix='MP';first=1}
+  else if(['mens roll up sleeves short kurta','men roll up sleeves short kurta','mens short kurta','men short kurta'].includes(style)){prefix='MRSK';first=21}
+  else if(['cotton linen mens button trouser','men button trouser','mens button trouser'].includes(style)){prefix='LMBT';first=51}
+  else if(['mens full sleeve shirt','men full sleeve shirt'].includes(style)){prefix='MFS';first=71}
+  else return 'UNMAPPED';
+  const colorCodes=['OLGRN','WN','LIGRY','NVBL','CHOBR','CHRGRY','BEI','LIBL','WH','BLK'];
+  return prefix+'-'+colorCodes[index]+'-'+String(first+index).padStart(4,'0');
+}
 async function renderModuleWarehouseHistory(){
   const panel=$('#stage');panel.innerHTML=`<section class="panel"><div class="panel-head"><div><h3>Warehouse Handover History</h3><small>Existing handovers and linked receipts</small></div><button type="button" id="whBack" class="btn ghost">← Ready Stock</button></div><div id="gridHost">Loading…</div></section>`;
   $('#whBack').onclick=()=>renderWarehouseReadyTable();
   try{
-    const data=await api('/api/data?module=handover'),items=data.items||[];
+    const data=await api('/api/data?module=handover'),items=(data.items||[]).map(r=>({...r,STYLE_CODE:warehouseHistoryStyleCode(r)}));
     await mountDataGrid($('#gridHost'),{key:'module:warehouse:history',items,title:'Handover History',
       columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','COLOR','SIZE_NAME','ACCEPTED_QTY','TOTAL_WAREHOUSE_RECEIVED','PENDING_QTY','STATUS','__ACTION'],
       actionRenderer:r=>`<button type="button" class="btn ghost warehouse-manage" data-idx="${r.__gridIndex}">Manage</button>`,
