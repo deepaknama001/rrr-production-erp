@@ -1,4 +1,4 @@
-const APP_BUILD='0.56';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const APP_BUILD='0.57';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function storedUser(){try{return JSON.parse(localStorage.getItem('rrr_prod_user')||'null')}catch{return null}}
 (function syncBuildCache(){const old=sessionStorage.getItem('rrr_prod_build');if(old!==APP_BUILD){Object.keys(sessionStorage).filter(k=>k.startsWith('rrr_prod_cache_')).forEach(k=>sessionStorage.removeItem(k));sessionStorage.setItem('rrr_prod_build',APP_BUILD)}})();
 const state={token:localStorage.getItem('rrr_prod_token')||'',user:storedUser(),current:sessionStorage.getItem('rrr_prod_page')||'dashboard',refreshing:false,netCount:0,lastButton:null,lastButtonAt:0,grids:{},activeGridKey:''};
@@ -771,19 +771,53 @@ const warehouseSkuFamilies=[
 function normalizeWarehouseSkuText(value){
   return String(value||'').toLowerCase().replace(/&/g,' and ').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();
 }
+function warehouseSkuFamily(styleName){
+  const style=normalizeWarehouseSkuText(styleName);
+  const words=new Set(style.split(' ').filter(Boolean));
+  const has=(...terms)=>terms.some(t=>words.has(t));
+  const hasAll=(...terms)=>terms.every(t=>words.has(t));
+  // Prefer explicitly labelled families over generic pant/trouser descriptions.
+  if(has('kurta','kurtas')&&(has('short')||hasAll('roll','up')))return warehouseSkuFamilies.find(x=>x.prefix==='MRSK');
+  if(has('shirt','shirts')&&has('full')&&has('sleeve','sleeves'))return warehouseSkuFamilies.find(x=>x.prefix==='MFS');
+  if(has('trouser','trousers','pant','pants')&&has('button','buttoned'))return warehouseSkuFamilies.find(x=>x.prefix==='LMBT');
+  if(has('trouser','trousers','pant','pants')&&(has('relaxed','everyday','elastic','drawstring')||warehouseSkuFamilies[0].aliases.includes(style)))return warehouseSkuFamilies.find(x=>x.prefix==='MP');
+  // Exact aliases cover short forms, while generic trouser/shirt labels stay unmapped.
+  return warehouseSkuFamilies.find(f=>f.aliases.includes(style))||null;
+}
 function warehouseHistoryStyleCode(row){
-  const style=normalizeWarehouseSkuText(row.STYLE||row.STYLE_NAME);
   const color=normalizeWarehouseSkuText(row.COLOR||row.COLOR_NAME);
   const index=warehouseSkuColors.findIndex(c=>c[0]===color);
-  const family=warehouseSkuFamilies.find(f=>f.aliases.includes(style));
+  const family=warehouseSkuFamily(row.STYLE||row.STYLE_NAME);
   if(index<0||!family)return 'UNMAPPED';
   return family.prefix+'-'+warehouseSkuColors[index][1]+'-'+String(family.base+index).padStart(4,'0');
+}
+function warehouseUnmappedSummary(items){
+  const unmatched=items.filter(r=>r.STYLE_CODE==='UNMAPPED');
+  const groups=new Map();
+  for(const r of unmatched){
+    const key=[String(r.STYLE||r.STYLE_NAME||'(blank)'),String(r.COLOR||r.COLOR_NAME||'(blank)')].join(' | ');
+    groups.set(key,(groups.get(key)||0)+1);
+  }
+  return{total:unmatched.length,entries:[...groups.entries()].sort((a,b)=>b[1]-a[1])};
 }
 async function renderModuleWarehouseHistory(){
   const panel=$('#stage');panel.innerHTML=`<section class="panel"><div class="panel-head"><div><h3>Warehouse Handover History</h3><small>Existing handovers and linked receipts</small></div><button type="button" id="whBack" class="btn ghost">← Ready Stock</button></div><div id="gridHost">Loading…</div></section>`;
   $('#whBack').onclick=()=>renderWarehouseReadyTable();
   try{
     const data=await api('/api/data?module=handover'),items=(data.items||[]).map(r=>({...r,STYLE_CODE:warehouseHistoryStyleCode(r)}));
+    const review=warehouseUnmappedSummary(items);
+    const count=document.createElement('div');
+    count.style.cssText='margin:10px 0;font-size:12px;color:#546174';
+    if(review.total){
+      const btn=document.createElement('button');btn.type='button';btn.className='btn ghost';
+      btn.textContent=review.total+' unmapped rows · View unmatched combinations';
+      const details=document.createElement('pre');details.hidden=true;
+      details.style.cssText='white-space:pre-wrap;max-height:240px;overflow:auto;background:#f4f6fa;padding:12px;border-radius:10px';
+      details.textContent=review.entries.map(([key,n])=>key+' ('+n+' rows)').join('\\n');
+      btn.onclick=()=>{details.hidden=!details.hidden};
+      count.append(btn,details);
+    }else count.textContent='All '+items.length+' handover rows mapped to a confirmed style-color code.';
+    panel.insertBefore(count,$('#gridHost'));
     await mountDataGrid($('#gridHost'),{key:'module:warehouse:history',items,title:'Handover History',
       columns:['HANDOVER_ID','HANDOVER_DATE','PRODUCTION_BATCH_ID','STYLE','STYLE_CODE','COLOR','SIZE_NAME','ACCEPTED_QTY','TOTAL_WAREHOUSE_RECEIVED','PENDING_QTY','STATUS','__ACTION'],
       actionRenderer:r=>`<button type="button" class="btn ghost warehouse-manage" data-idx="${r.__gridIndex}">Manage</button>`,
